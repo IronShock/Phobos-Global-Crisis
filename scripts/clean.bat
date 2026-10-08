@@ -1,11 +1,3 @@
 @if not defined _echo echo off
-
-rem Cleans build folders.
-
-rem Ensure we're in correct directory.
-cd /D "%~dp0"
-cd ..
-
-if exist Debug\ rmdir /S /Q Debug\
-if exist DevBuild\ rmdir /S /Q DevBuild\
-if exist Release\ rmdir /S /Q Release\
+python "%~dp0dev.py" clean
+exit /b %errorlevel%

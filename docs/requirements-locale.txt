@@ -1,0 +1,2 @@
+-r requirements.txt
+sphinx-intl==2.4.0

@@ -1,17 +1,23 @@
 @if not defined _echo echo off
 
-rem Finds and starts Visual Studio Developer Command Prompt using VS Locator.
-rem https://github.com/microsoft/vswhere/wiki/Start-Developer-Command-Prompt
+rem Reuse a Developer Command Prompt, or locate a C++ installation via its installer.
+if defined VSCMD_VER (
+  where msbuild >nul 2>nul
+  if not errorlevel 1 exit /b 0
+)
 
-rem Ensure we're in correct directory.
-cd /D "%~dp0"
+set "gc_vswhere=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%gc_vswhere%" (
+  echo Visual Studio Installer's vswhere.exe is missing. Install VS 2022 or Build Tools with the components in .vsconfig.
+  exit /b 2
+)
 
-for /f "usebackq delims=" %%i in (`vswhere.exe -products * -prerelease -latest -property installationPath`) do (
-  if exist "%%i\Common7\Tools\vsdevcmd.bat" (
-    call "%%i\Common7\Tools\vsdevcmd.bat" %*
+for /f "usebackq delims=" %%i in (`"%gc_vswhere%" -products * -latest -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
+  if exist "%%i\Common7\Tools\VsDevCmd.bat" (
+    call "%%i\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 %*
     exit /b
   )
 )
 
-echo VS Locator is unable to locate Visual Studio Developer Command Prompt. Ensure you have VS or VS Build Tools installed.
+echo Unable to locate Visual Studio with C++ tools. Install the components in .vsconfig.
 exit /b 2

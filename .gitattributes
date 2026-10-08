@@ -1,25 +1,112 @@
-*            text eol=crlf
+# Detect binary files; store normalized text as LF in Git.
+# Portable text checks out with LF, while C++/Windows files use CRLF below.
+* text=auto eol=lf
 
-*.vcproj     text eol=crlf
-*.c++        text eol=crlf
-*.cc         text eol=crlf
-*.cpp        text eol=crlf
-*.cppm       text eol=crlf
-*.cxx        text eol=crlf
-*.h          text eol=crlf
-*.h++        text eol=crlf
-*.hh         text eol=crlf
-*.hpp        text eol=crlf
-*.hxx        text eol=crlf
-*.inl        text eol=crlf
-*.ipp        text eol=crlf
-*.ixx        text eol=crlf
-*.tlh        text eol=crlf
-*.tli        text eol=crlf
+# Repository configuration, documentation, data and portable scripts
+.editorconfig text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+.gitmodules text eol=lf
+.vsconfig text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.rst text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.csv text eol=lf
+*.diff text eol=lf
+*.patch text eol=lf
+*.po text eol=lf
+*.pot text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.js text eol=lf
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.xml text eol=lf
+*.svg text eol=lf
+*.mk text eol=lf
+Makefile text eol=lf
 
-*.sh         text eol=lf
+# Preserve the source snapshot's Windows/C++ checkout convention.
+*.c text eol=crlf
+*.c++ text eol=crlf
+*.cc text eol=crlf
+*.cpp text eol=crlf
+*.cppm text eol=crlf
+*.cxx text eol=crlf
+*.h text eol=crlf
+*.h++ text eol=crlf
+*.hh text eol=crlf
+*.hpp text eol=crlf
+*.hxx text eol=crlf
+*.inl text eol=crlf
+*.ipp text eol=crlf
+*.ixx text eol=crlf
+*.tlh text eol=crlf
+*.tli text eol=crlf
+*.sln text eol=crlf
+*.vcproj text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+*.props text eol=crlf
+*.targets text eol=crlf
+*.rc text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.ini text eol=crlf
+*.map text eol=crlf
+*.mpr text eol=crlf
 
-*.gif        -text
-*.jpg        -text
-*.png        -text
-*.exe        -text
+# Images, fonts, media, archives, binaries and compiled game formats
+*.png binary -eol
+*.jpg binary -eol
+*.jpeg binary -eol
+*.gif binary -eol
+*.bmp binary -eol
+*.ico binary -eol
+*.webp binary -eol
+*.tif binary -eol
+*.tiff binary -eol
+*.pdf binary -eol
+*.woff binary -eol
+*.woff2 binary -eol
+*.ttf binary -eol
+*.otf binary -eol
+*.wav binary -eol
+*.ogg binary -eol
+*.mp3 binary -eol
+*.mp4 binary -eol
+*.avi binary -eol
+*.bik binary -eol
+*.zip binary -eol
+*.7z binary -eol
+*.rar binary -eol
+*.gz binary -eol
+*.bz2 binary -eol
+*.xz binary -eol
+*.exe binary -eol
+*.dll binary -eol
+*.pdb binary -eol
+*.obj binary -eol
+*.lib binary -eol
+*.a binary -eol
+*.so binary -eol
+*.dylib binary -eol
+*.bin binary -eol
+*.dmp binary -eol
+*.mix binary -eol
+*.shp binary -eol
+*.vxl binary -eol
+*.hva binary -eol
+*.pal binary -eol
+*.csf binary -eol
+*.fnt binary -eol
+*.mo binary -eol

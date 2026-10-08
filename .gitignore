@@ -1,29 +1,131 @@
-Release
-Debug
-*.vcxproj.user
-*.vcxproj.filters
-*.sdf
+# Operating-system metadata
+.DS_Store
+.AppleDouble/
+.LSOverride
+._*
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Visual Studio and other local IDE state
+.vs/
 *.suo
-.vs
+*.user
+*.userosscache
+*.sln.docstates
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+*.ipch
+*.aps
+*.vcxproj.filters
+.idea/
 .cproject
 .project
-*.aps
 
-Nightly/
+# Keep shared VS Code tasks/debugging/templates; ignore generated local settings.
+/.vscode/*
+!/.vscode/tasks.json
+!/.vscode/launch.json
+!/.vscode/extensions.json
+!/.vscode/*.example.json
 
-DevBuild/
+# MSBuild configurations and local build/package output
+/[Dd]ebug/
+/[Rr]elease/
+/[Nn]ightly/
+/[Dd]ev[Bb]uild/
+/x64/
+/x86/
+/Win32/
+/[Bb]uild/
+/cmake-*/
+/[Oo]ut/
+/dist/
+/artifacts/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
 
-docs/_build/
-docs/locale/.doctrees/
+# Compilers, linkers, symbol databases and crash dumps
+*.obj
+*.o
+*.res
+*.pch
+*.gch
+*.idb
+*.iobj
+*.ipdb
+*.tlog
+*.lastbuildstate
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.a
+*.so
+*.dylib
+*.pgc
+*.pgd
+*.dmp
+*.mdmp
+
+# Sphinx/Gettext output; retain source .po translations and research evidence.
+/docs/_build/
+/docs/locale/.doctrees/
+.doctrees/
 *.pot
 *.mo
 
-/.vscode
-
-build
-cmake-*
-out
-.idea
-
-# Python virtual environment for docs
+# Python environments and caches
 .venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# JavaScript dependencies and tool caches
+node_modules/
+.npm/
+.pnpm-store/
+.eslintcache
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local configuration, credentials and supplied archive key material
+/.local/
+.env
+.env.*
+!.env.example
+!.env.template
+mixkey.txt
+gcmixkey.h
+*.pfx
+*.p12
+*.pem
+
+# Editor/recovery scratch files
+*~
+*.swp
+*.swo
+*.tmp
+*.temp
+*.bak
+*.bak-*
+*.orig
+*.rej
+
+# Do not blanket-ignore .map/.ini/.json/.csv/.diff or archive extensions:
+# they may be authored game data, fixtures, or intentional audit evidence.

@@ -1,5 +1,7 @@
 # Contributing
 
+This inherited guide describes upstream Phobos. This GC snapshot vendors YRpp as ordinary source files; see the repository README before using the submodule instructions below.
+
 This page describes ways to help or contribute to Phobos and lists the contributing guidelines that are used in the project.
 
 ## Project guidelines and policies

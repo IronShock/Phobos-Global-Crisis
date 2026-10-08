@@ -1,8 +1,13 @@
 @if not defined _echo echo off
+setlocal
 
-rem Executes MSBuild found using VS Locator and VS Dev. Cmd. Prompt.
-
-rem Ensure we're in correct directory.
-cd /D "%~dp0"
-
-run_vsdevcmd.bat & cd .. & msbuild %*
+pushd "%~dp0.." || exit /b 2
+call "%~dp0run_vsdevcmd.bat"
+if errorlevel 1 (
+  popd
+  exit /b 2
+)
+msbuild Phobos.vcxproj /property:Platform=Win32 %*
+set "gc_build_result=%errorlevel%"
+popd
+exit /b %gc_build_result%

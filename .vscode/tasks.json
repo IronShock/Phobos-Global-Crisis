@@ -1,0 +1,147 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Phobos Debug",
+      "type": "process",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "build",
+        "--configuration",
+        "Debug"
+      ],
+      "windows": {
+        "command": "cmd.exe",
+        "args": [
+          "/d",
+          "/c",
+          "call",
+          "scripts\\build_debug.bat"
+        ]
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build Phobos DevBuild",
+      "type": "process",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "build",
+        "--configuration",
+        "DevBuild"
+      ],
+      "windows": {
+        "command": "cmd.exe",
+        "args": [
+          "/d",
+          "/c",
+          "call",
+          "scripts\\build_devbuild.bat"
+        ]
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build Phobos Release",
+      "type": "process",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "build",
+        "--configuration",
+        "Release"
+      ],
+      "windows": {
+        "command": "cmd.exe",
+        "args": [
+          "/d",
+          "/c",
+          "call",
+          "scripts\\build_release.bat"
+        ]
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build Phobos docs with Sphinx",
+      "type": "process",
+      "command": "python3",
+      "windows": {
+        "command": "python"
+      },
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "docs"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build Phobos locale files of zh_CN",
+      "type": "process",
+      "command": "python3",
+      "windows": {
+        "command": "python"
+      },
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "docs-locale"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Cleanup build folders",
+      "type": "process",
+      "command": "python3",
+      "windows": {
+        "command": "python"
+      },
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "clean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Setup VS Code local configuration",
+      "type": "process",
+      "command": "python3",
+      "windows": {
+        "command": "python"
+      },
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "setup-vscode"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,3 +1,22 @@
+# GC enhancements
+
+This repository preserves the supplied GC-customized Phobos source snapshot. The cutover to mainline Phobos plus GC DLLs is planned; runtime behavior is unchanged.
+
+YRpp is vendored, including imported local changes. Ordinary cloning includes it; the inherited upstream instructions below describe Phobos's original submodule workflow.
+
+- **Visual Studio:** open `Phobos.sln`, install the `.vsconfig` components, and select Debug / x86 (the project builds Win32). Debug, DevBuild and Release remain native MSBuild configurations.
+- **Windows command line:** run `scripts/build_debug.bat`, `build_devbuild.bat` or `build_release.bat`. These require no Python or Make. The launchers reuse a Developer Command Prompt or use Visual Studio Installer's locator; no executable is bundled. Additional MSBuild arguments are forwarded.
+- **VS Code:** use the shared build/docs/maintenance tasks. Run the setup task to copy missing local settings, then adjust your game paths. For MSVC IntelliSense, launch `code .` from a VS 2022 Developer Command Prompt, or set the local x86 compiler path. Native debugging remains Windows-only.
+- **macOS/Linux:** source editing, documentation and portable maintenance are supported; DLL compilation and game runtime require Windows/MSVC.
+
+Optional POSIX entry point: `make help`, `make docs`, `make clean`, `make setup-vscode`, and `make debug|devbuild|release` on Windows with Make available. Override `PYTHON` as needed, e.g. `make docs PYTHON=.venv/bin/python`. Make delegates to `scripts/dev.py`; the Visual Studio project remains the build authority.
+
+For portable tasks, use Python 3.10+ in a virtual environment: install `docs/requirements.txt`, then run `python scripts/dev.py docs` (or `python3`). HTML goes to ignored `docs/_build/html/`. Locale work additionally needs `docs/requirements-locale.txt`; `docs-locale` updates tracked zh_CN translations. `clean` removes only Debug, DevBuild and Release; setup preserves existing local settings.
+
+GC research and preparation notes are local-only under `local-docs/`, excluded through this checkout's `.git/info/exclude`; they are absent from fresh clones. Source/binary compatibility and Windows build validation remain pending.
+
+---
+
 ![Phobos YR Engine Extension](logo.png)
 
 [![Github All Releases](https://img.shields.io/github/downloads/Phobos-developers/Phobos/total.svg)](https://github.com/Phobos-developers/Phobos/releases)

@@ -4,7 +4,7 @@ root = true
 # Default Code Style settings
 [*]
 charset = utf-8
-end_of_line = crlf
+end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 
@@ -59,7 +59,8 @@ indent_size = unset
 generated_code = true
 
 # C++ Code Style settings
-[*.{c++,cc,cpp,cppm,cxx,h,h++,hh,hpp,hxx,inl,ipp,ixx,tlh,tli}]
+[*.{c,c++,cc,cpp,cppm,cxx,h,h++,hh,hpp,hxx,inl,ipp,ixx,tlh,tli}]
+end_of_line = crlf
 
 # Vanilla EditorConfig settings
 indent_style = tab
@@ -127,3 +128,14 @@ cpp_space_around_assignment_operator = insert
 cpp_space_pointer_reference_alignment = left
 cpp_space_around_ternary_operator = insert
 cpp_wrap_preserve_blocks = all_one_line_scopes
+
+# Windows projects, resources, command scripts and authored game text
+[*.{sln,vcproj,vcxproj,props,targets,rc,bat,cmd,ps1,ini,map,mpr}]
+end_of_line = crlf
+
+# Imported legacy-encoded files: retain encoding rather than transcoding.
+[src/Ext/Sidebar/Hooks.cpp]
+charset = unset
+
+[src/version.rc]
+charset = unset

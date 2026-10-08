@@ -1,8 +1,4 @@
 @if not defined _echo echo off
-
-rem Builds Phobos DevBuild.
-
-rem Ensure we're in correct directory.
-cd /D "%~dp0"
-
-call run_msbuild /maxCpuCount /consoleloggerparameters:NoSummary /property:Configuration=Debug
+rem Build Debug; additional MSBuild arguments may follow.
+call "%~dp0run_msbuild.bat" /maxCpuCount /consoleloggerparameters:NoSummary /property:Configuration=Debug %*
+exit /b %errorlevel%
