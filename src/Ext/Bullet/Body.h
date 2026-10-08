@@ -1,0 +1,92 @@
+#pragma once
+#include <BulletClass.h>
+#include <unordered_map>
+
+#include <Ext/BulletType/Body.h>
+#include <Ext/TechnoType/Body.h>
+#include <Helpers/Macro.h>
+#include <Utilities/Container.h>
+#include <Utilities/TemplateDef.h>
+#include <New/Entity/LaserTrailClass.h>
+#include "Trajectories/PhobosTrajectory.h"
+
+class BulletExt
+{
+public:
+	using base_type = BulletClass;
+
+	static constexpr DWORD Canary = 0x2A2A2A2A;
+	static constexpr size_t ExtPointerOffset = 0x18;
+
+	class ExtData final : public Extension<BulletClass>
+	{
+	public:
+		BulletTypeExt::ExtData* TypeExtData;
+		HouseClass* FirerHouse;
+		int CurrentStrength;
+		TechnoTypeExt::ExtData* InterceptorTechnoType;
+		InterceptedStatus InterceptedStatus;
+		bool DetonateOnInterception;
+		std::vector<std::unique_ptr<LaserTrailClass>> LaserTrails;
+		bool SnappedToTarget; // Used for custom trajectory projectile target snap checks
+		int DamageNumberOffset;
+		int ParabombFallRate;
+
+		TrajectoryPointer Trajectory;
+
+		ExtData(BulletClass* OwnerObject) : Extension<BulletClass>(OwnerObject)
+			, TypeExtData { nullptr }
+			, FirerHouse { nullptr }
+			, CurrentStrength { 0 }
+			, InterceptorTechnoType { nullptr }
+			, InterceptedStatus { InterceptedStatus::None }
+			, DetonateOnInterception { true }
+			, LaserTrails {}
+			, Trajectory { nullptr }
+			, SnappedToTarget { false }
+			, DamageNumberOffset { INT32_MIN }
+			, ParabombFallRate { 0 }
+		{ }
+
+		virtual ~ExtData() = default;
+
+		virtual void InvalidatePointer(void* ptr, bool bRemoved) override { }
+
+		virtual void LoadFromStream(PhobosStreamReader& Stm) override;
+		virtual void SaveToStream(PhobosStreamWriter& Stm) override;
+
+		void InterceptBullet(TechnoClass* pSource, BulletClass* pInterceptor);
+		void ApplyRadiationToCell(CellStruct cell, int spread, int radLevel);
+		void InitializeLaserTrails();
+
+	private:
+		template <typename T>
+		void Serialize(T& Stm);
+	};
+
+	class ExtContainer final : public Container<BulletExt>
+	{
+	public:
+		ExtContainer();
+		~ExtContainer();
+	};
+
+	static ExtContainer ExtMap;
+
+	// Side table (kept out of ExtData so the ExtData layout/savegame stream stay
+	// unchanged): bullet -> building target hidden from Ares' UC.PassThrough
+	// handler during detonation (set at 0x469150, restored at 0x46920B).
+	static std::unordered_map<BulletClass*, AbstractClass*> UCPassThrough_SavedTargets;
+
+	static void Detonate(const CoordStruct& coords, TechnoClass* pOwner, int damage, HouseClass* pFiringHouse, AbstractClass* pTarget, bool isBright, WeaponTypeClass* pWeapon, WarheadTypeClass* pWarhead);
+	static void ApplyArcingFix(BulletClass* pThis, const CoordStruct& sourceCoords, const CoordStruct& targetCoords, BulletVelocity& velocity);
+
+	static void SimulatedFiringUnlimbo(BulletClass* pBullet, HouseClass* pHouse, WeaponTypeClass* pWeapon, const CoordStruct& sourceCoords, bool randomVelocity);
+	static void SimulatedFiringEffects(BulletClass* pBullet, HouseClass* pHouse, ObjectClass* pAttach, bool firingEffect, bool visualEffect);
+	static inline void SimulatedFiringAnim(BulletClass* pBullet, HouseClass* pHouse, ObjectClass* pAttach);
+	static inline void SimulatedFiringReport(BulletClass* pBullet);
+	static inline void SimulatedFiringLaser(BulletClass* pBullet, HouseClass* pHouse);
+	static inline void SimulatedFiringElectricBolt(BulletClass* pBullet);
+	static inline void SimulatedFiringRadBeam(BulletClass* pBullet, HouseClass* pHouse);
+	static inline void SimulatedFiringParticleSystem(BulletClass* pBullet, HouseClass* pHouse);
+};

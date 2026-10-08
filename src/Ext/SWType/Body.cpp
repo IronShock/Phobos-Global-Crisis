@@ -1,0 +1,514 @@
+﻿#include "Body.h"
+
+#include "NewSWType/NewSWType.h"
+
+#include <StringTable.h>
+#include <SuperClass.h>
+#include <Unsorted.h>
+
+#include <Ext/House/Body.h>
+#include <Utilities/Debug.h>
+
+SWTypeExt::ExtContainer SWTypeExt::ExtMap;
+
+void SWTypeExt::ExtData::Initialize()
+{
+	this->EVA_InsufficientFunds = VoxClass::FindIndex(GameStrings::EVA_InsufficientFunds);
+	this->EVA_SelectTarget = VoxClass::FindIndex("EVA_SelectTarget");
+
+	this->Message_CannotFire = CSFText("MSG:CannotFire");
+}
+
+// =============================
+// load / save
+
+template <typename T>
+void SWTypeExt::ExtData::Serialize(T& Stm)
+{
+	Stm
+		.Process(this->TypeID)
+		.Process(this->Money_Amount)
+		.Process(this->EVA_Impatient)
+		.Process(this->EVA_InsufficientFunds)
+		.Process(this->EVA_SelectTarget)
+		.Process(this->SW_UseAITargeting)
+		.Process(this->SW_AutoFire)
+		.Process(this->SW_ManualFire)
+		.Process(this->SW_ShowCameo)
+		.Process(this->SW_Unstoppable)
+		.Process(this->SW_Inhibitors)
+		.Process(this->SW_AnyInhibitor)
+		.Process(this->SW_Designators)
+		.Process(this->SW_AnyDesignator)
+		.Process(this->SW_RangeMinimum)
+		.Process(this->SW_RangeMaximum)
+		.Process(this->SW_RequiredHouses)
+		.Process(this->SW_ForbiddenHouses)
+		.Process(this->SW_AuxBuildings)
+		.Process(this->SW_NegBuildings)
+		.Process(this->SW_InitialReady)
+		.Process(this->SW_PostDependent)
+		.Process(this->SW_MaxCount)
+		.Process(this->SW_Shots)
+		.Process(this->Message_CannotFire)
+		.Process(this->Message_InsufficientFunds)
+		.Process(this->Message_ColorScheme)
+		.Process(this->Message_FirerColor)
+		.Process(this->UIDescription)
+		.Process(this->CameoPriority)
+		.Process(this->LimboDelivery_Types)
+		.Process(this->LimboDelivery_IDs)
+		.Process(this->LimboDelivery_RandomWeightsData)
+		.Process(this->LimboDelivery_RollChances)
+		.Process(this->LimboDelivery_Delay)
+		.Process(this->LimboKill_Affected)
+		.Process(this->LimboKill_IDs)
+		.Process(this->RandomBuffer)
+		.Process(this->Detonate_Warhead)
+		.Process(this->Detonate_Weapon)
+		.Process(this->Detonate_Damage)
+		.Process(this->Detonate_Warhead_Full)
+		.Process(this->Detonate_AtFirer)
+		.Process(this->SW_Next)
+		.Process(this->SW_Next_RealLaunch)
+		.Process(this->SW_Next_IgnoreInhibitors)
+		.Process(this->SW_Next_IgnoreDesignators)
+		.Process(this->SW_Next_RandomWeightsData)
+		.Process(this->SW_Next_RollChances)
+		.Process(this->ShowTimer_Priority)
+		.Process(this->Convert_Pairs)
+		.Process(this->ShowDesignatorRange)
+		.Process(this->TabIndex)
+		.Process(this->SuperWeaponSidebar_Allow)
+		.Process(this->SuperWeaponSidebar_PriorityHouses)
+		.Process(this->SuperWeaponSidebar_RequiredHouses)
+		.Process(this->SuperWeaponSidebar_Significance)
+		.Process(this->SidebarPal)
+		.Process(this->SidebarPCX)
+		.Process(this->UseWeeds)
+		.Process(this->UseWeeds_Amount)
+		.Process(this->UseWeeds_StorageTimer)
+		.Process(this->UseWeeds_ReadinessAnimationPercentage)
+		.Process(this->EMPulse_WeaponIndex)
+		.Process(this->EMPulse_SuspendOthers)
+		.Process(this->EMPulse_Cannons)
+		.Process(this->EMPulse_TargetSelf)
+		.Process(this->SW_Link)
+		.Process(this->SW_Link_Grant)
+		.Process(this->SW_Link_Ready)
+		.Process(this->SW_Link_Reset)
+		.Process(this->SW_Link_RandomWeightsData)
+		.Process(this->SW_Link_RollChances)
+		.Process(this->Message_LinkedSWAcquired)
+		.Process(this->EVA_LinkedSWAcquired)
+		.Process(this->BattlePoints_Amount)
+		.Process(this->SpawnPoints)
+		.Process(this->SpawnPoints_Delay)
+		.Process(this->SpyPlaneType)
+		.Process(this->ParaDropAircraft)
+		.Process(this->Charge_Count)
+		.Process(this->Charge_AtOnce)
+		.Process(this->Charge_RechargeAll)
+		.Process(this->Charge_FullTimer)
+		.Process(this->Charge_Chargers)
+		.Process(this->Charge_ChargerTimes)
+		;
+}
+
+void SWTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
+{
+	auto pThis = this->OwnerObject();
+	const char* pSection = pThis->ID;
+	INI_EX exINI(pINI);
+
+	this->TypeID.Read(pINI, pSection, "Type");
+
+	// from ares
+	this->Money_Amount.Read(exINI, pSection, "Money.Amount");
+	this->EVA_Impatient.Read(exINI, pSection, "EVA.Impatient");
+	this->EVA_InsufficientFunds.Read(exINI, pSection, "EVA.InsufficientFunds");
+	this->EVA_SelectTarget.Read(exINI, pSection, "EVA.SelectTarget");
+	this->SW_UseAITargeting.Read(exINI, pSection, "SW.UseAITargeting");
+	this->SW_AutoFire.Read(exINI, pSection, "SW.AutoFire");
+	this->SW_ManualFire.Read(exINI, pSection, "SW.ManualFire");
+	this->SW_ShowCameo.Read(exINI, pSection, "SW.ShowCameo");
+	this->SW_Unstoppable.Read(exINI, pSection, "SW.Unstoppable");
+	this->SW_Inhibitors.Read(exINI, pSection, "SW.Inhibitors");
+	this->SW_AnyInhibitor.Read(exINI, pSection, "SW.AnyInhibitor");
+	this->SW_Designators.Read(exINI, pSection, "SW.Designators");
+	this->SW_AnyDesignator.Read(exINI, pSection, "SW.AnyDesignator");
+	this->SW_RangeMinimum.Read(exINI, pSection, "SW.RangeMinimum");
+	this->SW_RangeMaximum.Read(exINI, pSection, "SW.RangeMaximum");
+	this->SW_RequiredHouses = pINI->ReadHouseTypesList(pSection, "SW.RequiredHouses", this->SW_RequiredHouses);
+	this->SW_ForbiddenHouses = pINI->ReadHouseTypesList(pSection, "SW.ForbiddenHouses", this->SW_ForbiddenHouses);
+	this->SW_AuxBuildings.Read(exINI, pSection, "SW.AuxBuildings");
+	this->SW_NegBuildings.Read(exINI, pSection, "SW.NegBuildings");
+	this->SW_InitialReady.Read(exINI, pSection, "SW.InitialReady");
+	this->SW_PostDependent.Read(exINI, pSection, "SW.PostDependent");
+	this->SW_MaxCount.Read(exINI, pSection, "SW.MaxCount");
+	this->SW_Shots.Read(exINI, pSection, "SW.Shots");
+
+	this->Message_CannotFire.Read(exINI, pSection, "Message.CannotFire");
+	this->Message_InsufficientFunds.Read(exINI, pSection, "Message.InsufficientFunds");
+
+	// messages and their properties
+	this->Message_FirerColor.Read(exINI, pSection, "Message.FirerColor");
+	this->Message_ColorScheme.Read(exINI, pSection, "Message.Color");
+
+	this->UIDescription.Read(exINI, pSection, "UIDescription");
+	this->CameoPriority.Read(exINI, pSection, "CameoPriority");
+	this->LimboDelivery_Types.Read(exINI, pSection, "LimboDelivery.Types");
+	this->LimboDelivery_IDs.Read(exINI, pSection, "LimboDelivery.IDs");
+	this->LimboDelivery_RollChances.Read(exINI, pSection, "LimboDelivery.RollChances");
+	this->LimboDelivery_Delay.Read(exINI, pSection, "LimboDelivery.Delay");
+	this->LimboKill_Affected.Read(exINI, pSection, "LimboKill.Affected");
+	this->LimboKill_IDs.Read(exINI, pSection, "LimboKill.IDs");
+	this->SW_Next.Read(exINI, pSection, "SW.Next");
+	this->SW_Next_RealLaunch.Read(exINI, pSection, "SW.Next.RealLaunch");
+	this->SW_Next_IgnoreInhibitors.Read(exINI, pSection, "SW.Next.IgnoreInhibitors");
+	this->SW_Next_IgnoreDesignators.Read(exINI, pSection, "SW.Next.IgnoreDesignators");
+	this->SW_Next_RollChances.Read(exINI, pSection, "SW.Next.RollChances");
+
+	this->ShowTimer_Priority.Read(exINI, pSection, "ShowTimer.Priority");
+
+	this->EMPulse_WeaponIndex.Read(exINI, pSection, "EMPulse.WeaponIndex");
+	this->EMPulse_SuspendOthers.Read(exINI, pSection, "EMPulse.SuspendOthers");
+	this->EMPulse_Cannons.Read(exINI, pSection, "EMPulse.Cannons");
+	this->EMPulse_TargetSelf.Read(exINI, pSection, "EMPulse.TargetSelf");
+
+	char tempBuffer[32];
+	// LimboDelivery.RandomWeights
+	for (size_t i = 0; ; ++i)
+	{
+		ValueableVector<int> weights;
+		_snprintf_s(tempBuffer, sizeof(tempBuffer), "LimboDelivery.RandomWeights%d", i);
+		weights.Read(exINI, pSection, tempBuffer);
+
+		if (!weights.size())
+			break;
+
+		if (this->LimboDelivery_RandomWeightsData.size() > i)
+			this->LimboDelivery_RandomWeightsData[i] = std::move(weights);
+		else
+			this->LimboDelivery_RandomWeightsData.emplace_back(std::move(weights));
+	}
+
+	ValueableVector<int> weights;
+	weights.Read(exINI, pSection, "LimboDelivery.RandomWeights");
+	if (weights.size())
+	{
+		if (this->LimboDelivery_RandomWeightsData.size())
+			this->LimboDelivery_RandomWeightsData[0] = std::move(weights);
+		else
+			this->LimboDelivery_RandomWeightsData.emplace_back(std::move(weights));
+	}
+
+	// SW.Next.RandomWeights
+	for (size_t i = 0; ; ++i)
+	{
+		ValueableVector<int> weights2;
+		_snprintf_s(tempBuffer, sizeof(tempBuffer), "SW.Next.RandomWeights%d", i);
+		weights2.Read(exINI, pSection, tempBuffer);
+
+		if (!weights2.size())
+			break;
+
+		if (this->SW_Next_RandomWeightsData.size() > i)
+			this->SW_Next_RandomWeightsData[i] = std::move(weights2);
+		else
+			this->SW_Next_RandomWeightsData.emplace_back(std::move(weights2));
+	}
+
+	ValueableVector<int> weights2;
+	weights2.Read(exINI, pSection, "SW.Next.RandomWeights");
+	if (weights2.size())
+	{
+		if (this->SW_Next_RandomWeightsData.size())
+			this->SW_Next_RandomWeightsData[0] = std::move(weights2);
+		else
+			this->SW_Next_RandomWeightsData.emplace_back(std::move(weights2));
+	}
+
+	this->SW_Link.Read(exINI, pSection, "SW.Link");
+	this->SW_Link_Grant.Read(exINI, pSection, "SW.Link.Grant");
+	this->SW_Link_Ready.Read(exINI, pSection, "SW.Link.Ready");
+	this->SW_Link_Reset.Read(exINI, pSection, "SW.Link.Reset");
+	this->Message_LinkedSWAcquired.Read(exINI, pSection, "Message.LinkedSWAcquired");
+	this->EVA_LinkedSWAcquired.Read(exINI, pSection, "EVA.LinkedSWAcquired");
+	this->SW_Link_RollChances.Read(exINI, pSection, "SW.Link.RollChances");
+
+	// SW.Link.RandomWeights
+	for (size_t i = 0; ; ++i)
+	{
+		ValueableVector<int> weights3;
+		_snprintf_s(tempBuffer, sizeof(tempBuffer), "SW.Link.RandomWeights%d", i);
+		weights3.Read(exINI, pSection, tempBuffer);
+
+		if (!weights3.size())
+			break;
+
+		this->SW_Link_RandomWeightsData.emplace_back(std::move(weights3));
+	}
+	ValueableVector<int> weights3;
+	weights3.Read(exINI, pSection, "SW.Link.RandomWeights");
+	if (weights3.size())
+	{
+		if (this->SW_Link_RandomWeightsData.size())
+			this->SW_Link_RandomWeightsData[0] = std::move(weights3);
+		else
+			this->SW_Link_RandomWeightsData.emplace_back(std::move(weights3));
+	}
+
+	this->Detonate_Warhead.Read<true>(exINI, pSection, "Detonate.Warhead");
+	this->Detonate_Weapon.Read<true>(exINI, pSection, "Detonate.Weapon");
+	this->Detonate_Damage.Read(exINI, pSection, "Detonate.Damage");
+	this->Detonate_Warhead_Full.Read(exINI, pSection, "Detonate.Warhead.Full");
+	this->Detonate_AtFirer.Read(exINI, pSection, "Detonate.AtFirer");
+
+	// Convert.From & Convert.To
+	TypeConvertGroup::Parse(this->Convert_Pairs, exINI, pSection, AffectedHouse::Owner);
+
+	this->ShowDesignatorRange.Read(exINI, pSection, "ShowDesignatorRange");
+
+	this->TabIndex.Read(exINI, pSection, "TabIndex");
+	GeneralUtils::IntValidCheck(&this->TabIndex, pSection, "TabIndex", 1, 0, 3);
+
+	this->SuperWeaponSidebar_Allow.Read(exINI, pSection, "SuperWeaponSidebar.Allow");
+	this->SuperWeaponSidebar_PriorityHouses = pINI->ReadHouseTypesList(pSection, "SuperWeaponSidebar.PriorityHouses", this->SuperWeaponSidebar_PriorityHouses);
+	this->SuperWeaponSidebar_RequiredHouses = pINI->ReadHouseTypesList(pSection, "SuperWeaponSidebar.RequiredHouses", this->SuperWeaponSidebar_RequiredHouses);
+	this->SuperWeaponSidebar_Significance.Read(exINI, pSection, "SuperWeaponSidebar.Significance");
+
+	this->SidebarPal.LoadFromINI(pINI, pSection, "SidebarPalette");
+	this->SidebarPCX.Read(pINI, pSection, "SidebarPCX");
+
+	this->UseWeeds.Read(exINI, pSection, "UseWeeds");
+	this->UseWeeds_Amount.Read(exINI, pSection, "UseWeeds.Amount");
+	this->UseWeeds_StorageTimer.Read(exINI, pSection, "UseWeeds.StorageTimer");
+	this->UseWeeds_ReadinessAnimationPercentage.Read(exINI, pSection, "UseWeeds.ReadinessAnimationPercentage");
+
+	int newidx = NewSWType::GetNewSWTypeIdx(TypeID.data());
+
+	if (newidx != -1)
+	{
+		NewSWType* pNewSWType = NewSWType::GetNthItem(newidx);
+		pNewSWType->Initialize(const_cast<SWTypeExt::ExtData*>(this), OwnerObject());
+		pNewSWType->LoadFromINI(const_cast<SWTypeExt::ExtData*>(this), OwnerObject(), pINI);
+	}
+	
+	this->BattlePoints_Amount.Read(exINI, pSection, "BattlePoints.Amount");
+
+	this->SpawnPoints.Read(exINI, pSection, "SpawnPoints");
+	this->SpawnPoints_Delay.Read(exINI, pSection, "SpawnPoints.Delay");
+	this->SpyPlaneType.Read(exINI, pSection, "SpyPlane.Type");
+	this->ParaDropAircraft.Read(exINI, pSection, "ParaDrop.Aircraft");
+
+	this->Charge_Count.Read(exINI, pSection, "Charge");
+	this->Charge_AtOnce.Read(exINI, pSection, "Charge.AtOnce");
+	this->Charge_RechargeAll.Read(exINI, pSection, "Charge.Recharge.All");
+	this->Charge_FullTimer.Read(exINI, pSection, "Charge.FullTimer");
+	this->Charge_Chargers.Read(exINI, pSection, "Charge.Chargers");
+	this->Charge_ChargerTimes.Read(exINI, pSection, "Charge.ChargerTimes");
+
+	// FullTimer requires parallel charging to show multiple timers
+	if (this->Charge_FullTimer && !this->Charge_RechargeAll)
+	{
+		Debug::Log("[Phobos::Charge] SW[%s]: FullTimer=yes forces RechargeAll=yes\n", pSection);
+		this->Charge_RechargeAll = true;
+	}
+
+	if (this->Charge_Count >= 0 || !this->Charge_Chargers.empty() || this->Charge_RechargeAll)
+	{
+		Debug::Log("[Phobos::Charge] INI loaded for SW[%s]: Charge=%d, AtOnce=%d, RechargeAll=%d, FullTimer=%d, Chargers.size=%d\n",
+			pSection, this->Charge_Count.Get(), this->Charge_AtOnce.Get(), this->Charge_RechargeAll.Get(),
+			this->Charge_FullTimer.Get(), this->Charge_Chargers.size());
+	}
+}
+
+int SWTypeExt::ExtData::GetMaxCharge(HouseClass* pHouse) const
+{
+	int maxCharge = this->Charge_Count;
+
+	const auto& chargers = this->Charge_Chargers;
+	const auto& times = this->Charge_ChargerTimes;
+
+	for (size_t i = 0; i < chargers.size(); ++i)
+	{
+		int timesVal = (i < times.size()) ? times[i] : 1;
+		if (timesVal <= 0)
+			timesVal = 1;
+		maxCharge += pHouse->CountOwnedAndPresent(chargers[i]) * timesVal;
+	}
+
+	// If Charge was not set in INI (default -1), treat as 1 charge
+	if (this->Charge_Count < 0)
+		maxCharge = 1 + maxCharge - this->Charge_Count; // = 1 + chargers bonus
+	// Ensure at least 1 charge slot (Charge=0 still allows 1 charge)
+	if (maxCharge < 1)
+		maxCharge = 1;
+
+	return maxCharge;
+}
+
+bool SWTypeExt::ExtData::IsChargeSystemActive() const
+{
+	// Activate charge system when Charge is explicitly set (>= 0) or Chargers exist.
+	// Default is -1 (not set), so any value >= 0 means the user configured it.
+	return !this->UseWeeds && (this->Charge_Count >= 0 || !this->Charge_Chargers.empty());
+}
+
+void SWTypeExt::ExtData::InitializeChargeState(SuperClass* pSuper) const
+{
+	auto pHouseExt = HouseExt::ExtMap.Find(pSuper->Owner);
+	if (!pHouseExt)
+		return;
+
+	const int typeIdx = pSuper->Type->ArrayIndex;
+	if (typeIdx < 0 || typeIdx >= static_cast<int>(pHouseExt->SuperExts.size()))
+		return;
+
+	auto& swExt = pHouseExt->SuperExts[typeIdx];
+
+	if (swExt.Charge_Initialized)
+		return;
+
+	swExt.Charge_Initialized = true;
+
+	const int maxCharge = this->GetMaxCharge(pSuper->Owner);
+	const int rechargeTime = pSuper->GetRechargeTime();
+
+	if (this->SW_InitialReady)
+	{
+		swExt.Charge_CurrentReady = maxCharge;
+		pSuper->IsReady = true;
+
+		if (this->Charge_RechargeAll)
+		{
+			// Parallel mode: all slots ready
+			swExt.Charge_RechargeSlots.assign(maxCharge, -1);
+		}
+		else
+		{
+			// Sequential mode: no slot charging (all ready)
+			swExt.Charge_RechargeSlots.assign(1, -1);
+		}
+	}
+	else
+	{
+		swExt.Charge_CurrentReady = 0;
+
+		if (this->Charge_RechargeAll)
+		{
+			// Parallel mode: all slots start charging simultaneously
+			swExt.Charge_RechargeSlots.assign(maxCharge, Unsorted::CurrentFrame);
+		}
+		else
+		{
+			// Sequential mode: single slot starts charging
+			swExt.Charge_RechargeSlots.assign(1, Unsorted::CurrentFrame);
+		}
+
+		// Start the game timer (used for cameo animation)
+		pSuper->RechargeTimer.Start(rechargeTime);
+	}
+
+	Debug::Log("[Phobos::Charge] Initialized charge state for SW[%s] typeIdx=%d, InitialReady=%d, CurrentReady=%d, MaxCharge=%d, RechargeAll=%d\n",
+		pSuper->Type->get_ID(), typeIdx, this->SW_InitialReady.Get(), swExt.Charge_CurrentReady, maxCharge, this->Charge_RechargeAll.Get());
+}
+
+void SWTypeExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
+{
+	Extension<SuperWeaponTypeClass>::LoadFromStream(Stm);
+	this->Serialize(Stm);
+}
+
+void SWTypeExt::ExtData::SaveToStream(PhobosStreamWriter& Stm)
+{
+	Extension<SuperWeaponTypeClass>::SaveToStream(Stm);
+	this->Serialize(Stm);
+}
+
+bool SWTypeExt::LoadGlobals(PhobosStreamReader& Stm)
+{
+	return Stm
+		.Success();
+}
+
+bool SWTypeExt::SaveGlobals(PhobosStreamWriter& Stm)
+{
+	return Stm
+		.Success();
+}
+
+bool SWTypeExt::Activate(SuperClass* pSuper, CellStruct cell, bool isPlayer)
+{
+	const auto pSWTypeExt = SWTypeExt::ExtMap.Find(pSuper->Type);
+	const int newIdx = NewSWType::GetNewSWTypeIdx(pSWTypeExt->TypeID.data());
+
+	Debug::Log("[Phobos::SW::Active] %s\n", pSWTypeExt->TypeID.data());
+
+	if (newIdx != -1)
+		return NewSWType::GetNthItem(newIdx)->Activate(pSuper, cell, isPlayer);
+
+	return false;
+}
+
+// =============================
+// container
+
+SWTypeExt::ExtContainer::ExtContainer() : Container("SuperWeaponTypeClass")
+{ }
+
+SWTypeExt::ExtContainer::~ExtContainer() = default;
+
+// =============================
+// container hooks
+
+DEFINE_HOOK(0x6CE6F6, SuperWeaponTypeClass_CTOR, 0x5)
+{
+	GET(SuperWeaponTypeClass*, pItem, EAX);
+
+	SWTypeExt::ExtMap.TryAllocate(pItem);
+
+	return 0;
+}
+
+DEFINE_HOOK(0x6CEFE0, SuperWeaponTypeClass_SDDTOR, 0x8)
+{
+	GET(SuperWeaponTypeClass*, pItem, ECX);
+
+	SWTypeExt::ExtMap.Remove(pItem);
+	return 0;
+}
+
+DEFINE_HOOK_AGAIN(0x6CE8D0, SuperWeaponTypeClass_SaveLoad_Prefix, 0x8)
+DEFINE_HOOK(0x6CE800, SuperWeaponTypeClass_SaveLoad_Prefix, 0xA)
+{
+	GET_STACK(SuperWeaponTypeClass*, pItem, 0x4);
+	GET_STACK(IStream*, pStm, 0x8);
+
+	SWTypeExt::ExtMap.PrepareStream(pItem, pStm);
+
+	return 0;
+}
+
+DEFINE_HOOK(0x6CE8BE, SuperWeaponTypeClass_Load_Suffix, 0x7)
+{
+	SWTypeExt::ExtMap.LoadStatic();
+	return 0;
+}
+
+DEFINE_HOOK(0x6CE8EA, SuperWeaponTypeClass_Save_Suffix, 0x3)
+{
+	SWTypeExt::ExtMap.SaveStatic();
+	return 0;
+}
+
+//DEFINE_HOOK_AGAIN(0x6CEE50, SuperWeaponTypeClass_LoadFromINI, 0xA)// Section dont exist!
+DEFINE_HOOK(0x6CEE43, SuperWeaponTypeClass_LoadFromINI, 0xA)
+{
+	GET(SuperWeaponTypeClass*, pItem, EBP);
+	GET_STACK(CCINIClass*, pINI, 0x3FC);
+
+	SWTypeExt::ExtMap.LoadFromINI(pItem, pINI);
+	return 0;
+}
