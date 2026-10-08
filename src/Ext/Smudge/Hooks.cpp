@@ -137,7 +137,9 @@ DEFINE_HOOK(0x6B32FD, SmudgeTypeClass_ClearSmudges_Unclearable, 0x7)
 // therefore loses all but one of them. Re-read the section after the vanilla load
 // and stack every non-last entry of a cell into CellExt::ExtraSmudges (up to the
 // [General] SmudgeCapacity limit) so they all render.
-DEFINE_HOOK(0x6B4DB7, ScenarioClass_ReadSmudge_ExtraSmudges, 0xA)
+// Both native paths converge here; the empty-section branch targets 0x6B4DBA.
+// Preserve EBP as the INI receiver and replay only the common epilogue.
+DEFINE_HOOK(0x6B4DBA, ScenarioClass_ReadSmudge_ExtraSmudges, 0x7)
 {
 	GET(CCINIClass*, pINI, EBP);
 
