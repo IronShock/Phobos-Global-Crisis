@@ -9053,6 +9053,78 @@ msgstr "此功能对建筑和战机无效。"
 msgid "This will ignore `Burst.Delays` setting."
 msgstr "这会无视 `Burst.Delays` 设置。"
 
+msgid "Chained weapon fallback (`Next`)"
+msgstr "武器链式后备（`Next`）"
+
+msgid "A weapon can define a `Next=` weapon to fall back to. When the current weapon is unable to fire (its own reload `ROF` has not finished, it cannot engage the target, ...), the unit fires the `Next` weapon instead, continuing down the chain."
+msgstr "武器可以设置 `Next=` 指定后备武器。当当前武器无法开火时（其自身装填 `ROF` 未结束、无法攻击当前目标等），单位会改用 `Next` 武器，并沿链条继续。"
+
+msgid "Each weapon keeps its own reload timer, tracked independently of the shared rearm timer, so multiple weapons can count down their `ROF` concurrently. For example, a main gun with `ROF=200` whose `Next` is a machine gun with `ROF=30` keeps the machine gun firing during the main gun's reload, then resumes firing the main gun once it is ready again."
+msgstr "每把武器各自维护装填计时器，独立于共享的装填计时器分别计算，因此多把武器可以并发地倒计时各自的 `ROF`。例如主炮 `ROF=200` 且其 `Next` 为一挺 `ROF=30` 的机枪时，主炮装填期间会持续使用机枪射击，主炮就绪后则重新使用主炮。"
+
+msgid "All weapons referenced by the chain must be declared on the TechnoType as weapon slots (`Weapon1`, `Weapon2`, ... together with `WeaponCount` and `MultiWeapon=yes`). The slot declaration only provides firing position (`FLH`), turret, ammo etc.; the `Next` chain dictates the firing priority and takes precedence over the default primary/secondary selection."
+msgstr "链上的所有武器都必须声明为该科技类型的武器槽（`Weapon1`、`Weapon2`……并配合 `WeaponCount` 与 `MultiWeapon=yes`）。槽位声明仅提供开火位置（`FLH`）、炮塔、弹药等；`Next` 链决定开火优先级，并优先于默认的主/副武器选择。"
+
+msgid "Weapon `ROF` is still affected by the usual modifiers (`ROF.RandomDelay`, AttachEffect `ROFMultiplier`, garrison/bunker multipliers, ...)."
+msgstr "武器的 `ROF` 仍受常规倍率影响（`ROF.RandomDelay`、附加效果 `ROFMultiplier`、驻军/堡垒倍率等）。"
+
+msgid "`Burst` weapons finish their current burst before switching to the next weapon in the chain."
+msgstr "带 `Burst` 的武器会先打完当前这一轮连发，然后才切换到链上的下一把武器。"
+
+msgid "Elite units use their `EliteWeaponN` slots and the chain declared on their elite weapons (falling back to the base chain when an elite weapon has no `Next`)."
+msgstr "精英单位使用其 `EliteWeaponN` 槽位以及精英武器上声明的链（当精英武器未设置 `Next` 时回退到基础链）。"
+
+msgid "Chains may loop (`A` -> `B` -> `A`); traversal is capped by the number of weapon slots."
+msgstr "链可以成环（`A` -> `B` -> `A`）；遍历步数上限为武器槽数量。"
+
+msgid "A weapon with `ROF=0` is always ready (vanilla behaviour: at most one shot per frame), so any `Next` after it is effectively unreachable for targets that weapon can engage."
+msgstr "`ROF=0` 的武器始终就绪（原版行为：每帧最多发射一次），因此对于该武器能攻击的目标，其后面的 `Next` 实际上不可达。"
+
+msgid "If no weapon in the chain can engage the current target, the unit falls back to the default weapon selection."
+msgstr "若链上没有任何武器能攻击当前目标，则回退到默认的武器选择。"
+
+msgid "Autonomous extra weapons (`ExtraFire`)"
+msgstr "自主额外武器（`ExtraFire`）"
+
+msgid "A weapon can declare additional weapons that the firer fires autonomously, each on its own reload timer, alongside the weapon that declared them. Unlike `Burst` (same weapon, several shots) or `MultiWeapon`/`Next` (alternate weapons), each extra weapon fires independently of everything else."
+msgstr "一把武器可以声明若干额外武器，由开火者按照各自的装填计时器自主开火，与被声明的武器并行。不同于 `Burst`（同武器多发）或 `MultiWeapon`/`Next`（轮流使用不同武器），每把额外武器都完全独立开火。"
+
+msgid "Up to 16 extra weapons per weapon, numbered `ExtraFire0`, `ExtraFire1`, ... (read contiguously starting from `ExtraFire0` until the first missing index). `ExtraFire=` is an alias for `ExtraFire0`."
+msgstr "每把武器最多 16 把额外武器，编号 `ExtraFire0`、`ExtraFire1`……（从 `ExtraFire0` 起连续读取，直到第一个缺失编号为止）。`ExtraFire=` 是 `ExtraFire0` 的别名。"
+
+msgid "Each extra weapon gets its own firing position, target selection and reload rate:"
+msgstr "每把额外武器都有各自的开火位置、目标选择与装填速度："
+
+msgid "`ExtraFireN.FLH` overrides the firing position and defaults to the parent weapon slot's `FLH`. `ExtraFireN.OnTurret` makes that FLH rotate with the turret and defaults to `yes`."
+msgstr "`ExtraFireN.FLH` 覆盖开火位置，缺省为父武器槽的 `FLH`。`ExtraFireN.OnTurret` 使该 FLH 随炮塔旋转，缺省为 `yes`。"
+
+msgid "`ExtraFireN.OwnTarget=yes` makes it pick the nearest valid enemy within range instead of using the firer's current target."
+msgstr "`ExtraFireN.OwnTarget=yes` 使其在射程内自行选取最近的合法敌人，而不使用开火者当前的目标。"
+
+msgid "`ExtraFireN.Range` sets its acquisition/range in cells and defaults to the extra weapon's own `Range`."
+msgstr "`ExtraFireN.Range` 以格为单位设置其索敌/射程，缺省为额外武器自身的 `Range`。"
+
+msgid "`ExtraFireN.UseAmmo=yes` makes each shot consume one point of the unit's `Ammo`."
+msgstr "`ExtraFireN.UseAmmo=yes` 使每发消耗单位 1 点 `Ammo`。"
+
+msgid "`ExtraFireN.CheckParentRange=yes` requires the target to also be within the parent weapon's range; this takes precedence over `OwnTarget` (the effective range becomes the smaller of the two)."
+msgstr "`ExtraFireN.CheckParentRange=yes` 要求目标同时位于父武器射程内；其优先级高于 `OwnTarget`（有效射程取两者较小值）。"
+
+msgid "`ExtraFireN.CheckFacing=yes` (default) requires the turret (or the body, for turretless units) to actually point at the target before firing; while it is still rotating or aimed elsewhere the extra weapon holds fire. Takes precedence over `OwnTarget`."
+msgstr "`ExtraFireN.CheckFacing=yes`（默认）要求炮塔（无炮塔单位则为车体）**真正对准目标**后才开火；正在转向或指向别处时该额外武器不开火。其优先级高于 `OwnTarget`。"
+
+msgid "The reload interval is the extra weapon's `ROF` (affected by `ROF.RandomDelay` and the firer's AttachEffect `ROFMultiplier`). `Burst` and `Burst.Delays` are supported: the burst shots are spaced by `Burst.Delays` and the full `ROF` cooldown only starts after the last shot of the burst."
+msgstr "装填间隔为额外武器的 `ROF`（受 `ROF.RandomDelay` 与开火者的附加效果 `ROFMultiplier` 影响）。支持 `Burst` 与 `Burst.Delays`：连发之间按 `Burst.Delays` 间隔，整轮打完最后一发后才开始完整的 `ROF` 冷却。"
+
+msgid "The extra weapon fires whenever it has a valid target, regardless of the parent weapon's state, and does not use or interfere with the shared rearm timer."
+msgstr "只要额外武器有合法目标就会开火，与父武器状态无关，且不使用也不干扰共享的装填计时器。"
+
+msgid "Works for all TechnoTypes. Elite units read the extra weapons declared on their `Elite` weapon entries."
+msgstr "适用于所有科技类型。精英单位读取其 `Elite` 武器条目上声明的额外武器。"
+
+msgid "Limitations: no turret facing/aiming, no `DelayedFire`, and extra weapons do not chain (an `ExtraFire` weapon's own `ExtraFire` is not fired)."
+msgstr "限制：不做炮塔朝向/瞄准、不支持 `DelayedFire`，且额外武器不再链式（额外武器自身的 `ExtraFire` 不会被触发）。"
+
 #: ../New-or-Enhanced-Logics.md:2588
 msgid "Delayed firing"
 msgstr "延迟开火"

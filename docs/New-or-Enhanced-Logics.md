@@ -2585,6 +2585,60 @@ Burst.NoDelay=false   ; boolean
 - This will ignore `Burst.Delays` setting.
 ```
 
+### Chained weapon fallback (`Next`)
+
+- A weapon can define a `Next=` weapon to fall back to. When the current weapon is unable to fire (its own reload `ROF` has not finished, it cannot engage the target, ...), the unit fires the `Next` weapon instead, continuing down the chain.
+- Each weapon keeps its own reload timer, tracked independently of the shared rearm timer, so multiple weapons can count down their `ROF` concurrently. For example, a main gun with `ROF=200` whose `Next` is a machine gun with `ROF=30` keeps the machine gun firing during the main gun's reload, then resumes firing the main gun once it is ready again.
+- All weapons referenced by the chain must be declared on the TechnoType as weapon slots (`Weapon1`, `Weapon2`, ... together with `WeaponCount` and `MultiWeapon=yes`). The slot declaration only provides firing position (`FLH`), turret, ammo etc.; the `Next` chain dictates the firing priority and takes precedence over the default primary/secondary selection.
+- Weapon `ROF` is still affected by the usual modifiers (`ROF.RandomDelay`, AttachEffect `ROFMultiplier`, garrison/bunker multipliers, ...).
+- `Burst` weapons finish their current burst before switching to the next weapon in the chain.
+- Elite units use their `EliteWeaponN` slots and the chain declared on their elite weapons (falling back to the base chain when an elite weapon has no `Next`).
+- Chains may loop (`A` -> `B` -> `A`); traversal is capped by the number of weapon slots.
+- A weapon with `ROF=0` is always ready (vanilla behaviour: at most one shot per frame), so any `Next` after it is effectively unreachable for targets that weapon can engage.
+- If no weapon in the chain can engage the current target, the unit falls back to the default weapon selection.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWEAPON]                    ; WeaponType
+Next=                           ; WeaponType - weapon to use when this one cannot fire
+
+[SOMETECHNO]                    ; TechnoType
+Weapon1=SOMEWEAPON
+Weapon2=SOMEWEAPON2
+Weapon3=SOMEWEAPON3
+WeaponCount=3
+MultiWeapon=yes
+```
+
+### Autonomous extra weapons (`ExtraFire`)
+
+- A weapon can declare additional weapons that the firer fires autonomously, each on its own reload timer, alongside the weapon that declared them. Unlike `Burst` (same weapon, several shots) or `MultiWeapon`/`Next` (alternate weapons), each extra weapon fires independently of everything else.
+- Up to 16 extra weapons per weapon, numbered `ExtraFire0`, `ExtraFire1`, ... (read contiguously starting from `ExtraFire0` until the first missing index). `ExtraFire=` is an alias for `ExtraFire0`.
+- Each extra weapon gets its own firing position, target selection and reload rate:
+  - `ExtraFireN.FLH` overrides the firing position and defaults to the parent weapon slot's `FLH`. `ExtraFireN.OnTurret` makes that FLH rotate with the turret and defaults to `yes`.
+  - `ExtraFireN.OwnTarget=yes` makes it pick the nearest valid enemy within range instead of using the firer's current target.
+  - `ExtraFireN.Range` sets its acquisition/range in cells and defaults to the extra weapon's own `Range`.
+  - `ExtraFireN.UseAmmo=yes` makes each shot consume one point of the unit's `Ammo`.
+  - `ExtraFireN.CheckParentRange=yes` requires the target to also be within the parent weapon's range; this takes precedence over `OwnTarget` (the effective range becomes the smaller of the two).
+  - `ExtraFireN.CheckFacing=yes` (default) requires the turret (or the body, for turretless units) to actually point at the target before firing; while it is still rotating or aimed elsewhere the extra weapon holds fire. Takes precedence over `OwnTarget`.
+  - The reload interval is the extra weapon's `ROF` (affected by `ROF.RandomDelay` and the firer's AttachEffect `ROFMultiplier`). `Burst` and `Burst.Delays` are supported: the burst shots are spaced by `Burst.Delays` and the full `ROF` cooldown only starts after the last shot of the burst.
+- The extra weapon fires whenever it has a valid target, regardless of the parent weapon's state, and does not use or interfere with the shared rearm timer.
+- Works for all TechnoTypes. Elite units read the extra weapons declared on their `Elite` weapon entries.
+- Limitations: no turret facing/aiming, no `DelayedFire`, and extra weapons do not chain (an `ExtraFire` weapon's own `ExtraFire` is not fired).
+
+In `rulesmd.ini`:
+```ini
+[SOMEWEAPON]                    ; WeaponType
+ExtraFire0=SOMEOTHERWEAPON
+ExtraFire0.FLH=0,0,0
+ExtraFire0.OnTurret=yes
+ExtraFire0.OwnTarget=no
+ExtraFire0.Range=
+ExtraFire0.UseAmmo=no
+ExtraFire0.CheckParentRange=no
+ExtraFire0.CheckFacing=yes
+```
+
 ### Delayed firing
 
 - It is possible to have any weapon fire with a delay by setting `DelayedFire.Duration` on a WeaponType - it supports a single integer or two comma-separated ones for a random range to pick value from.

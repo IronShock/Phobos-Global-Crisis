@@ -1033,12 +1033,22 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 	// On load it defaults to 0 (no filter) from the constructor initializer list.
 	// Serializing it would break save compatibility with saves made before the
 	// filter feature was added, as the extra 4 bytes would misalign the stream.
+
+	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
+		Stm.Process(this->NextWeaponCooldowns[i]);
+
+	Stm.Process(this->NextChainBurstRearm);
+	Stm.Process(this->ExtraFireCooldowns);
+	Stm.Process(this->ExtraFireBurstIndex);
 }
 
 void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)
 {
 	AnnounceInvalidPointer(this->AirstrikeTargetingMe, ptr);
 	AnnounceInvalidPointer(this->PendingAttackTarget, ptr);
+
+	for (auto& pTarget : this->ExtraFireOwnTargets)
+		AnnounceInvalidPointer(pTarget, ptr);
 	
 	for (auto const& pAttachment : ChildAttachments)
 		pAttachment->InvalidatePointer(ptr);

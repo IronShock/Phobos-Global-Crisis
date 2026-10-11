@@ -97,6 +97,22 @@ DEFINE_HOOK(0x6F3428, TechnoClass_WhatWeaponShouldIUse_ForceWeapon, 0x6)
 	GET(TechnoClass*, pThis, ECX);
 	GET_STACK(AbstractClass*, pTarget, STACK_OFFSET(0x18, 0x4));
 
+	// [WeaponType]Next= fallback chain takes priority over ForceWeapon/MultiWeapon
+	// selection. This must run before SelectMultiWeapon, otherwise a low
+	// MultiWeapon.SelectCount (e.g. 1) would return the primary weapon here and the
+	// chain hook at 0x6F36DB would never be reached.
+	if (TechnoExt::HasNextWeaponChain(pThis))
+	{
+		const int chainSlot = TechnoExt::GetChainedWeaponSlot(pThis, pTarget);
+		TechnoExt::ExtMap.Find(pThis)->NextChosenWeaponIndex = chainSlot;
+
+		if (chainSlot >= 0)
+		{
+			R->EAX(chainSlot);
+			return UseWeaponIndex;
+		}
+	}
+
 	auto const pTypeExt = TechnoExt::ExtMap.Find(pThis)->TypeExtData;
 
 	// Force weapon
@@ -125,7 +141,21 @@ DEFINE_HOOK(0x6F36DB, TechnoClass_WhatWeaponShouldIUse, 0x8)
 	GET(TechnoClass*, pThis, ESI);
 	GET_STACK(AbstractClass*, pTarget, STACK_OFFSET(0x18, 0x4));
 
-	enum { Primary = 0x6F37AD, Secondary = 0x6F3745, OriginalCheck = 0x6F36E3 };
+	enum { Primary = 0x6F37AD, Secondary = 0x6F3745, OriginalCheck = 0x6F36E3, ReturnIndex = 0x6F37AF };
+
+	// [WeaponType]Next= fallback chain. The chain dictates which weapon slot to fire,
+	// taking priority over the vanilla primary/secondary selection.
+	if (TechnoExt::HasNextWeaponChain(pThis))
+	{
+		const int chainSlot = TechnoExt::GetChainedWeaponSlot(pThis, pTarget);
+		TechnoExt::ExtMap.Find(pThis)->NextChosenWeaponIndex = chainSlot;
+
+		if (chainSlot >= 0)
+		{
+			R->EAX(chainSlot);
+			return ReturnIndex;
+		}
+	}
 
 	const auto pTargetTechno = abstract_cast<TechnoClass*>(pTarget);
 	const auto pTypeExt = TechnoExt::ExtMap.Find(pThis)->TypeExtData;
@@ -430,12 +460,33 @@ DEFINE_HOOK(0x6FCBE6, TechnoClass_CanFire_BridgeAAFix, 0x6)
 
 DEFINE_HOOK(0x6FC94F, TechnoClass_CanFire_Rearm_OccupyFire, 0x6)
 {
-	enum { ApplyTimer = 0x6FC95B };
+	enum { ApplyTimer = 0x6FC95B, NextChainReady = 0x6FC981, NextChainRearm = 0x6FC972 };
+
+	GET(TechnoClass*, pThis, ESI);
+
+	// [WeaponType]Next= fallback chain: replace the shared RearmTimer check with the
+	// per-weapon cooldown of the weapon selected by the chain for this attack attempt.
+	// This is what lets a different weapon fire while the previously fired one reloads.
+	if (const auto pExt = TechnoExt::ExtMap.TryFind(pThis))
+	{
+		if (pExt->NextChosenWeaponIndex >= 0 && TechnoExt::HasNextWeaponChain(pThis))
+		{
+			// While a burst-shot delay is in effect, defer to the vanilla shared
+			// RearmTimer so Burst/Burst.Delays spacing is respected.
+			if (pExt->NextChainBurstRearm)
+				return 0;
+
+			const int slot = pExt->NextChosenWeaponIndex;
+
+			if (slot < TechnoTypeClass::MaxWeapons && !pExt->NextWeaponCooldowns[slot].InProgress())
+				return NextChainReady;
+
+			return NextChainRearm;
+		}
+	}
 
 	if (!RulesExt::Global()->FixOccupyFire && RulesExt::Global()->UseGlobalOccupyRange)
 		return 0;
-
-	GET(TechnoClass*, pThis, ESI);
 
 	if (!pThis->CanOccupyFire())
 		return 0;
@@ -1004,7 +1055,22 @@ DEFINE_HOOK(0x6FD0B5, TechnoClass_RearmDelay_ROF, 0x6)
 	const double rof = pWeapon->ROF * pExt->AE.ROFMultiplier;
 	pExt->LastRearmWasFullDelay = true;
 
-	R->EAX(GeneralUtils::GetRangedRandomOrSingleValue(range));
+	const int randomDelay = GeneralUtils::GetRangedRandomOrSingleValue(range);
+
+	// [WeaponType]Next= fallback chain: store this weapon's own ROF cooldown so it is
+	// tracked independently of the shared RearmTimer. Only full rearm delays reach this
+	// hook (burst shot delays return earlier), so bursts are timed correctly.
+	if (TechnoExt::HasNextWeaponChain(pThis))
+	{
+		pExt->NextChainBurstRearm = false;
+
+		const int slot = pExt->CurrentFireWeaponIndex;
+
+		if (slot >= 0 && slot < TechnoTypeClass::MaxWeapons)
+			pExt->NextWeaponCooldowns[slot].Start(Game::F2I(rof + randomDelay));
+	}
+
+	R->EAX(randomDelay);
 	__asm { fld rof };
 
 	return SkipGameCode;
@@ -1032,6 +1098,12 @@ DEFINE_HOOK(0x6FD05E, TechnoClass_RearmDelay_BurstDelays, 0x7)
 	GET(TechnoClass*, pThis, ESI);
 	GET(WeaponTypeClass*, pWeapon, EDI);
 	GET(const int, idxCurrentBurst, ECX);
+
+	// [WeaponType]Next= fallback chain: this is the burst-shot delay branch (not the
+	// full ROF). Mark it so the ROF gate defers to the vanilla shared RearmTimer and
+	// therefore respects Burst/Burst.Delays instead of firing every frame.
+	if (TechnoExt::HasNextWeaponChain(pThis))
+		TechnoExt::ExtMap.Find(pThis)->NextChainBurstRearm = true;
 
 	const auto pWeaponExt = WeaponTypeExt::ExtMap.Find(pWeapon);
 	const int burstDelay = pWeaponExt->GetBurstDelay(pThis->CurrentBurstIndex);

@@ -19,6 +19,9 @@ public:
 	static constexpr DWORD Canary = 0x22222222;
 	static constexpr size_t ExtPointerOffset = 0x18;
 
+	// Safety cap for the number of ExtraFire entries read per weapon.
+	static constexpr int MaxExtraFire = 16;
+
 	class ExtData final : public Extension<WeaponTypeClass>
 	{
 	public:
@@ -47,8 +50,21 @@ public:
 		Valueable<bool> Burst_NoDelay;
 		Valueable<AreaFireTarget> AreaFire_Target;
 		Valueable<WeaponTypeClass*> FeedbackWeapon;
+		Nullable<WeaponTypeClass*> Next;
 		Valueable<bool> Laser_IsSingleColor;
 		Valueable<bool> VisualScatter;
+
+		// ExtraFire: additional weapon(s) that fire autonomously alongside this weapon,
+		// each with its own independent ROF. Parallel vectors indexed by ExtraFire number.
+		ValueableVector<WeaponTypeClass*> ExtraFire_Weapons;
+		std::vector<Nullable<CoordStruct>> ExtraFire_FLHs;
+		std::vector<Nullable<Leptons>> ExtraFire_Ranges;
+		ValueableVector<bool> ExtraFire_OwnTarget;
+		ValueableVector<bool> ExtraFire_OnTurret;
+		ValueableVector<bool> ExtraFire_UseAmmo;
+		ValueableVector<bool> ExtraFire_CheckParentRange;
+		ValueableVector<bool> ExtraFire_CheckFacing;
+
 		Nullable<PartialVector2D<int>> ROF_RandomDelay;
 		ValueableVector<int> ChargeTurret_Delays;
 		Valueable<bool> OmniFire_TurnToTarget;
@@ -119,6 +135,7 @@ public:
 			, Burst_NoDelay { false }
 			, AreaFire_Target { AreaFireTarget::Base }
 			, FeedbackWeapon {}
+			, Next {}
 			, Laser_IsSingleColor { false }
 			, VisualScatter { false }
 			, ROF_RandomDelay {}

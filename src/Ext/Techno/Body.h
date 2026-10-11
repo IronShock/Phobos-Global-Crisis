@@ -133,6 +133,29 @@ public:
 		// O(bullets) scan. NOT serialized.
 		int InterceptorScanFrame;
 
+		// Per-weapon independent ROF cooldowns for the [WeaponType]Next= fallback chain.
+		// One entry per weapon slot; a weapon is ready when its timer is not in progress.
+		// This is what allows multiple weapons to compute/track their ROF concurrently,
+		// instead of sharing the single vanilla TechnoClass::RearmTimer.
+		CDTimerClass NextWeaponCooldowns[TechnoTypeClass::MaxWeapons];
+
+		// Transient - weapon slot chosen by the chain logic for the current attack
+		// attempt, used by the ROF gate override. NOT serialized.
+		int NextChosenWeaponIndex;
+
+		// True while the most recent rearm was a burst-shot delay (not the full ROF).
+		// While set, the ROF gate must defer to the vanilla shared RearmTimer so the
+		// per-shot Burst/Burst.Delays spacing is respected instead of being bypassed.
+		bool NextChainBurstRearm;
+
+		// ExtraFire: autonomous additional weapons attached to this unit's weapons.
+		// Indexed by a running flat index over (weapon slot, extra fire index).
+		// Cooldowns are serialized; own targets are transient and invalidated on pointer changes.
+		std::vector<CDTimerClass> ExtraFireCooldowns;
+		std::vector<AbstractClass*> ExtraFireOwnTargets;
+		std::vector<int> ExtraFireBurstIndex; // shots fired in the current ExtraFire burst (0 = idle)
+		int ExtraFireScanFrame; // throttle frame for ExtraFire.OwnTarget acquisition (transient)
+
 		// Ares
 		std::optional<bool> AltOccupation; // if the unit marks cell occupation flags, this is set to whether it uses the "high" occupation members
 
@@ -212,6 +235,9 @@ public:
 			, SecondaryReloadTimer {}
 			, CurrentFireWeaponIndex { -1 }
 			, InterceptorScanFrame { 0 }
+			, NextChosenWeaponIndex { -1 }
+			, NextChainBurstRearm { false }
+			, ExtraFireScanFrame { 0 }
 			
 		{ }
 
@@ -238,6 +264,7 @@ public:
 		void UpdateTemporal();
 		void UpdateMindControlAnim();
 		void UpdateRecountBurst();
+		void UpdateExtraFire();
 		void UpdateRearmInEMPState();
 		void UpdateRearmInTemporal();
 		void InitializeLaserTrails();
@@ -385,6 +412,11 @@ public:
 	static void ApplyKillWeapon(TechnoClass* pThis, TechnoClass* pSource, WarheadTypeClass* pWH);
 	static void ApplyRevengeWeapon(TechnoClass* pThis, TechnoClass* pSource, WarheadTypeClass* pWH);
 	static bool MultiWeaponCanFire(TechnoClass* const pThis, AbstractClass* const pTarget, WeaponTypeClass* const pWeaponType);
+
+	// [WeaponType]Next= fallback chain helpers (WeaponHelpers.cpp).
+	static bool HasNextWeaponChain(TechnoClass* pThis);
+	static int FindWeaponSlotForType(TechnoClass* pThis, WeaponTypeClass* pWeaponType, bool isElite);
+	static int GetChainedWeaponSlot(TechnoClass* pThis, AbstractClass* pTarget);
 };
 
 // Defined in Ext/Infantry/Hooks.Firing.cpp. Clears the per-infantry maps used by

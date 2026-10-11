@@ -566,6 +566,44 @@ Versus.<TechnoType>.RearMultiplier=1.0
 UC.PassThrough.Ignore=no
 ```
 
+### Chained weapon fallback (`Next`)
+A weapon can name a `Next=` weapon to fall back to while it is reloading / unable to
+fire. Each weapon tracks its own `ROF` cooldown independently, so several weapons can
+reload concurrently. Chained weapons must be declared as slots on the TechnoType
+(`Weapon1`, `Weapon2`, ... + `WeaponCount` + `MultiWeapon=yes`).
+
+```ini
+[SOMEWEAPON]                  ; WeaponType
+Next=                         ; WeaponType - weapon to use when this one cannot fire
+
+[SOMETECHNO]                  ; TechnoType
+Weapon1=SOMEWEAPON
+Weapon2=SOMEWEAPON2
+Weapon3=SOMEWEAPON3
+WeaponCount=3
+MultiWeapon=yes
+```
+
+### Autonomous extra weapons (`ExtraFire`)
+A weapon can declare additional weapons (`ExtraFire0`, `ExtraFire1`, ...) that the firer
+fires autonomously, each on its own `ROF`, alongside the weapon that declared them. Each
+extra weapon can override its firing position (`FLH`), pick its own target
+(`OwnTarget`), use its own range, optionally consume ammo, and optionally require the
+target to be within the parent weapon's range (`CheckParentRange`). `Burst`/`Burst.Delays`
+are supported.
+
+```ini
+[SOMEWEAPON]                  ; WeaponType
+ExtraFire0=SOMEOTHERWEAPON    ; WeaponType - fires independently alongside this weapon
+ExtraFire0.FLH=0,0,0          ; firing position (defaults to parent slot FLH)
+ExtraFire0.OnTurret=yes       ; FLH rotates with turret (default yes)
+ExtraFire0.OwnTarget=no       ; pick nearest valid enemy independently
+ExtraFire0.Range=             ; acquisition range in cells (default: weapon Range)
+ExtraFire0.UseAmmo=no         ; each shot consumes 1 unit Ammo
+ExtraFire0.CheckParentRange=no; target must be within parent weapon range (beats OwnTarget)
+ExtraFire0.CheckFacing=yes    ; turret/body must actually face the target (beats OwnTarget)
+```
+
 ---
 
 ## 7. Superweapons
@@ -695,7 +733,7 @@ crashes. Debug-log only.
 `SpyPlane.Type` / `ParaDrop.Aircraft` / `SpawnPoints*`,
 `[OverlayType] CanBeBuiltOn` / `CanBeBuiltOn.Remove` / `CustomPalette` /
 `IgnoreObject`, `[SmudgeType] Unclearable` / `CustomPalette` / `DrawObject`,
-`[AnimType] CreateOverlay*` / `CreateSmudge*`
+`[AnimType] CreateOverlay*` / `CreateSmudge*`, `[WeaponType] Next` / `ExtraFire*`
 
 ### `RA2MD.INI` → `[Phobos]`
 `ContinueGameOnExit`, `Formation*`, `MessageApplyHoverState`,

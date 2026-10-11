@@ -109,6 +109,66 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->Burst_NoDelay.Read(exINI, pSection, "Burst.NoDelay");
 	this->AreaFire_Target.Read(exINI, pSection, "AreaFire.Target");
 	this->FeedbackWeapon.Read<true>(exINI, pSection, "FeedbackWeapon");
+	this->Next.Read<true>(exINI, pSection, "Next");
+
+	// ExtraFire0, ExtraFire1, ... (ExtraFire is an alias for ExtraFire0). Read contiguous
+	// entries until the first missing index (safety-capped at MaxExtraFire).
+	for (int i = 0; i < WeaponTypeExt::MaxExtraFire; ++i)
+	{
+		Nullable<WeaponTypeClass*> extra;
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d", i);
+		extra.Read<true>(exINI, pSection, tempBuffer);
+
+		if (!extra.isset() && i == 0)
+			extra.Read<true>(exINI, pSection, "ExtraFire");
+
+		if (!extra.isset())
+			break;
+
+		this->ExtraFire_Weapons.push_back(extra.Get());
+
+		Nullable<CoordStruct> flh;
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.FLH", i);
+		flh.Read(exINI, pSection, tempBuffer);
+		if (!flh.isset() && i == 0) flh.Read(exINI, pSection, "ExtraFire.FLH");
+		this->ExtraFire_FLHs.push_back(flh);
+
+		Nullable<Leptons> extraRange;
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Range", i);
+		extraRange.Read(exINI, pSection, tempBuffer);
+		if (!extraRange.isset() && i == 0) extraRange.Read(exINI, pSection, "ExtraFire.Range");
+		this->ExtraFire_Ranges.push_back(extraRange);
+
+		Valueable<bool> ownTarget { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OwnTarget", i);
+		ownTarget.Read(exINI, pSection, tempBuffer);
+		if (i == 0) ownTarget.Read(exINI, pSection, "ExtraFire.OwnTarget");
+		this->ExtraFire_OwnTarget.push_back(ownTarget.Get());
+
+		Valueable<bool> onTurret { true };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OnTurret", i);
+		onTurret.Read(exINI, pSection, tempBuffer);
+		if (i == 0) onTurret.Read(exINI, pSection, "ExtraFire.OnTurret");
+		this->ExtraFire_OnTurret.push_back(onTurret.Get());
+
+		Valueable<bool> useAmmo { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.UseAmmo", i);
+		useAmmo.Read(exINI, pSection, tempBuffer);
+		if (i == 0) useAmmo.Read(exINI, pSection, "ExtraFire.UseAmmo");
+		this->ExtraFire_UseAmmo.push_back(useAmmo.Get());
+
+		Valueable<bool> checkParentRange { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.CheckParentRange", i);
+		checkParentRange.Read(exINI, pSection, tempBuffer);
+		if (i == 0) checkParentRange.Read(exINI, pSection, "ExtraFire.CheckParentRange");
+		this->ExtraFire_CheckParentRange.push_back(checkParentRange.Get());
+
+		Valueable<bool> checkFacing { true };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.CheckFacing", i);
+		checkFacing.Read(exINI, pSection, tempBuffer);
+		if (i == 0) checkFacing.Read(exINI, pSection, "ExtraFire.CheckFacing");
+		this->ExtraFire_CheckFacing.push_back(checkFacing.Get());
+	}
 	this->Laser_IsSingleColor.Read(exINI, pSection, "IsSingleColor");
 	this->VisualScatter.Read(exINI, pSection, "VisualScatter");
 	this->ROF_RandomDelay.Read(exINI, pSection, "ROF.RandomDelay");
@@ -192,6 +252,15 @@ void WeaponTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->Burst_NoDelay)
 		.Process(this->AreaFire_Target)
 		.Process(this->FeedbackWeapon)
+		.Process(this->Next)
+		.Process(this->ExtraFire_Weapons)
+		.Process(this->ExtraFire_FLHs)
+		.Process(this->ExtraFire_Ranges)
+		.Process(this->ExtraFire_OwnTarget)
+		.Process(this->ExtraFire_OnTurret)
+		.Process(this->ExtraFire_UseAmmo)
+		.Process(this->ExtraFire_CheckParentRange)
+		.Process(this->ExtraFire_CheckFacing)
 		.Process(this->Laser_IsSingleColor)
 		.Process(this->VisualScatter)
 		.Process(this->ROF_RandomDelay)

@@ -499,3 +499,115 @@ bool TechnoExt::MultiWeaponCanFire(TechnoClass* const pThis, AbstractClass* cons
 
 	return true;
 }
+
+// ============================================================================
+// [WeaponType]Next= fallback chain
+//
+// Each weapon slot keeps its own ROF cooldown (TechnoExt::NextWeaponCooldowns),
+// so multiple weapons can track their reload independently instead of sharing the
+// single vanilla TechnoClass::RearmTimer. When a weapon is not ready (or cannot
+// engage the target), the unit falls back to the weapon referenced by that weapon's
+// Next= tag, continuing down the chain.
+// ============================================================================
+
+bool TechnoExt::HasNextWeaponChain(TechnoClass* pThis)
+{
+	if (!pThis)
+		return false;
+
+	const auto pType = pThis->GetTechnoType();
+
+	if (!pType)
+		return false;
+
+	const bool isElite = pThis->Veterancy.IsElite();
+
+	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
+	{
+		auto pWeapon = pType->GetWeapon(i, isElite).WeaponType;
+
+		if (!pWeapon)
+			pWeapon = pType->GetWeapon(i, false).WeaponType;
+
+		if (pWeapon && WeaponTypeExt::ExtMap.Find(pWeapon)->Next.isset())
+			return true;
+	}
+
+	return false;
+}
+
+int TechnoExt::FindWeaponSlotForType(TechnoClass* pThis, WeaponTypeClass* pWeaponType, bool isElite)
+{
+	if (!pThis || !pWeaponType)
+		return -1;
+
+	const auto pType = pThis->GetTechnoType();
+
+	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
+	{
+		if (pType->GetWeapon(i, isElite).WeaponType == pWeaponType)
+			return i;
+
+		// Next= typically references base weapon IDs, so also allow matching the
+		// base slot when running as an elite unit.
+		if (isElite && pType->GetWeapon(i, false).WeaponType == pWeaponType)
+			return i;
+	}
+
+	return -1;
+}
+
+// Returns the weapon slot the unit should fire at pTarget, or -1 if no weapon
+// belonging to the chain can engage the target (caller falls back to vanilla).
+int TechnoExt::GetChainedWeaponSlot(TechnoClass* pThis, AbstractClass* pTarget)
+{
+	const auto pType = pThis->GetTechnoType();
+	const auto pExt = TechnoExt::ExtMap.Find(pThis);
+	const bool isElite = pThis->Veterancy.IsElite();
+
+	// Chain root is the first declared weapon slot (Primary / ElitePrimary).
+	int slot = -1;
+
+	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
+	{
+		if (pType->GetWeapon(i, isElite).WeaponType || pType->GetWeapon(i, false).WeaponType)
+		{
+			slot = i;
+			break;
+		}
+	}
+
+	if (slot < 0)
+		return -1;
+
+	int firstEligible = -1;
+
+	for (int steps = 0; steps < TechnoTypeClass::MaxWeapons && slot >= 0; ++steps)
+	{
+		auto pWeapon = pType->GetWeapon(slot, isElite).WeaponType;
+
+		if (!pWeapon)
+			pWeapon = pType->GetWeapon(slot, false).WeaponType;
+
+		if (!pWeapon)
+			break;
+
+		const bool eligible = (!pTarget || MultiWeaponCanFire(pThis, pTarget, pWeapon));
+
+		if (eligible)
+		{
+			if (firstEligible < 0)
+				firstEligible = slot;
+
+			if (!pExt->NextWeaponCooldowns[slot].InProgress())
+				return slot;
+		}
+
+		const auto pNext = WeaponTypeExt::ExtMap.Find(pWeapon)->Next.Get(nullptr);
+		slot = pNext ? FindWeaponSlotForType(pThis, pNext, isElite) : -1;
+	}
+
+	// All chain weapons are on cooldown (or none engage the target).
+	return firstEligible;
+}
+
