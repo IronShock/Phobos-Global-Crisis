@@ -22,7 +22,7 @@ class DevTasks(unittest.TestCase):
             dev.main()
             return run.call_args
 
-    def test_reference_retains_legacy_configurations(self):
+    def test_reference_retains_original_configurations(self):
         result = self.build("reference", "DevBuild")
         self.assertIn("/property:Configuration=DevBuild", result.args)
         self.assertEqual(result.kwargs["env"]["GC_BUILD_TARGET"], "reference")
@@ -39,9 +39,9 @@ class DevTasks(unittest.TestCase):
         self.assertIn("/property:Configuration=Release", result.args)
         self.assertIn("/property:BuildType=RELEASE", result.args)
 
-    def test_legacy_is_explicit(self):
-        result = self.build("legacy", "Debug")
-        self.assertEqual(result.kwargs["env"]["GC_BUILD_TARGET"], "legacy")
+    def test_gc_is_explicit(self):
+        result = self.build("gc", "Debug")
+        self.assertEqual(result.kwargs["env"]["GC_BUILD_TARGET"], "gc")
         self.assertIn("/property:Configuration=Debug", result.args)
 
     def test_non_windows_build_refuses_before_dispatch(self):
@@ -56,7 +56,7 @@ class DevTasks(unittest.TestCase):
     def test_clean_keeps_source_and_dependency_checkouts(self):
         with tempfile.TemporaryDirectory(prefix="gc task fixture ") as directory:
             root = Path(directory).resolve()
-            bases = (root, root / "build/gc-reference", root / ".deps/upstream/phobos")
+            bases = (root, root / "build/reference", root / "deps/Phobos")
             for base in bases:
                 (base / "Debug").mkdir(parents=True)
                 (base / "Debug/compiled.obj").write_text("compiled")

@@ -3,14 +3,14 @@
 {
   "configurations": [
     {
-      "name": "GC reference Win32",
+      "name": "GC working checkout Win32",
       "includePath": [
-        "${workspaceFolder}/build/gc-reference/src",
-        "${workspaceFolder}/build/gc-reference/src/**",
-        "${workspaceFolder}/build/gc-reference/YRpp",
-        "${workspaceFolder}/build/gc-reference/YRpp/**",
-        "${workspaceFolder}/build/gc-reference/lib",
-        "${workspaceFolder}/build/gc-reference/lib/**"
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/src/**",
+        "${workspaceFolder}/YRpp",
+        "${workspaceFolder}/YRpp/**",
+        "${workspaceFolder}/lib",
+        "${workspaceFolder}/lib/**"
       ],
       "defines": [
         "SYR_VER=2",
@@ -30,11 +30,11 @@
     {
       "name": "Upstream Phobos Win32",
       "includePath": [
-        "${workspaceFolder}/.deps/upstream/phobos/src",
-        "${workspaceFolder}/.deps/upstream/phobos/src/**",
-        "${workspaceFolder}/.deps/upstream/phobos/YRpp",
-        "${workspaceFolder}/.deps/upstream/phobos/YRpp/**",
-        "${workspaceFolder}/.deps/upstream/phobos/Debug/IntDir/Generated"
+        "${workspaceFolder}/deps/Phobos/src",
+        "${workspaceFolder}/deps/Phobos/src/**",
+        "${workspaceFolder}/deps/Phobos/YRpp",
+        "${workspaceFolder}/deps/Phobos/YRpp/**",
+        "${workspaceFolder}/deps/Phobos/Debug/IntDir/Generated"
       ],
       "defines": [
         "SYR_VER=2",
@@ -52,14 +52,14 @@
       }
     },
     {
-      "name": "Legacy GC Win32",
+      "name": "Pinned GC reference Win32",
       "includePath": [
-        "${workspaceFolder}/src",
-        "${workspaceFolder}/src/**",
-        "${workspaceFolder}/YRpp",
-        "${workspaceFolder}/YRpp/**",
-        "${workspaceFolder}/lib",
-        "${workspaceFolder}/lib/**"
+        "${workspaceFolder}/build/reference/src",
+        "${workspaceFolder}/build/reference/src/**",
+        "${workspaceFolder}/build/reference/YRpp",
+        "${workspaceFolder}/build/reference/YRpp/**",
+        "${workspaceFolder}/build/reference/lib",
+        "${workspaceFolder}/build/reference/lib/**"
       ],
       "defines": [
         "SYR_VER=2",

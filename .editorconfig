@@ -25,12 +25,6 @@ trim_trailing_whitespace = true
 indent_style = tab
 indent_size = 4
 
-# Generated patches carry exact context, including legacy encodings/whitespace.
-[integration/reference/*.patch]
-charset = unset
-trim_trailing_whitespace = false
-insert_final_newline = unset
-
 # Json Code Style settings
 [*.json]
 indent_style = space

@@ -26,7 +26,7 @@
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "Prepare pinned dependencies",
+      "label": "Prepare pinned upstream submodule",
       "type": "process",
       "command": "python3",
       "windows": {
@@ -34,7 +34,7 @@
       },
       "args": [
         "${workspaceFolder}/scripts/dev.py",
-        "prepare-deps"
+        "prepare"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -42,7 +42,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Check dependency pins",
+      "label": "Check upstream pins and clean state",
       "type": "process",
       "command": "python3",
       "windows": {
@@ -50,7 +50,7 @@
       },
       "args": [
         "${workspaceFolder}/scripts/dev.py",
-        "check-deps"
+        "check"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -58,7 +58,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Export GC source delta",
+      "label": "Prepare pinned GC reference worktree",
       "type": "process",
       "command": "python3",
       "windows": {
@@ -66,39 +66,7 @@
       },
       "args": [
         "${workspaceFolder}/scripts/dev.py",
-        "export-gc"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Assemble GC reference",
-      "type": "process",
-      "command": "python3",
-      "windows": {
-        "command": "python"
-      },
-      "args": [
-        "${workspaceFolder}/scripts/dev.py",
-        "assemble-gc"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Verify GC reference",
-      "type": "process",
-      "command": "python3",
-      "windows": {
-        "command": "python"
-      },
-      "args": [
-        "${workspaceFolder}/scripts/dev.py",
-        "verify-gc"
+        "prepare-reference"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -174,13 +142,13 @@
     {
       "id": "buildTarget",
       "type": "pickString",
-      "description": "Choose the DLL source: reconstructed GC reference, untouched mainline, or legacy checkout",
+      "description": "Choose the DLL source: GC working checkout, upstream Phobos, or pinned GC reference",
       "options": [
-        "reference",
+        "gc",
         "upstream",
-        "legacy"
+        "reference"
       ],
-      "default": "reference"
+      "default": "gc"
     },
     {
       "id": "buildConfiguration",

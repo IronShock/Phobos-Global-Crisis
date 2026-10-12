@@ -1,30 +1,28 @@
 # GC enhancements
 
-This migration branch separates the GC source delta from pinned Phobos/YRpp dependencies. It prepares reproducible builds; feature extraction to companion DLLs and runtime cutover remain unqualified. The imported `src/` and `YRpp/` trees stay available until native build and restart/save/load gates pass.
+This branch prepares the GC migration using standard Git dependencies. GC source remains editable in `src/`; companion DLL extraction and runtime cutover are still pending.
 
-| Build target | Source / Visual Studio solution | Configurations |
-| --- | --- | --- |
-| `reference` (default) | GC patches reconstructed at `build/gc-reference/Phobos.sln` | Debug, DevBuild, Release |
-| `upstream` | Untouched pinned core at `.deps/upstream/phobos/Phobos.sln` | Debug, Release; DevBuild maps to Release with NIGHTLY branding |
-| `legacy` | Current imported checkout at `Phobos.sln` | Debug, DevBuild, Release |
-
-Use Python 3.10+ and Git to prepare the source on any platform:
+Phobos is a pinned submodule at `deps/Phobos`. Its nested YRpp submodule supplies the matching upstream headers. Initialize them with:
 
 ```sh
-python scripts/dev.py prepare-deps
-python scripts/dev.py assemble-gc
-python scripts/dev.py verify-gc
+git submodule update --init --recursive
 ```
 
-Use `python3` where appropriate. Pins are in `dependencies.lock.json`; preparation fetches missing checkouts and refuses dirty or mismatched existing ones. The reference uses an explicit historical comparison base and reviewed header-era pin, not a claim of recovered ancestry. `integration/reference/` contains the GC patches and a complete source manifest. It preserves the imported code plus our two fixes, including its existing defects and save-version semantics; it is not the port to latest Phobos.
+Use Python 3.10+ for the shared tasks (`python3` where appropriate). `python scripts/dev.py prepare` initializes and checks dependencies; `check` verifies the recorded pins and refuses local dependency changes.
 
-On Windows, install the Visual Studio 2022 components in `.vsconfig`, then run `python scripts/dev.py build --target reference` or `--target upstream`. Each target retains its own solution/project settings and outputs. VS Code's shared build task selects target/configuration; MSVC IntelliSense needs a Developer Command Prompt or your local x86 compiler path. Open the corresponding prepared solution in Visual Studio. Existing batch build scripts continue to build the legacy checkout without Python or Make.
+| Build target | Visual Studio solution | Configurations |
+| --- | --- | --- |
+| `gc` (default) | `Phobos.sln` | Debug, DevBuild, Release |
+| `upstream` | `deps/Phobos/Phobos.sln` | Debug, Release; DevBuild maps to Release/NIGHTLY |
+| `reference` (optional) | `build/reference/Phobos.sln` | Debug, DevBuild, Release |
 
-The optional root Makefile exposes the same tasks: `make help`, `make assemble-gc`, `make debug TARGET=upstream`. macOS/Linux support preparation, editing, tests and docs; native DLL/game validation requires Windows/MSVC.
+On Windows, install the Visual Studio 2022 components in `.vsconfig`, then run `python scripts/dev.py build --target gc` or `--target upstream`. Visual Studio opens each solution directly. VS Code's shared task selects the target/configuration; launch Code from a Developer Command Prompt for MSVC IntelliSense, or set the local x86 compiler path. Existing batch build scripts build the GC checkout without Python or Make.
 
-While legacy sources remain authoritative, edit them here, stage new source files, then run `python scripts/dev.py export-gc` and `assemble-gc`. Do not edit generated assembly files; modified source or linked paths are refused, and prior outputs/local metadata are preserved during verified reassembly. Run portable checks with `python -m unittest discover -s scripts/tests -v`. The dependency-layer workflow adds three-platform checks and Windows builds; CI and runtime acceptance must be obtained before deleting vendor trees.
+For a stable comparison, `python scripts/dev.py prepare-reference` creates a detached Git worktree at GC commit `b242f51225d70ae8da83826166e813b5027d69a6`, including `Next`/`ExtraFire` and our two source fixes. It preserves the original version/save semantics. Preparation refuses an existing changed or mismatched checkout; use normal Git worktree commands to inspect or remove it. No snapshot exports or generated patch bundles are needed.
 
-Documentation uses `docs/requirements.txt` and `python scripts/dev.py docs`; HTML goes to ignored `docs/_build/html/`. Locale work additionally needs `docs/requirements-locale.txt`. Research/setup notes stay in locally excluded `local-docs/`. Applicable GPL and dependency notices are retained.
+The optional Makefile exposes the same commands: `make help`, `make prepare`, `make debug TARGET=upstream`. macOS/Linux support preparation, source editing, tests and documentation; native DLL/game validation requires Windows/MSVC. Tests run with `python -m unittest discover -s scripts/tests -v`; CI checks three platforms and builds GC/upstream on Windows.
+
+Documentation uses `docs/requirements.txt` and `python scripts/dev.py docs`; HTML is ignored under `docs/_build/html/`. Locale work additionally needs `docs/requirements-locale.txt`. Research/setup notes remain locally excluded under `local-docs/`. Applicable GPL and dependency notices are retained. Vendored GC source/headers remain until their replacements pass build and restart/save/load gates.
 
 ---
 

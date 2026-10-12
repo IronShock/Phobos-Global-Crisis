@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - dependencies.lock.json
-      - integration/reference/**
+      - .gitmodules
+      - deps/Phobos
       - src/**
       - lib/**
       - YRpp/**
@@ -32,13 +32,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: recursive
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s scripts/tests -v
-      - run: python scripts/dev.py prepare-deps
-      - run: python scripts/dev.py assemble-gc
-      - run: python scripts/dev.py verify-gc
+      - run: python scripts/dev.py check
+      - run: python scripts/dev.py prepare-reference
 
   windows-build:
     runs-on: windows-latest
@@ -47,11 +47,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: recursive
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
-      - run: python scripts/dev.py prepare-deps
-      - run: python scripts/dev.py assemble-gc
-      - run: python scripts/dev.py build --target reference --configuration Debug
+      - run: python scripts/dev.py check
+      - run: python scripts/dev.py build --target gc --configuration Debug
       - run: python scripts/dev.py build --target upstream --configuration Debug

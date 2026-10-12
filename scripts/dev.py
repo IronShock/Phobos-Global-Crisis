@@ -1,4 +1,4 @@
-"""Shared tasks for the GC reference assembly and pinned upstream dependencies."""
+"""Shared tasks for the GC checkout, upstream submodule and reference worktree."""
 
 import argparse
 import os
@@ -20,12 +20,9 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     build = commands.add_parser("build", help="Build the Win32 DLL with MSBuild")
     build.add_argument("--configuration", choices=("Debug", "DevBuild", "Release"), default="Debug")
-    build.add_argument("--target", choices=("reference", "upstream", "legacy"), default="reference")
-    for name in ("prepare-deps", "check-deps"):
-        command = commands.add_parser(name, help="Prepare or verify locked external dependencies")
-        command.add_argument("--profile", choices=("upstream", "reference", "all"), default="all")
-    for name in ("export-gc", "assemble-gc", "verify-gc"):
-        commands.add_parser(name, help="Export, assemble or verify the GC reference source delta")
+    build.add_argument("--target", choices=("gc", "upstream", "reference"), default="gc")
+    for name in ("prepare", "check", "prepare-reference"):
+        commands.add_parser(name, help="Prepare or check the standard Git dependency/worktree")
     commands.add_parser("docs", help="Build HTML in docs/_build/html")
     commands.add_parser("docs-locale", help="Update the inherited zh_CN translations")
     commands.add_parser("clean", help="Remove only native build output directories")
@@ -45,13 +42,8 @@ def main():
             "/maxCpuCount", "/consoleloggerparameters:NoSummary",
             f"/property:Configuration={configuration}", *properties,
             env={**os.environ, "GC_BUILD_TARGET": args.target, "GC_PYTHON": sys.executable})
-    elif args.command in ("prepare-deps", "check-deps"):
-        profiles = ("upstream", "reference") if args.profile == "all" else (args.profile,)
-        for profile in profiles:
-            run(sys.executable, str(ROOT / "scripts/dependencies.py"),
-                "prepare" if args.command == "prepare-deps" else "check", "--profile", profile)
-    elif args.command in ("export-gc", "assemble-gc", "verify-gc"):
-        run(sys.executable, str(ROOT / "scripts/gc_reference.py"), args.command.removesuffix("-gc"))
+    elif args.command in ("prepare", "check", "prepare-reference"):
+        run(sys.executable, str(ROOT / "scripts/prepare.py"), args.command)
     elif args.command == "docs":
         run(sys.executable, "-m", "sphinx", "-M", "html", "docs", "docs/_build")
     elif args.command == "docs-locale":
@@ -59,7 +51,7 @@ def main():
         run(sys.executable, "-m", "sphinx_intl", "update", "-p", "_build/gettext", "-l", "zh_CN",
             cwd=ROOT / "docs")
     elif args.command == "clean":
-        for base in (ROOT, ROOT / "build/gc-reference", ROOT / ".deps/upstream/phobos"):
+        for base in (ROOT, ROOT / "build/reference", ROOT / "deps/Phobos"):
             for name in ("Debug", "DevBuild", "Release"):
                 output = base / name
                 if output.is_symlink() or output.resolve() != output.absolute():
