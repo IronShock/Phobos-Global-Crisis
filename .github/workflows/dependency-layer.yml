@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - .gitignore
+      - .gitattributes
+      - .editorconfig
       - .gitmodules
       - deps/Phobos
       - src/**

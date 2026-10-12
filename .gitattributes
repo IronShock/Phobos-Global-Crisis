@@ -1,5 +1,6 @@
 # Detect binary files; store normalized text as LF in Git.
 # Portable text checks out with LF, while C++/Windows files use CRLF below.
+# Submodules are separate repositories and retain their own attributes.
 * text=auto eol=lf
 
 # Repository configuration, documentation, data and portable scripts
@@ -23,6 +24,7 @@
 *.pot text eol=lf
 *.py text eol=lf
 *.sh text eol=lf
+*.ps1 text eol=lf
 *.js text eol=lf
 *.cjs text eol=lf
 *.mjs text eol=lf
@@ -60,7 +62,6 @@ Makefile text eol=lf
 *.rc text eol=crlf
 *.bat text eol=crlf
 *.cmd text eol=crlf
-*.ps1 text eol=crlf
 *.ini text eol=crlf
 *.map text eol=crlf
 *.mpr text eol=crlf
@@ -96,6 +97,12 @@ Makefile text eol=lf
 *.dll binary -eol
 *.pdb binary -eol
 *.obj binary -eol
+*.res binary -eol
+*.pch binary -eol
+*.gch binary -eol
+*.idb binary -eol
+*.ilk binary -eol
+*.binlog binary -eol
 *.lib binary -eol
 *.a binary -eol
 *.so binary -eol

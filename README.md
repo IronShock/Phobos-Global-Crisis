@@ -24,6 +24,8 @@ The optional Makefile exposes the same commands: `make help`, `make prepare`, `m
 
 Documentation uses `docs/requirements.txt` and `python scripts/dev.py docs`; HTML is ignored under `docs/_build/html/`. Locale work additionally needs `docs/requirements-locale.txt`. Research/setup notes remain locally excluded under `local-docs/`. Applicable GPL and dependency notices are retained. Vendored GC source/headers remain until their replacements pass build and restart/save/load gates.
 
+File policy: portable scripts/docs use LF; C++ sources, Visual Studio projects, batch scripts and INI/map text retain CRLF checkout. Binary bytes and legacy encodings are preserved. Shared `.vcxproj.filters` files are trackable; personal settings and generated outputs are ignored. Submodules retain their own file policies.
+
 ---
 
 ![Phobos YR Engine Extension](logo.png)
