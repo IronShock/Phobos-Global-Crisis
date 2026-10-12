@@ -9,6 +9,7 @@ on:
       - .editorconfig
       - .gitmodules
       - deps/Phobos
+      - deps/phobos-runtime.json
       - src/**
       - lib/**
       - YRpp/**
@@ -18,10 +19,14 @@ on:
       - .vscode/**
       - Makefile
       - scripts/**
-      - .github/workflows/dependency-layer.yml
+      - .github/workflows/**
 
 permissions:
   contents: read
+
+concurrency:
+  group: dependencies-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   portable:
@@ -35,17 +40,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          submodules: recursive
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s scripts/tests -v
-      - run: python scripts/dev.py check
-      - run: python scripts/dev.py prepare-reference
 
-  windows-build:
-    runs-on: windows-latest
-    timeout-minutes: 40
+  upstream-runtime:
+    name: Pinned upstream runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,7 +57,23 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
-      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
       - run: python scripts/dev.py check
-      - run: python scripts/dev.py build --target gc --configuration Debug
-      - run: python scripts/dev.py build --target upstream --configuration Debug
+      - run: python scripts/dev.py prepare-reference
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/upstream-runtime.zip
+          key: phobos-runtime-${{ hashFiles('deps/phobos-runtime.json') }}
+      - name: Fetch and verify the exact official package
+        run: python scripts/fetch_phobos.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: runtime
+        with:
+          path: build/upstream-runtime.zip
+          archive: false
+          if-no-files-found: error
+      - name: Runtime receipt
+        env:
+          ARTIFACT_URL: ${{ steps.runtime.outputs.artifact-url }}
+        run: |
+          echo "Verified official Phobos package: [$ARTIFACT_URL]($ARTIFACT_URL)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Revision and SHA-256 are pinned in deps/phobos-runtime.json. This package is separate from the customized GC DLL.' >> "$GITHUB_STEP_SUMMARY"

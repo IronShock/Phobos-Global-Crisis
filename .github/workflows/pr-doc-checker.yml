@@ -8,76 +8,66 @@ on:
       - synchronize
       - labeled
       - unlabeled
-env:
-  BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  Changelog-Check:
-    name: Changelog Mention
-    # If the Minor label is set, then workflow will not be executed
-    if: false == contains(github.event.pull_request.labels.*.name, 'Minor')
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v1
-      - name: Check that Changelog has been updated
-        run: |
-          # Check that Changelog has been updated
-          if (git diff --name-only $(git merge-base origin/$BASE_BRANCH HEAD) | grep ^docs/Whats-New.md$)
-          then
-            echo "Thank you for remembering to update the Changelog! 😋"
-            exit 0
-          else
-            echo "It looks like you forgot to update the Changelog! 🧐"
-            echo "Please, mention your changes in 'docs/Whats-New.md' or use [Minor] label for your Pull Request."
-            exit 1
-          fi
-
-  Credits-Check:
-    name: Credits List Mention
-    # If the Minor label is set, then workflow will not be executed
-    if: false == contains(github.event.pull_request.labels.*.name, 'Minor')
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v1
-      - name: Check that Credits List has been updated
-        run: |
-          # Check that Credits List has been updated
-          if (git diff --name-only $(git merge-base origin/$BASE_BRANCH HEAD) | grep ^CREDITS.md$)
-          then
-            echo "Thank you for remembering to update the Credits List! 😋"
-            exit 0
-          else
-            echo "It looks like you forgot to update the Credits List! 🧐"
-            echo "Please, mention your contribution in 'CREDITS.md' or use [Minor] label for your Pull Request."
-            exit 1
-          fi
-
   Documentation-Check:
-    name: Documentation for Changes
+    name: Documentation Requirements
     # If the Minor label is set, then workflow will not be executed
     if: false == contains(github.event.pull_request.labels.*.name, 'Minor')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v1
-      - name: Check that Documentation has been updated
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check changelog, credits, and documentation updates
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          # Check that Documentation has been updated
-          if (git diff --name-only $(git merge-base origin/$BASE_BRANCH HEAD) | \
-              grep \
-              -e ^docs/New-or-Enhanced-Logics.md$   \
-              -e ^docs/Fixed-or-Improved-Logics.md$ \
-              -e ^docs/AI-Scripting-and-Mapping.md$ \
-              -e ^docs/User-Interface.md$           \
-              -e ^docs/Miscellanous.md$             \
-          )
-          then
-            echo "Thank you for remembering to add your changes to the docs! 😋"
-            exit 0
+          merge_base=$(git merge-base "$BASE_SHA" HEAD)
+          changed_files=$(mktemp)
+          trap 'rm -f "$changed_files"' EXIT
+          git diff --name-only -z "$merge_base" HEAD > "$changed_files"
+
+          changelog_updated=false
+          credits_updated=false
+          documentation_updated=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              docs/Whats-New.md) changelog_updated=true ;;
+              CREDITS.md) credits_updated=true ;;
+              docs/New-or-Enhanced-Logics.md|docs/Fixed-or-Improved-Logics.md|docs/AI-Scripting-and-Mapping.md|docs/User-Interface.md|docs/Miscellanous.md)
+                documentation_updated=true ;;
+            esac
+          done < "$changed_files"
+
+          missing=0
+          if [ "$changelog_updated" = true ]; then
+            echo "Thank you for remembering to update the Changelog! 😋"
           else
-            echo "It looks like you forgot to add your changes to the docs! 🧐"
-            echo "Please, document your changes or use [Minor] label for your Pull Request."
-            exit 1
+            echo "::error::Please mention your changes in 'docs/Whats-New.md' or use the Minor label for your Pull Request."
+            missing=1
           fi
+          if [ "$credits_updated" = true ]; then
+            echo "Thank you for remembering to update the Credits List! 😋"
+          else
+            echo "::error::Please mention your contribution in 'CREDITS.md' or use the Minor label for your Pull Request."
+            missing=1
+          fi
+          if [ "$documentation_updated" = true ]; then
+            echo "Thank you for remembering to add your changes to the docs! 😋"
+          else
+            echo "::error::Please document your changes or use the Minor label for your Pull Request."
+            missing=1
+          fi
+          exit "$missing"
