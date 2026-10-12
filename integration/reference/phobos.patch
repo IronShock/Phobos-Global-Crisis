@@ -1,5 +1,5 @@
 diff --git a/CREDITS.md b/CREDITS.md
-index 599ca1b29a1dad95d3c6f2b98ec2ead799de0437..1908a2ef5f71498ed5bd2b39a0105c0d28c13753 100644
+index 599ca1b29a1dad95d3c6f2b98ec2ead799de0437..371e333867b998a53d7911aaeeab50b7c2a4b498 100644
 --- a/CREDITS.md
 +++ b/CREDITS.md
 @@ -151,6 +151,8 @@ This page lists all the individual contributions to the project by their author.
@@ -19,16 +19,8 @@ index 599ca1b29a1dad95d3c6f2b98ec2ead799de0437..1908a2ef5f71498ed5bd2b39a0105c0d
  - **Apollo** - Translucent SHP drawing patches
  - **ststl**:
    - Customizable `ShowTimer` priority of superweapons
-@@ -649,3 +652,7 @@ This page lists all the individual contributions to the project by their author.
- - **Damfoos** - extensive and thorough testing
- - **Dmitry Volkov** - extensive and thorough testing
- - **Rise of the East community** - extensive playtesting of in-dev features
-+
-+## Third-party code
-+
-+- **RT-Soviet Combustion (RSC)** by Sovietianqi (GPLv3, https://github.com/Sovietianqi/RT-Soviet-Combustion) - the MultiCore scheduling and throttling logic (affinity unlock, MMCSS, high resolution timer, target scan throttle, `Greatest_Threat` cache, LOD update throttling, emergency draw skip) was ported into Phobos. See `docs/MultiCore-Design.md`.
 diff --git a/Phobos.vcxproj b/Phobos.vcxproj
-index 5e5f7ceead7be54712914f221ffb4b47a10a1334..0a74dbe114488111e66571928837714fda36cfff 100644
+index 5e5f7ceead7be54712914f221ffb4b47a10a1334..5bd280c8dcdf8227d117b4985c76df777aa7b2ed 100644
 --- a/Phobos.vcxproj
 +++ b/Phobos.vcxproj
 @@ -18,18 +18,27 @@
@@ -158,11 +150,10 @@ index 5e5f7ceead7be54712914f221ffb4b47a10a1334..0a74dbe114488111e66571928837714f
      <ClCompile Include="src\New\Type\Affiliated\TypeConvertGroup.cpp" />
      <ClCompile Include="src\Ext\BuildingType\Hooks.Upgrade.cpp" />
      <ClCompile Include="src\Phobos.COM.cpp" />
-@@ -210,11 +238,18 @@
+@@ -210,11 +238,17 @@
      <ClCompile Include="src\Utilities\AresHelper.cpp" />
      <ClCompile Include="src\Utilities\AresAddressInit.cpp" />
      <ClCompile Include="src\Misc\SyncLogging.cpp" />
-+    <ClCompile Include="src\Misc\MultiCore.cpp" />
 +    <ClCompile Include="src\Misc\ZoomManager.cpp" />
 +    <ClCompile Include="src\Misc\ZoomManager.Hooks.cpp" />
 +    <ClCompile Include="src\Misc\TextScale.cpp" />
@@ -177,7 +168,7 @@ index 5e5f7ceead7be54712914f221ffb4b47a10a1334..0a74dbe114488111e66571928837714f
      <ClInclude Include="src\Blowfish\blowfish.h" />
      <ClInclude Include="src\Ext\Cell\Body.h" />
      <ClInclude Include="src\Commands\FireTacticalSW.h" />
-@@ -226,17 +261,23 @@
+@@ -226,17 +260,23 @@
      <ClInclude Include="src\New\Entity\AttachEffectClass.h" />
      <ClInclude Include="src\New\Type\Affiliated\TiberiumEaterTypeClass.h" />
      <ClInclude Include="src\New\Type\AttachEffectTypeClass.h" />
@@ -202,7 +193,7 @@ index 5e5f7ceead7be54712914f221ffb4b47a10a1334..0a74dbe114488111e66571928837714f
      <ClInclude Include="src\Ext\Bullet\Trajectories\BombardTrajectory.h" />
      <ClInclude Include="src\Ext\Bullet\Trajectories\PhobosTrajectory.h" />
      <ClInclude Include="src\Ext\Bullet\Trajectories\StraightTrajectory.h" />
-@@ -250,12 +291,18 @@
+@@ -250,12 +290,18 @@
      <ClInclude Include="src\Ext\TAction\Body.h" />
      <ClInclude Include="src\Ext\Team\Body.h" />
      <ClInclude Include="src\Ext\TEvent\Body.h" />
@@ -222,7 +213,7 @@ index 5e5f7ceead7be54712914f221ffb4b47a10a1334..0a74dbe114488111e66571928837714f
      <ClInclude Include="src\New\Entity\BannerClass.h" />
      <ClInclude Include="src\New\Type\BannerTypeClass.h" />
      <ClInclude Include="src\New\Type\Affiliated\TypeConvertGroup.h" />
-@@ -268,8 +315,10 @@
+@@ -268,8 +314,10 @@
      <ClInclude Include="src\New\Type\LaserTrailTypeClass.h" />
      <ClInclude Include="src\New\Type\Affiliated\InterceptorTypeClass.h" />
      <ClInclude Include="src\New\Type\Affiliated\PassengerDeletionTypeClass.h" />
@@ -233,7 +224,7 @@ index 5e5f7ceead7be54712914f221ffb4b47a10a1334..0a74dbe114488111e66571928837714f
      <ClInclude Include="src\Utilities\Anchor.h" />
      <ClInclude Include="src\Utilities\Enumerable.h" />
      <ClInclude Include="src\Ext\Aircraft\Body.h" />
-@@ -278,6 +327,7 @@
+@@ -278,6 +326,7 @@
      <ClInclude Include="src\Ext\BulletType\Body.h" />
      <ClInclude Include="src\Ext\Bullet\Body.h" />
      <ClInclude Include="src\Ext\House\Body.h" />
@@ -241,33 +232,6 @@ index 5e5f7ceead7be54712914f221ffb4b47a10a1334..0a74dbe114488111e66571928837714f
      <ClInclude Include="src\Ext\ParticleSystemType\Body.h" />
      <ClInclude Include="src\Ext\RadSite\Body.h" />
      <ClInclude Include="src\Ext\Scenario\Body.h" />
-@@ -423,7 +473,7 @@
-     <Link>
-       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-       <OptimizeReferences>true</OptimizeReferences>
--      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;%(AdditionalDependencies)</AdditionalDependencies>
-+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;winmm.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
-       <SubSystem>Windows</SubSystem>
-       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
-       <ProfileGuidedDatabase>$(IntDir)$(TargetName).pgd</ProfileGuidedDatabase>
-@@ -468,7 +518,7 @@
-     <Link>
-       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-       <OptimizeReferences>true</OptimizeReferences>
--      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;%(AdditionalDependencies)</AdditionalDependencies>
-+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;winmm.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
-       <SubSystem>Windows</SubSystem>
-       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
-       <ProfileGuidedDatabase>$(IntDir)$(TargetName).pgd</ProfileGuidedDatabase>
-@@ -511,7 +561,7 @@
-     <Link>
-       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-       <OptimizeReferences>true</OptimizeReferences>
--      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;%(AdditionalDependencies)</AdditionalDependencies>
-+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;winmm.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
-       <SubSystem>Windows</SubSystem>
-       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
-       <ProfileGuidedDatabase>$(IntDir)$(TargetName).pgd</ProfileGuidedDatabase>
 diff --git a/src/Commands/AutoReverseToggle.cpp b/src/Commands/AutoReverseToggle.cpp
 new file mode 100644
 index 0000000000000000000000000000000000000000..99e9e26988f52e88135d57684959649aefdefa7d
@@ -11192,7 +11156,7 @@ index 0000000000000000000000000000000000000000..67d8c034aad925f5d436357e9d9d191a
 +		: pThis;
 +}
 diff --git a/src/Ext/Techno/Body.Update.cpp b/src/Ext/Techno/Body.Update.cpp
-index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd9763da9363 100644
+index da6be501618113b94db8b19490d8514449b95370..a2848ff86b373e762ef0d9b141692172e5a2e716 100644
 --- a/src/Ext/Techno/Body.Update.cpp
 +++ b/src/Ext/Techno/Body.Update.cpp
 @@ -26,6 +26,11 @@ void TechnoExt::ExtData::OnEarlyUpdate()
@@ -11207,15 +11171,17 @@ index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd97
  	// Set only if unset or type is changed
  	// Notice that Ares may handle type conversion in the same hook here, which is executed right before this one thankfully
  	if (!this->TypeExtData || this->TypeExtData->OwnerObject() != pType)
-@@ -42,6 +47,7 @@ void TechnoExt::ExtData::OnEarlyUpdate()
+@@ -41,7 +46,9 @@ void TechnoExt::ExtData::OnEarlyUpdate()
+ 	this->ApplySpawnLimitRange();
  	this->ApplyMindControlRangeLimit();
  	this->UpdateRecountBurst();
++	this->UpdateExtraFire();
  	this->UpdateRearmInEMPState();
 +	TechnoExt::UpdateSecondaryReload(this->OwnerObject());
  
  	if (this->AttackMoveFollowerTempCount)
  		this->AttackMoveFollowerTempCount--;
-@@ -74,6 +80,18 @@ void TechnoExt::ExtData::ApplyInterceptor()
+@@ -74,6 +81,18 @@ void TechnoExt::ExtData::ApplyInterceptor()
  	if (this->IsBurrowed || !count)
  		return;
  
@@ -11234,7 +11200,7 @@ index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd97
  	BulletClass* pTargetBullet = nullptr;
  	const double guardRange = pInterceptorType->GuardRange.Get(pThis);
  	const double guardRangeSq = guardRange * guardRange;
-@@ -181,7 +199,7 @@ void TechnoExt::ExtData::DepletedAmmoActions()
+@@ -181,7 +200,7 @@ void TechnoExt::ExtData::DepletedAmmoActions()
  	auto const pTypeExt = this->TypeExtData;
  	auto const pType = pTypeExt->OwnerObject();
  
@@ -11243,7 +11209,7 @@ index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd97
  		return;
  
  	auto const rtti = pThis->WhatAmI();
-@@ -207,6 +225,21 @@ void TechnoExt::ExtData::DepletedAmmoActions()
+@@ -207,6 +226,21 @@ void TechnoExt::ExtData::DepletedAmmoActions()
  
  	int const ammo = pThis->Ammo;
  	bool canDeploy = TechnoExt::HasAmmoToDeploy(pThis) && (min < 0 || ammo >= min) && (max < 0 || ammo <= max);
@@ -11265,7 +11231,7 @@ index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd97
  	bool isDeploying = pThis->CurrentMission == Mission::Unload || pThis->QueuedMission == Mission::Unload;
  
  	if (canDeploy && !isDeploying)
-@@ -636,6 +669,9 @@ void TechnoExt::ExtData::UpdateTypeData(TechnoTypeClass* pCurrentType)
+@@ -636,6 +670,9 @@ void TechnoExt::ExtData::UpdateTypeData(TechnoTypeClass* pCurrentType)
  	this->PreviousType = pOldType;
  	auto const pNewTypeExt = TechnoTypeExt::ExtMap.Find(pCurrentType);
  	this->TypeExtData = pNewTypeExt;
@@ -11275,7 +11241,258 @@ index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd97
  
  	this->UpdateSelfOwnedAttachEffects();
  
-@@ -1605,19 +1641,29 @@ void TechnoExt::KillSelf(TechnoClass* pThis, AutoDeathBehavior deathOption, cons
+@@ -1368,6 +1405,250 @@ void TechnoExt::ExtData::UpdateRecountBurst()
+ 	}
+ }
+ 
++// ExtraFire: autonomously fire additional weapons attached to this unit's weapons.
++// Each extra weapon tracks its own ROF cooldown, independent of the shared RearmTimer,
++// so it fires on its own schedule alongside the unit's normal weapons.
++// Max facing difference (raw DirStruct units, ~2.8 degrees) tolerated by ExtraFire.CheckFacing.
++static constexpr int ExtraFireFacingTolerance = 0x200;
++
++void TechnoExt::ExtData::UpdateExtraFire()
++{
++	const auto pThis = this->OwnerObject();
++	const auto pType = pThis->GetTechnoType();
++
++	if (!pType || !pThis->IsAlive || pThis->InLimbo)
++		return;
++
++	if (pThis->IsParalyzed() || pThis->IsUnderEMP())
++		return;
++
++	// Fast reject: does any weapon of this type declare an ExtraFire?
++	bool any = false;
++
++	for (int i = 0; i < TechnoTypeClass::MaxWeapons && !any; ++i)
++	{
++		for (int elite = 0; elite < 2; ++elite)
++		{
++			auto const pWeapon = pType->GetWeapon(i, elite != 0).WeaponType;
++
++			if (pWeapon && WeaponTypeExt::ExtMap.Find(pWeapon)->ExtraFire_Weapons.size() > 0)
++			{
++				any = true;
++				break;
++			}
++		}
++	}
++
++	if (!any)
++	{
++		if (!this->ExtraFireCooldowns.empty())
++		{
++			this->ExtraFireCooldowns.clear();
++			this->ExtraFireOwnTargets.clear();
++			this->ExtraFireBurstIndex.clear();
++		}
++
++		return;
++	}
++
++	const bool isElite = pThis->Veterancy.IsElite();
++	const auto pOwner = pThis->Owner;
++	const int currentFrame = Unsorted::CurrentFrame;
++	const bool allowScan = currentFrame >= this->ExtraFireScanFrame;
++
++	if (allowScan)
++		this->ExtraFireScanFrame = currentFrame + 12;
++
++	int flat = 0;
++
++	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
++	{
++		auto const pParentWeapon = TechnoTypeExt::GetWeaponType(pType, slot, isElite);
++
++		if (!pParentWeapon)
++			continue;
++
++		auto const pParentExt = WeaponTypeExt::ExtMap.Find(pParentWeapon);
++		const int count = static_cast<int>(pParentExt->ExtraFire_Weapons.size());
++
++		if (count > 0)
++		{
++			// Default FLH for this slot, rank-aware.
++			auto const& parentStruct = (isElite && pType->GetWeapon(slot, true).WeaponType)
++				? pType->GetWeapon(slot, true)
++				: pType->GetWeapon(slot, false);
++
++			// Parent weapon range (used by ExtraFireN.CheckParentRange).
++			const int parentRange = WeaponTypeExt::GetRangeWithModifiers(pParentWeapon, pThis);
++
++			for (int i = 0; i < count; ++i)
++			{
++				const int index = flat + i;
++
++				if (index >= static_cast<int>(this->ExtraFireCooldowns.size()))
++				{
++					this->ExtraFireCooldowns.resize(index + 1);
++					this->ExtraFireOwnTargets.resize(index + 1, nullptr);
++					this->ExtraFireBurstIndex.resize(index + 1, 0);
++				}
++
++				if (this->ExtraFireCooldowns[index].InProgress())
++					continue;
++
++				auto const pExtra = pParentExt->ExtraFire_Weapons[i];
++
++				if (!pExtra || pExtra->NeverUse || !pExtra->Projectile || !pExtra->Warhead)
++					continue;
++
++				int range = pParentExt->ExtraFire_Ranges[i].isset()
++					? static_cast<int>(pParentExt->ExtraFire_Ranges[i].Get())
++					: WeaponTypeExt::GetRangeWithModifiers(pExtra, pThis);
++
++				// CheckParentRange overrides independent targeting: the target must also be
++				// within the parent weapon's range, so use the smaller of the two ranges.
++				if (pParentExt->ExtraFire_CheckParentRange[i])
++					range = Math::min(range, parentRange);
++
++				// Determine target.
++				AbstractClass* pTarget = nullptr;
++
++				if (pParentExt->ExtraFire_OwnTarget[i])
++				{
++					auto& cached = this->ExtraFireOwnTargets[index];
++
++					if (auto const pCachedTechno = abstract_cast<TechnoClass*>(cached))
++					{
++						if (!pCachedTechno->IsAlive || pCachedTechno->InLimbo
++							|| pThis->DistanceFrom(cached) > range
++							|| !TechnoExt::MultiWeaponCanFire(pThis, cached, pExtra))
++						{
++							cached = nullptr;
++						}
++					}
++					else
++					{
++						cached = nullptr;
++					}
++
++					if (!cached && allowScan)
++					{
++						int bestDist = INT_MAX;
++
++						for (int n = 0; n < TechnoClass::Array.Count; ++n)
++						{
++							auto const pCand = TechnoClass::Array.GetItem(n);
++
++							if (!pCand || pCand == pThis || !pCand->IsAlive || pCand->InLimbo
++								|| pOwner->IsAlliedWith(pCand->Owner))
++							{
++								continue;
++							}
++
++							const int dist = pThis->DistanceFrom(pCand);
++
++							if (dist > range || dist >= bestDist)
++								continue;
++
++							if (!TechnoExt::MultiWeaponCanFire(pThis, pCand, pExtra))
++								continue;
++
++							cached = pCand;
++							bestDist = dist;
++						}
++					}
++
++					pTarget = cached;
++				}
++				else
++				{
++					pTarget = pThis->Target;
++				}
++
++				if (!pTarget || pThis->DistanceFrom(pTarget) > range)
++					continue;
++
++				if (!TechnoExt::MultiWeaponCanFire(pThis, pTarget, pExtra))
++					continue;
++
++				const bool useAmmo = pParentExt->ExtraFire_UseAmmo[i];
++
++				if (useAmmo && pType->Ammo > 0 && pThis->Ammo <= 0)
++					continue;
++
++				// Facing gate: the turret (or body for turretless units) must actually be
++				// pointing at this target before firing. Takes precedence over OwnTarget.
++				if (pParentExt->ExtraFire_CheckFacing[i])
++				{
++					const DirStruct facing = pThis->HasTurret() ? pThis->TurretFacing() : pThis->GetRealFacing();
++					const DirStruct targetDir = pThis->GetTargetDirection(pTarget);
++
++					int diff = static_cast<int>(static_cast<short>(targetDir.Raw - facing.Raw));
++
++					if (diff < 0)
++						diff = -diff;
++
++					if (diff > ExtraFireFacingTolerance)
++						continue;
++				}
++
++				// Firing coordinates.
++				const auto flh = pParentExt->ExtraFire_FLHs[i].isset()
++					? pParentExt->ExtraFire_FLHs[i].Get()
++					: parentStruct.FLH;
++				const CoordStruct coords = TechnoExt::GetFLHAbsoluteCoords(pThis, flh, pParentExt->ExtraFire_OnTurret[i]);
++
++				int damage = pExtra->Damage;
++
++				if (damage > 0)
++					damage = static_cast<int>(damage * TechnoExt::GetCurrentFirepowerMultiplier(pThis));
++
++				if (auto const pBullet = pExtra->Projectile->CreateBullet(pTarget, pThis, damage, pExtra->Warhead, pExtra->Speed, pExtra->Bright))
++				{
++					BulletExt::SimulatedFiringUnlimbo(pBullet, pOwner, pExtra, coords, false);
++					BulletExt::SimulatedFiringEffects(pBullet, pOwner, nullptr, true, true);
++				}
++
++				// Reload / burst handling. Burst shots are spaced by Burst.Delays; the full
++				// ROF cooldown only starts after the last shot of the burst.
++				auto const pExtraExt = WeaponTypeExt::ExtMap.Find(pExtra);
++				int& burstIndex = this->ExtraFireBurstIndex[index];
++				burstIndex++;
++
++				if (pExtra->Burst > 1 && burstIndex < pExtra->Burst)
++				{
++					int delay = pExtraExt->GetBurstDelay(burstIndex);
++
++					if (delay < 0)
++						delay = ScenarioClass::Instance->Random.RandomRanged(3, 5);
++
++					if (delay < 1)
++						delay = 1;
++
++					this->ExtraFireCooldowns[index].Start(delay);
++				}
++				else
++				{
++					burstIndex = 0;
++
++					const auto rangeDelay = pExtraExt->ROF_RandomDelay.Get(RulesExt::Global()->ROF_RandomDelay);
++					int rof = static_cast<int>(pExtra->ROF * this->AE.ROFMultiplier)
++						+ GeneralUtils::GetRangedRandomOrSingleValue(rangeDelay);
++
++					if (rof < 1)
++						rof = 1;
++
++					this->ExtraFireCooldowns[index].Start(rof);
++				}
++
++				if (useAmmo && pType->Ammo > 0 && pThis->Ammo > 0)
++					pThis->Ammo--;
++			}
++		}
++
++		flat += count;
++	}
++}
++
+ void TechnoExt::ExtData::UpdateGattlingRateDownReset()
+ {
+ 	const auto pTypeExt = this->TypeExtData;
+@@ -1605,19 +1886,29 @@ void TechnoExt::KillSelf(TechnoClass* pThis, AutoDeathBehavior deathOption, cons
  	}
  
  	default: //must be AutoDeathBehavior::Kill
@@ -11315,7 +11532,7 @@ index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd97
  }
  
  void TechnoExt::UpdateSharedAmmo(TechnoClass* pThis)
-@@ -1648,6 +1694,31 @@ void TechnoExt::UpdateSharedAmmo(TechnoClass* pThis)
+@@ -1648,6 +1939,31 @@ void TechnoExt::UpdateSharedAmmo(TechnoClass* pThis)
  				}
  			}
  		}
@@ -11347,7 +11564,7 @@ index da6be501618113b94db8b19490d8514449b95370..ce6124cbe3fa8653516750e060e2fd97
  	}
  }
  
-@@ -1725,7 +1796,7 @@ void TechnoExt::ExtData::UpdateKeepTargetOnMove()
+@@ -1725,7 +2041,7 @@ void TechnoExt::ExtData::UpdateKeepTargetOnMove()
  			return;
  		}
  	}
@@ -11651,7 +11868,7 @@ index f9e0a64f8d26ff7302ad927dbdf035697515731f..84a3bb6ec4f4a18be219fb069be7cb1a
 +    }
 +}
 diff --git a/src/Ext/Techno/Body.cpp b/src/Ext/Techno/Body.cpp
-index 5d43b41ccfaad53ad21d411eb7bbba08a7c9b178..1775ee9ecc54b1e0f18a9eb319fd8afd76196baa 100644
+index 5d43b41ccfaad53ad21d411eb7bbba08a7c9b178..77e8c88f3cb00a467831c80fb1cf5706c60a763d 100644
 --- a/src/Ext/Techno/Body.cpp
 +++ b/src/Ext/Techno/Body.cpp
 @@ -1,4 +1,4 @@
@@ -11914,7 +12131,7 @@ index 5d43b41ccfaad53ad21d411eb7bbba08a7c9b178..1775ee9ecc54b1e0f18a9eb319fd8afd
  		.Process(this->AccumulatedGattlingValue)
  		.Process(this->ShouldUpdateGattlingValue)
  		.Process(this->OriginalPassengerOwner)
-@@ -866,12 +1021,31 @@ void TechnoExt::ExtData::Serialize(T& Stm)
+@@ -866,12 +1021,41 @@ void TechnoExt::ExtData::Serialize(T& Stm)
  		.Process(this->TintIntensityAllies)
  		.Process(this->TintIntensityEnemies)
  		.Process(this->AttackMoveFollowerTempCount)
@@ -11930,12 +12147,22 @@ index 5d43b41ccfaad53ad21d411eb7bbba08a7c9b178..1775ee9ecc54b1e0f18a9eb319fd8afd
 +	// On load it defaults to 0 (no filter) from the constructor initializer list.
 +	// Serializing it would break save compatibility with saves made before the
 +	// filter feature was added, as the extra 4 bytes would misalign the stream.
++
++	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
++		Stm.Process(this->NextWeaponCooldowns[i]);
++
++	Stm.Process(this->NextChainBurstRearm);
++	Stm.Process(this->ExtraFireCooldowns);
++	Stm.Process(this->ExtraFireBurstIndex);
  }
  
  void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)
  {
  	AnnounceInvalidPointer(this->AirstrikeTargetingMe, ptr);
 +	AnnounceInvalidPointer(this->PendingAttackTarget, ptr);
++
++	for (auto& pTarget : this->ExtraFireOwnTargets)
++		AnnounceInvalidPointer(pTarget, ptr);
 +	
 +	for (auto const& pAttachment : ChildAttachments)
 +		pAttachment->InvalidatePointer(ptr);
@@ -11947,7 +12174,7 @@ index 5d43b41ccfaad53ad21d411eb7bbba08a7c9b178..1775ee9ecc54b1e0f18a9eb319fd8afd
  
  void TechnoExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
 diff --git a/src/Ext/Techno/Body.h b/src/Ext/Techno/Body.h
-index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f718196c2be96 100644
+index 3734979dd460dd8c002979f0e8093809dcbf1f0a..87b3e3e1dd1d8594ff9d4ca69fd232530edc65b8 100644
 --- a/src/Ext/Techno/Body.h
 +++ b/src/Ext/Techno/Body.h
 @@ -1,7 +1,10 @@
@@ -12002,7 +12229,7 @@ index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f7181
  		int AccumulatedGattlingValue;
  		bool ShouldUpdateGattlingValue;
  		int AttachedEffectInvokerCount;
-@@ -93,6 +104,41 @@ public:
+@@ -93,6 +104,60 @@ public:
  		int TintIntensityEnemies;
  
  		int AttackMoveFollowerTempCount;
@@ -12035,16 +12262,35 @@ index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f7181
 +		// O(bullets) scan. NOT serialized.
 +		int InterceptorScanFrame;
 +
-+		// Transient - last game frame this techno scanned for a target. Used by
-+		// MultiCore.TargetScanThrottle. NOT serialized.
-+		DWORD LastTargetScanFrame;
-+		
++		// Per-weapon independent ROF cooldowns for the [WeaponType]Next= fallback chain.
++		// One entry per weapon slot; a weapon is ready when its timer is not in progress.
++		// This is what allows multiple weapons to compute/track their ROF concurrently,
++		// instead of sharing the single vanilla TechnoClass::RearmTimer.
++		CDTimerClass NextWeaponCooldowns[TechnoTypeClass::MaxWeapons];
++
++		// Transient - weapon slot chosen by the chain logic for the current attack
++		// attempt, used by the ROF gate override. NOT serialized.
++		int NextChosenWeaponIndex;
++
++		// True while the most recent rearm was a burst-shot delay (not the full ROF).
++		// While set, the ROF gate must defer to the vanilla shared RearmTimer so the
++		// per-shot Burst/Burst.Delays spacing is respected instead of being bypassed.
++		bool NextChainBurstRearm;
++
++		// ExtraFire: autonomous additional weapons attached to this unit's weapons.
++		// Indexed by a running flat index over (weapon slot, extra fire index).
++		// Cooldowns are serialized; own targets are transient and invalidated on pointer changes.
++		std::vector<CDTimerClass> ExtraFireCooldowns;
++		std::vector<AbstractClass*> ExtraFireOwnTargets;
++		std::vector<int> ExtraFireBurstIndex; // shots fired in the current ExtraFire burst (0 = idle)
++		int ExtraFireScanFrame; // throttle frame for ExtraFire.OwnTarget acquisition (transient)
++
 +		// Ares
 +		std::optional<bool> AltOccupation; // if the unit marks cell occupation flags, this is set to whether it uses the "high" occupation members
  
  		ExtData(TechnoClass* OwnerObject) : Extension<TechnoClass>(OwnerObject)
  			, TypeExtData { nullptr }
-@@ -129,6 +175,8 @@ public:
+@@ -129,6 +194,8 @@ public:
  			, IsDetachingForCloak { false }
  			, BeControlledThreatFrame { 0 }
  			, LastTargetID { 0xFFFFFFFF }
@@ -12053,7 +12299,7 @@ index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f7181
  			, AccumulatedGattlingValue { 0 }
  			, ShouldUpdateGattlingValue { false }
  			, OriginalPassengerOwner {}
-@@ -153,6 +201,23 @@ public:
+@@ -153,6 +220,25 @@ public:
  			, TintIntensityAllies { 0 }
  			, TintIntensityEnemies { 0 }
  			, AttackMoveFollowerTempCount { 0 }
@@ -12072,12 +12318,22 @@ index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f7181
 +			, SecondaryReloadTimer {}
 +			, CurrentFireWeaponIndex { -1 }
 +			, InterceptorScanFrame { 0 }
-+			, LastTargetScanFrame { 0 }
++			, NextChosenWeaponIndex { -1 }
++			, NextChainBurstRearm { false }
++			, ExtraFireScanFrame { 0 }
 +			
  		{ }
  
  		void OnEarlyUpdate();
-@@ -224,6 +289,7 @@ public:
+@@ -178,6 +264,7 @@ public:
+ 		void UpdateTemporal();
+ 		void UpdateMindControlAnim();
+ 		void UpdateRecountBurst();
++		void UpdateExtraFire();
+ 		void UpdateRearmInEMPState();
+ 		void UpdateRearmInTemporal();
+ 		void InitializeLaserTrails();
+@@ -224,6 +311,7 @@ public:
  	static ExtContainer ExtMap;
  
  	static UnitClass* Deployer;
@@ -12085,7 +12341,7 @@ index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f7181
  
  	static bool LoadGlobals(PhobosStreamReader& Stm);
  	static bool SaveGlobals(PhobosStreamWriter& Stm);
-@@ -236,14 +302,42 @@ public:
+@@ -236,14 +324,42 @@ public:
  	static bool HasRadioLinkWithDock(TechnoClass* pThis);
  
  	static CoordStruct GetFLHAbsoluteCoords(TechnoClass* pThis, CoordStruct flh, bool turretFLH = false);
@@ -12129,7 +12385,7 @@ index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f7181
  	static double GetCurrentSpeedMultiplier(FootClass* pThis);
  	static double GetCurrentFirepowerMultiplier(TechnoClass* pThis);
  	static void DrawSelfHealPips(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);
-@@ -272,9 +366,17 @@ public:
+@@ -272,9 +388,17 @@ public:
  	static bool IsHealthInThreshold(TechnoClass* pObject, double min, double max);
  	static UnitTypeClass* GetUnitTypeExtra(UnitClass* pUnit);
  	static AircraftTypeClass* GetAircraftTypeExtra(AircraftClass* pAircraft);
@@ -12147,30 +12403,103 @@ index 3734979dd460dd8c002979f0e8093809dcbf1f0a..d684154f2bf6125bf5dfc914835f7181
  
  	// WeaponHelpers.cpp
  	static int PickWeaponIndex(TechnoClass* pThis, TechnoClass* pTargetTechno, AbstractClass* pTarget, int weaponIndexOne, int weaponIndexTwo, bool allowFallback = true, bool allowAAFallback = true);
-@@ -289,3 +391,7 @@ public:
+@@ -288,4 +412,13 @@ public:
+ 	static void ApplyKillWeapon(TechnoClass* pThis, TechnoClass* pSource, WarheadTypeClass* pWH);
  	static void ApplyRevengeWeapon(TechnoClass* pThis, TechnoClass* pSource, WarheadTypeClass* pWH);
  	static bool MultiWeaponCanFire(TechnoClass* const pThis, AbstractClass* const pTarget, WeaponTypeClass* const pWeaponType);
++
++	// [WeaponType]Next= fallback chain helpers (WeaponHelpers.cpp).
++	static bool HasNextWeaponChain(TechnoClass* pThis);
++	static int FindWeaponSlotForType(TechnoClass* pThis, WeaponTypeClass* pWeaponType, bool isElite);
++	static int GetChainedWeaponSlot(TechnoClass* pThis, AbstractClass* pTarget);
  };
 +
 +// Defined in Ext/Infantry/Hooks.Firing.cpp. Clears the per-infantry maps used by
 +// the fire-on-the-move / WalkFire logic when the infantry is destroyed.
 +void InfantryFiring_ClearTracking(TechnoClass* pThis);
 diff --git a/src/Ext/Techno/Hooks.Firing.cpp b/src/Ext/Techno/Hooks.Firing.cpp
-index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8197a32df 100644
+index 2d6decb15ae65605c130fd5b2c87344bd1085e90..1230bb98bd6338fe79360fccc8028fa81cc873f3 100644
 --- a/src/Ext/Techno/Hooks.Firing.cpp
 +++ b/src/Ext/Techno/Hooks.Firing.cpp
-@@ -428,6 +428,56 @@ DEFINE_HOOK(0x6FCBE6, TechnoClass_CanFire_BridgeAAFix, 0x6)
+@@ -97,6 +97,22 @@ DEFINE_HOOK(0x6F3428, TechnoClass_WhatWeaponShouldIUse_ForceWeapon, 0x6)
+ 	GET(TechnoClass*, pThis, ECX);
+ 	GET_STACK(AbstractClass*, pTarget, STACK_OFFSET(0x18, 0x4));
+ 
++	// [WeaponType]Next= fallback chain takes priority over ForceWeapon/MultiWeapon
++	// selection. This must run before SelectMultiWeapon, otherwise a low
++	// MultiWeapon.SelectCount (e.g. 1) would return the primary weapon here and the
++	// chain hook at 0x6F36DB would never be reached.
++	if (TechnoExt::HasNextWeaponChain(pThis))
++	{
++		const int chainSlot = TechnoExt::GetChainedWeaponSlot(pThis, pTarget);
++		TechnoExt::ExtMap.Find(pThis)->NextChosenWeaponIndex = chainSlot;
++
++		if (chainSlot >= 0)
++		{
++			R->EAX(chainSlot);
++			return UseWeaponIndex;
++		}
++	}
++
+ 	auto const pTypeExt = TechnoExt::ExtMap.Find(pThis)->TypeExtData;
+ 
+ 	// Force weapon
+@@ -125,7 +141,21 @@ DEFINE_HOOK(0x6F36DB, TechnoClass_WhatWeaponShouldIUse, 0x8)
+ 	GET(TechnoClass*, pThis, ESI);
+ 	GET_STACK(AbstractClass*, pTarget, STACK_OFFSET(0x18, 0x4));
+ 
+-	enum { Primary = 0x6F37AD, Secondary = 0x6F3745, OriginalCheck = 0x6F36E3 };
++	enum { Primary = 0x6F37AD, Secondary = 0x6F3745, OriginalCheck = 0x6F36E3, ReturnIndex = 0x6F37AF };
++
++	// [WeaponType]Next= fallback chain. The chain dictates which weapon slot to fire,
++	// taking priority over the vanilla primary/secondary selection.
++	if (TechnoExt::HasNextWeaponChain(pThis))
++	{
++		const int chainSlot = TechnoExt::GetChainedWeaponSlot(pThis, pTarget);
++		TechnoExt::ExtMap.Find(pThis)->NextChosenWeaponIndex = chainSlot;
++
++		if (chainSlot >= 0)
++		{
++			R->EAX(chainSlot);
++			return ReturnIndex;
++		}
++	}
+ 
+ 	const auto pTargetTechno = abstract_cast<TechnoClass*>(pTarget);
+ 	const auto pTypeExt = TechnoExt::ExtMap.Find(pThis)->TypeExtData;
+@@ -428,6 +458,77 @@ DEFINE_HOOK(0x6FCBE6, TechnoClass_CanFire_BridgeAAFix, 0x6)
  	return 0;
  }
  
 +DEFINE_HOOK(0x6FC94F, TechnoClass_CanFire_Rearm_OccupyFire, 0x6)
 +{
-+	enum { ApplyTimer = 0x6FC95B };
++	enum { ApplyTimer = 0x6FC95B, NextChainReady = 0x6FC981, NextChainRearm = 0x6FC972 };
++
++	GET(TechnoClass*, pThis, ESI);
++
++	// [WeaponType]Next= fallback chain: replace the shared RearmTimer check with the
++	// per-weapon cooldown of the weapon selected by the chain for this attack attempt.
++	// This is what lets a different weapon fire while the previously fired one reloads.
++	if (const auto pExt = TechnoExt::ExtMap.TryFind(pThis))
++	{
++		if (pExt->NextChosenWeaponIndex >= 0 && TechnoExt::HasNextWeaponChain(pThis))
++		{
++			// While a burst-shot delay is in effect, defer to the vanilla shared
++			// RearmTimer so Burst/Burst.Delays spacing is respected.
++			if (pExt->NextChainBurstRearm)
++				return 0;
++
++			const int slot = pExt->NextChosenWeaponIndex;
++
++			if (slot < TechnoTypeClass::MaxWeapons && !pExt->NextWeaponCooldowns[slot].InProgress())
++				return NextChainReady;
++
++			return NextChainRearm;
++		}
++	}
 +
 +	if (!RulesExt::Global()->FixOccupyFire && RulesExt::Global()->UseGlobalOccupyRange)
 +		return 0;
-+
-+	GET(TechnoClass*, pThis, ESI);
 +
 +	if (!pThis->CanOccupyFire())
 +		return 0;
@@ -12216,7 +12545,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  #pragma endregion
  
  #pragma region TechnoClass_Fire
-@@ -542,12 +592,14 @@ DEFINE_HOOK(0x6FE43B, TechnoClass_FireAt_OpenToppedDmgMult, 0x8)
+@@ -542,12 +643,14 @@ DEFINE_HOOK(0x6FE43B, TechnoClass_FireAt_OpenToppedDmgMult, 0x8)
  	enum { ApplyDamageMult = 0x6FE45A, ContinueCheck = 0x6FE460 };
  
  	GET(TechnoClass* const, pThis, ESI);
@@ -12233,7 +12562,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  
  		if (auto const pTransport = pThis->Transporter)
  		{
-@@ -556,7 +608,21 @@ DEFINE_HOOK(0x6FE43B, TechnoClass_FireAt_OpenToppedDmgMult, 0x8)
+@@ -556,7 +659,21 @@ DEFINE_HOOK(0x6FE43B, TechnoClass_FireAt_OpenToppedDmgMult, 0x8)
  			//it is float isnt it YRPP ? , check tomson26 YR-IDB !
  			nDamageMult = pExt->OpenTopped_DamageMultiplier.Get(nDamageMult);
  		}
@@ -12255,7 +12584,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  		R->EAX(static_cast<int>(nDamage * nDamageMult));
  		return ApplyDamageMult;
  	}
-@@ -585,12 +651,16 @@ DEFINE_HOOK(0x6FE19A, TechnoClass_FireAt_AreaFire, 0x6)
+@@ -585,12 +702,16 @@ DEFINE_HOOK(0x6FE19A, TechnoClass_FireAt_AreaFire, 0x6)
  			const auto range = WeaponTypeExt::GetRangeWithModifiers(pWeaponType, pThis) / static_cast<double>(Unsorted::LeptonsPerCell);
  			const auto pOwner = pThis->Owner;
  			const auto mapCoords = pCell->MapCoords;
@@ -12274,7 +12603,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  				const unsigned int cellIndex = (i + rand) % size;
  				const CellStruct tgtPos = mapCoords + adjacentCells[cellIndex];
  				CellClass* tgtCell = MapClass::Instance.TryGetCellAt(tgtPos);
-@@ -623,6 +693,32 @@ DEFINE_HOOK(0x6FE19A, TechnoClass_FireAt_AreaFire, 0x6)
+@@ -623,6 +744,32 @@ DEFINE_HOOK(0x6FE19A, TechnoClass_FireAt_AreaFire, 0x6)
  	return 0;
  }
  
@@ -12307,7 +12636,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  DEFINE_HOOK(0x6FF43F, TechnoClass_FireAt_FeedbackWeapon, 0x6)
  {
  	GET(TechnoClass*, pThis, ESI);
-@@ -642,6 +738,14 @@ DEFINE_HOOK(0x6FF43F, TechnoClass_FireAt_FeedbackWeapon, 0x6)
+@@ -642,6 +789,14 @@ DEFINE_HOOK(0x6FF43F, TechnoClass_FireAt_FeedbackWeapon, 0x6)
  	return 0;
  }
  
@@ -12322,7 +12651,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  DEFINE_HOOK(0x6FF0DD, TechnoClass_FireAt_TurretRecoil, 0x6)
  {
  	enum { SkipGameCode = 0x6FF15B };
-@@ -651,6 +755,24 @@ DEFINE_HOOK(0x6FF0DD, TechnoClass_FireAt_TurretRecoil, 0x6)
+@@ -651,6 +806,24 @@ DEFINE_HOOK(0x6FF0DD, TechnoClass_FireAt_TurretRecoil, 0x6)
  	return WeaponTypeExt::ExtMap.Find(pWeapon)->TurretRecoil_Suppress ? SkipGameCode : 0;
  }
  
@@ -12347,7 +12676,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  DEFINE_HOOK(0x6FF905, TechnoClass_FireAt_FireOnce, 0x6)
  {
  	GET(TechnoClass*, pThis, ESI);
-@@ -665,6 +787,17 @@ DEFINE_HOOK(0x6FF905, TechnoClass_FireAt_FireOnce, 0x6)
+@@ -665,6 +838,17 @@ DEFINE_HOOK(0x6FF905, TechnoClass_FireAt_FireOnce, 0x6)
  	return 0;
  }
  
@@ -12365,7 +12694,44 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  DEFINE_HOOK(0x6FF660, TechnoClass_FireAt_Interceptor, 0x6)
  {
  	GET(TechnoClass* const, pSource, ESI);
-@@ -923,6 +1056,40 @@ DEFINE_HOOK(0x6FB086, TechnoClass_Reload_ReloadAmount, 0x8)
+@@ -871,7 +1055,22 @@ DEFINE_HOOK(0x6FD0B5, TechnoClass_RearmDelay_ROF, 0x6)
+ 	const double rof = pWeapon->ROF * pExt->AE.ROFMultiplier;
+ 	pExt->LastRearmWasFullDelay = true;
+ 
+-	R->EAX(GeneralUtils::GetRangedRandomOrSingleValue(range));
++	const int randomDelay = GeneralUtils::GetRangedRandomOrSingleValue(range);
++
++	// [WeaponType]Next= fallback chain: store this weapon's own ROF cooldown so it is
++	// tracked independently of the shared RearmTimer. Only full rearm delays reach this
++	// hook (burst shot delays return earlier), so bursts are timed correctly.
++	if (TechnoExt::HasNextWeaponChain(pThis))
++	{
++		pExt->NextChainBurstRearm = false;
++
++		const int slot = pExt->CurrentFireWeaponIndex;
++
++		if (slot >= 0 && slot < TechnoTypeClass::MaxWeapons)
++			pExt->NextWeaponCooldowns[slot].Start(Game::F2I(rof + randomDelay));
++	}
++
++	R->EAX(randomDelay);
+ 	__asm { fld rof };
+ 
+ 	return SkipGameCode;
+@@ -900,6 +1099,12 @@ DEFINE_HOOK(0x6FD05E, TechnoClass_RearmDelay_BurstDelays, 0x7)
+ 	GET(WeaponTypeClass*, pWeapon, EDI);
+ 	GET(const int, idxCurrentBurst, ECX);
+ 
++	// [WeaponType]Next= fallback chain: this is the burst-shot delay branch (not the
++	// full ROF). Mark it so the ROF gate defers to the vanilla shared RearmTimer and
++	// therefore respects Burst/Burst.Delays instead of firing every frame.
++	if (TechnoExt::HasNextWeaponChain(pThis))
++		TechnoExt::ExtMap.Find(pThis)->NextChainBurstRearm = true;
++
+ 	const auto pWeaponExt = WeaponTypeExt::ExtMap.Find(pWeapon);
+ 	const int burstDelay = pWeaponExt->GetBurstDelay(pThis->CurrentBurstIndex);
+ 
+@@ -923,6 +1128,40 @@ DEFINE_HOOK(0x6FB086, TechnoClass_Reload_ReloadAmount, 0x8)
  	return 0;
  }
  
@@ -12406,7 +12772,7 @@ index 2d6decb15ae65605c130fd5b2c87344bd1085e90..6a106b0297c947a2b98c737c731cdbf8
  // Author: Otamaa
  DEFINE_HOOK(0x5223B3, InfantryClass_Approach_Target_DeployFireWeapon, 0x6)
  {
-@@ -933,3 +1100,36 @@ DEFINE_HOOK(0x5223B3, InfantryClass_Approach_Target_DeployFireWeapon, 0x6)
+@@ -933,3 +1172,36 @@ DEFINE_HOOK(0x5223B3, InfantryClass_Approach_Target_DeployFireWeapon, 0x6)
  	R->EDI(deployFireWeapon == -1 ? pThis->SelectWeapon(pThis->Target) : deployFireWeapon);
  	return 0x5223B9;
  }
@@ -13374,10 +13740,10 @@ index b69529aeda5e199feade2e1a91721a19de26660f..874f4a482bee820da9d559ca0d678a06
 +	return ContinueCheck;
 +} 
 diff --git a/src/Ext/Techno/Hooks.TargetEvaluation.cpp b/src/Ext/Techno/Hooks.TargetEvaluation.cpp
-index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef51a54408 100644
+index 10daf28aac061215b2c22fdd184a98266f8fa303..ad2e46b97327e0eb6bf26121c9beb458d48c6e34 100644
 --- a/src/Ext/Techno/Hooks.TargetEvaluation.cpp
 +++ b/src/Ext/Techno/Hooks.TargetEvaluation.cpp
-@@ -1,6 +1,122 @@
+@@ -1,6 +1,121 @@
 -#include "Body.h"
 +﻿#include "Body.h"
 +
@@ -13388,7 +13754,6 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
 +#include <Utilities/Debug.h>
 +#include <Phobos.h>
 +#include <Unsorted.h>
-+#include <Misc/MultiCore.h>
 +#include <algorithm>  // std::find
 +
 +// Ammo.Secondary: if the secondary weapon is empty, it cannot fire. Used by the
@@ -13444,7 +13809,8 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
 +		// Fast type gate before touching any building fields.
 +		if (pTarget->WhatAmI() != AbstractType::Building)
 +			return nullptr;
-+
+ 
+-// Cursor & target acquisition stuff not directly tied to other features can go here.
 +		auto const pBld = static_cast<BuildingClass*>(pTarget);
 +
 +		if (!pBld->IsAlive)
@@ -13459,8 +13825,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
 +
 +		if (pExt->UrbanCombat_State != BuildingExt::ExtData::UrbanCombatState::Active)
 +			return nullptr;
- 
--// Cursor & target acquisition stuff not directly tied to other features can go here.
++
 +		return pBld;
 +	}
 +
@@ -13502,7 +13867,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  
  #pragma region TargetAcquisition
  
-@@ -8,7 +124,13 @@ DEFINE_HOOK(0x7098B9, TechnoClass_TargetSomethingNearby_AutoFire, 0x6)
+@@ -8,7 +123,13 @@ DEFINE_HOOK(0x7098B9, TechnoClass_TargetSomethingNearby_AutoFire, 0x6)
  {
  	GET(TechnoClass* const, pThis, ESI);
  
@@ -13517,26 +13882,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  
  	if (pExt->AutoFire)
  	{
-@@ -20,9 +142,31 @@ DEFINE_HOOK(0x7098B9, TechnoClass_TargetSomethingNearby_AutoFire, 0x6)
- 		return 0x7099B8;
- 	}
- 
-+	// MultiCore: throttle the expensive target scan. Placed after the cheap
-+	// AutoFire handling so that behaviour stays per-frame.
-+	if (Phobos::Config::MultiCore_Enable && Phobos::Config::MultiCore_TargetScanThrottle)
-+	{
-+		const int interval = MultiCore::TargetScanInterval(pThis, pThis->Target != nullptr);
-+
-+		// This hook sits in the middle of TargetSomethingNearby, after its
-+		// prologue (sub esp,0xc; push esi; push edi). Skip to the proper
-+		// epilogue so those are restored - the bare `ret 8` at 0x7099CA (used
-+		// by RSC's entry hook) would leave the stack unbalanced and crash.
-+		if (Unsorted::CurrentFrame - pTechnoExt->LastTargetScanFrame < static_cast<DWORD>(interval))
-+			return 0x7099B8;
-+
-+		pTechnoExt->LastTargetScanFrame = Unsorted::CurrentFrame;
-+	}
-+
+@@ -23,6 +144,12 @@ DEFINE_HOOK(0x7098B9, TechnoClass_TargetSomethingNearby_AutoFire, 0x6)
  	return 0;
  }
  
@@ -13549,7 +13895,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  FireError __fastcall TechnoClass_TargetSomethingNearby_CanFire_Wrapper(TechnoClass* pThis, void* _, AbstractClass* pTarget, int weaponIndex, bool ignoreRange)
  {
  	auto const pExt = TechnoExt::ExtMap.Find(pThis);
-@@ -62,10 +206,33 @@ DEFINE_HOOK(0x6F7E47, TechnoClass_EvaluateObject_MapZone, 0x7)
+@@ -62,10 +189,33 @@ DEFINE_HOOK(0x6F7E47, TechnoClass_EvaluateObject_MapZone, 0x7)
  	GET(ObjectClass*, pObject, ESI);
  	GET(const int, zone, EBP);
  
@@ -13583,7 +13929,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  	}
  
  	return AllowedObject;
-@@ -185,8 +352,10 @@ DEFINE_HOOK(0x4DF3A0, FootClass_UpdateAttackMove_SelectNewTarget, 0x6)
+@@ -185,8 +335,10 @@ DEFINE_HOOK(0x4DF3A0, FootClass_UpdateAttackMove_SelectNewTarget, 0x6)
  	GET(FootClass* const, pThis, ECX);
  
  	const auto pExt = TechnoExt::ExtMap.Find(pThis);
@@ -13595,7 +13941,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  		&& CheckAttackMoveCanResetTarget(pThis))
  	{
  		pThis->Target = nullptr;
-@@ -199,9 +368,27 @@ DEFINE_HOOK(0x4DF3A0, FootClass_UpdateAttackMove_SelectNewTarget, 0x6)
+@@ -199,9 +351,27 @@ DEFINE_HOOK(0x4DF3A0, FootClass_UpdateAttackMove_SelectNewTarget, 0x6)
  
  DEFINE_HOOK(0x6F85AB, TechnoClass_CanAutoTargetObject_AggressiveAttackMove, 0x6)
  {
@@ -13624,7 +13970,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  
  	if (!pThis->Owner->IsControlledByHuman())
  		return CanTarget;
-@@ -209,9 +396,8 @@ DEFINE_HOOK(0x6F85AB, TechnoClass_CanAutoTargetObject_AggressiveAttackMove, 0x6)
+@@ -209,9 +379,8 @@ DEFINE_HOOK(0x6F85AB, TechnoClass_CanAutoTargetObject_AggressiveAttackMove, 0x6)
  	if (!pThis->MegaMissionIsAttackMove())
  		return ContinueCheck;
  
@@ -13636,7 +13982,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  }
  
  #pragma endregion
-@@ -339,29 +525,165 @@ private:
+@@ -339,29 +508,165 @@ private:
  	}
  };
  
@@ -13805,7 +14151,7 @@ index 10daf28aac061215b2c22fdd184a98266f8fa303..fdbbb218c8aade4dba12e30c8f1159ef
  	return result;
  }
  DEFINE_FUNCTION_JUMP(VTABLE, 0x7F5CE4, UnitClass__WhatAction_Wrapper)
-@@ -371,8 +693,157 @@ Action __fastcall InfantryClass__WhatAction_Wrapper(InfantryClass* pThis, void*
+@@ -371,8 +676,157 @@ Action __fastcall InfantryClass__WhatAction_Wrapper(InfantryClass* pThis, void*
  	AresScheme::Prefix(pThis, pObj, -1, pThis->Type->Engineer);
  	auto const result = pThis->InfantryClass::MouseOverObject(pObj, ignoreForce);
  	AresScheme::Suffix();
@@ -14999,6 +15345,126 @@ index 75007b15606127ace783afb6a1fb860fd1936a93..58307d2e44ad0319514b381c2ad8a783
  	}
  
  	R->ECX(pThis->Type);
+diff --git a/src/Ext/Techno/WeaponHelpers.cpp b/src/Ext/Techno/WeaponHelpers.cpp
+index 85ae427c4b37f70bc6ee082f7587a6e7ce3ad5dc..b5794c9552efbb5866bb9e11362e09b6629ac5f3 100644
+--- a/src/Ext/Techno/WeaponHelpers.cpp
++++ b/src/Ext/Techno/WeaponHelpers.cpp
+@@ -499,3 +499,115 @@ bool TechnoExt::MultiWeaponCanFire(TechnoClass* const pThis, AbstractClass* cons
+ 
+ 	return true;
+ }
++
++// ============================================================================
++// [WeaponType]Next= fallback chain
++//
++// Each weapon slot keeps its own ROF cooldown (TechnoExt::NextWeaponCooldowns),
++// so multiple weapons can track their reload independently instead of sharing the
++// single vanilla TechnoClass::RearmTimer. When a weapon is not ready (or cannot
++// engage the target), the unit falls back to the weapon referenced by that weapon's
++// Next= tag, continuing down the chain.
++// ============================================================================
++
++bool TechnoExt::HasNextWeaponChain(TechnoClass* pThis)
++{
++	if (!pThis)
++		return false;
++
++	const auto pType = pThis->GetTechnoType();
++
++	if (!pType)
++		return false;
++
++	const bool isElite = pThis->Veterancy.IsElite();
++
++	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
++	{
++		auto pWeapon = pType->GetWeapon(i, isElite).WeaponType;
++
++		if (!pWeapon)
++			pWeapon = pType->GetWeapon(i, false).WeaponType;
++
++		if (pWeapon && WeaponTypeExt::ExtMap.Find(pWeapon)->Next.isset())
++			return true;
++	}
++
++	return false;
++}
++
++int TechnoExt::FindWeaponSlotForType(TechnoClass* pThis, WeaponTypeClass* pWeaponType, bool isElite)
++{
++	if (!pThis || !pWeaponType)
++		return -1;
++
++	const auto pType = pThis->GetTechnoType();
++
++	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
++	{
++		if (pType->GetWeapon(i, isElite).WeaponType == pWeaponType)
++			return i;
++
++		// Next= typically references base weapon IDs, so also allow matching the
++		// base slot when running as an elite unit.
++		if (isElite && pType->GetWeapon(i, false).WeaponType == pWeaponType)
++			return i;
++	}
++
++	return -1;
++}
++
++// Returns the weapon slot the unit should fire at pTarget, or -1 if no weapon
++// belonging to the chain can engage the target (caller falls back to vanilla).
++int TechnoExt::GetChainedWeaponSlot(TechnoClass* pThis, AbstractClass* pTarget)
++{
++	const auto pType = pThis->GetTechnoType();
++	const auto pExt = TechnoExt::ExtMap.Find(pThis);
++	const bool isElite = pThis->Veterancy.IsElite();
++
++	// Chain root is the first declared weapon slot (Primary / ElitePrimary).
++	int slot = -1;
++
++	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
++	{
++		if (pType->GetWeapon(i, isElite).WeaponType || pType->GetWeapon(i, false).WeaponType)
++		{
++			slot = i;
++			break;
++		}
++	}
++
++	if (slot < 0)
++		return -1;
++
++	int firstEligible = -1;
++
++	for (int steps = 0; steps < TechnoTypeClass::MaxWeapons && slot >= 0; ++steps)
++	{
++		auto pWeapon = pType->GetWeapon(slot, isElite).WeaponType;
++
++		if (!pWeapon)
++			pWeapon = pType->GetWeapon(slot, false).WeaponType;
++
++		if (!pWeapon)
++			break;
++
++		const bool eligible = (!pTarget || MultiWeaponCanFire(pThis, pTarget, pWeapon));
++
++		if (eligible)
++		{
++			if (firstEligible < 0)
++				firstEligible = slot;
++
++			if (!pExt->NextWeaponCooldowns[slot].InProgress())
++				return slot;
++		}
++
++		const auto pNext = WeaponTypeExt::ExtMap.Find(pWeapon)->Next.Get(nullptr);
++		slot = pNext ? FindWeaponSlotForType(pThis, pNext, isElite) : -1;
++	}
++
++	// All chain weapons are on cooldown (or none engage the target).
++	return firstEligible;
++}
++
 diff --git a/src/Ext/TechnoType/Body.cpp b/src/Ext/TechnoType/Body.cpp
 index 306016e5019beb2e2325e1d1e17220b41edf9ef4..5184888868a57a947f40c8f537870afcba73db5d 100644
 --- a/src/Ext/TechnoType/Body.cpp
@@ -16766,6 +17232,137 @@ index 7164302cfed406450a23f2f34d07a8e918b6353e..6f8f6b2e025257c6d321b274f940d8f2
  DEFINE_HOOK(0x708B0B, TechnoClass_AllowedToRetaliate_Nonprovocative, 0x5)
  {
  	enum { SkipEvents = 0x708B17 };
+diff --git a/src/Ext/WeaponType/Body.cpp b/src/Ext/WeaponType/Body.cpp
+index be24ebc24f56e781ed5f2bf92c36d03d49ff193c..cb5b2b671ed23986bde462aecb47db0d7d1c7eb3 100644
+--- a/src/Ext/WeaponType/Body.cpp
++++ b/src/Ext/WeaponType/Body.cpp
+@@ -109,6 +109,66 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
+ 	this->Burst_NoDelay.Read(exINI, pSection, "Burst.NoDelay");
+ 	this->AreaFire_Target.Read(exINI, pSection, "AreaFire.Target");
+ 	this->FeedbackWeapon.Read<true>(exINI, pSection, "FeedbackWeapon");
++	this->Next.Read<true>(exINI, pSection, "Next");
++
++	// ExtraFire0, ExtraFire1, ... (ExtraFire is an alias for ExtraFire0). Read contiguous
++	// entries until the first missing index (safety-capped at MaxExtraFire).
++	for (int i = 0; i < WeaponTypeExt::MaxExtraFire; ++i)
++	{
++		Nullable<WeaponTypeClass*> extra;
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d", i);
++		extra.Read<true>(exINI, pSection, tempBuffer);
++
++		if (!extra.isset() && i == 0)
++			extra.Read<true>(exINI, pSection, "ExtraFire");
++
++		if (!extra.isset())
++			break;
++
++		this->ExtraFire_Weapons.push_back(extra.Get());
++
++		Nullable<CoordStruct> flh;
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.FLH", i);
++		flh.Read(exINI, pSection, tempBuffer);
++		if (!flh.isset() && i == 0) flh.Read(exINI, pSection, "ExtraFire.FLH");
++		this->ExtraFire_FLHs.push_back(flh);
++
++		Nullable<Leptons> extraRange;
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Range", i);
++		extraRange.Read(exINI, pSection, tempBuffer);
++		if (!extraRange.isset() && i == 0) extraRange.Read(exINI, pSection, "ExtraFire.Range");
++		this->ExtraFire_Ranges.push_back(extraRange);
++
++		Valueable<bool> ownTarget { false };
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OwnTarget", i);
++		ownTarget.Read(exINI, pSection, tempBuffer);
++		if (i == 0) ownTarget.Read(exINI, pSection, "ExtraFire.OwnTarget");
++		this->ExtraFire_OwnTarget.push_back(ownTarget.Get());
++
++		Valueable<bool> onTurret { true };
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OnTurret", i);
++		onTurret.Read(exINI, pSection, tempBuffer);
++		if (i == 0) onTurret.Read(exINI, pSection, "ExtraFire.OnTurret");
++		this->ExtraFire_OnTurret.push_back(onTurret.Get());
++
++		Valueable<bool> useAmmo { false };
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.UseAmmo", i);
++		useAmmo.Read(exINI, pSection, tempBuffer);
++		if (i == 0) useAmmo.Read(exINI, pSection, "ExtraFire.UseAmmo");
++		this->ExtraFire_UseAmmo.push_back(useAmmo.Get());
++
++		Valueable<bool> checkParentRange { false };
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.CheckParentRange", i);
++		checkParentRange.Read(exINI, pSection, tempBuffer);
++		if (i == 0) checkParentRange.Read(exINI, pSection, "ExtraFire.CheckParentRange");
++		this->ExtraFire_CheckParentRange.push_back(checkParentRange.Get());
++
++		Valueable<bool> checkFacing { true };
++		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.CheckFacing", i);
++		checkFacing.Read(exINI, pSection, tempBuffer);
++		if (i == 0) checkFacing.Read(exINI, pSection, "ExtraFire.CheckFacing");
++		this->ExtraFire_CheckFacing.push_back(checkFacing.Get());
++	}
+ 	this->Laser_IsSingleColor.Read(exINI, pSection, "IsSingleColor");
+ 	this->VisualScatter.Read(exINI, pSection, "VisualScatter");
+ 	this->ROF_RandomDelay.Read(exINI, pSection, "ROF.RandomDelay");
+@@ -192,6 +252,15 @@ void WeaponTypeExt::ExtData::Serialize(T& Stm)
+ 		.Process(this->Burst_NoDelay)
+ 		.Process(this->AreaFire_Target)
+ 		.Process(this->FeedbackWeapon)
++		.Process(this->Next)
++		.Process(this->ExtraFire_Weapons)
++		.Process(this->ExtraFire_FLHs)
++		.Process(this->ExtraFire_Ranges)
++		.Process(this->ExtraFire_OwnTarget)
++		.Process(this->ExtraFire_OnTurret)
++		.Process(this->ExtraFire_UseAmmo)
++		.Process(this->ExtraFire_CheckParentRange)
++		.Process(this->ExtraFire_CheckFacing)
+ 		.Process(this->Laser_IsSingleColor)
+ 		.Process(this->VisualScatter)
+ 		.Process(this->ROF_RandomDelay)
+diff --git a/src/Ext/WeaponType/Body.h b/src/Ext/WeaponType/Body.h
+index 03d6fe37e0339163c42109088b01540f4c72b157..cfaf5e1bee89ca3b2b9c33ed60186682760f8ac1 100644
+--- a/src/Ext/WeaponType/Body.h
++++ b/src/Ext/WeaponType/Body.h
+@@ -19,6 +19,9 @@ public:
+ 	static constexpr DWORD Canary = 0x22222222;
+ 	static constexpr size_t ExtPointerOffset = 0x18;
+ 
++	// Safety cap for the number of ExtraFire entries read per weapon.
++	static constexpr int MaxExtraFire = 16;
++
+ 	class ExtData final : public Extension<WeaponTypeClass>
+ 	{
+ 	public:
+@@ -47,8 +50,21 @@ public:
+ 		Valueable<bool> Burst_NoDelay;
+ 		Valueable<AreaFireTarget> AreaFire_Target;
+ 		Valueable<WeaponTypeClass*> FeedbackWeapon;
++		Nullable<WeaponTypeClass*> Next;
+ 		Valueable<bool> Laser_IsSingleColor;
+ 		Valueable<bool> VisualScatter;
++
++		// ExtraFire: additional weapon(s) that fire autonomously alongside this weapon,
++		// each with its own independent ROF. Parallel vectors indexed by ExtraFire number.
++		ValueableVector<WeaponTypeClass*> ExtraFire_Weapons;
++		std::vector<Nullable<CoordStruct>> ExtraFire_FLHs;
++		std::vector<Nullable<Leptons>> ExtraFire_Ranges;
++		ValueableVector<bool> ExtraFire_OwnTarget;
++		ValueableVector<bool> ExtraFire_OnTurret;
++		ValueableVector<bool> ExtraFire_UseAmmo;
++		ValueableVector<bool> ExtraFire_CheckParentRange;
++		ValueableVector<bool> ExtraFire_CheckFacing;
++
+ 		Nullable<PartialVector2D<int>> ROF_RandomDelay;
+ 		ValueableVector<int> ChargeTurret_Delays;
+ 		Valueable<bool> OmniFire_TurnToTarget;
+@@ -119,6 +135,7 @@ public:
+ 			, Burst_NoDelay { false }
+ 			, AreaFire_Target { AreaFireTarget::Base }
+ 			, FeedbackWeapon {}
++			, Next {}
+ 			, Laser_IsSingleColor { false }
+ 			, VisualScatter { false }
+ 			, ROF_RandomDelay {}
 diff --git a/src/Locomotion/AdvancedDriveLocomotionClass.cpp b/src/Locomotion/AdvancedDriveLocomotionClass.cpp
 new file mode 100644
 index 0000000000000000000000000000000000000000..2bb5af2526303b4f58a384324880594d3d90123a
@@ -23546,409 +24143,6 @@ index 0000000000000000000000000000000000000000..5428c0b9084dd25e11997fc02eef803f
 +};
 +
 +// --------------------------------------------------
-diff --git a/src/Misc/MultiCore.cpp b/src/Misc/MultiCore.cpp
-new file mode 100644
-index 0000000000000000000000000000000000000000..364ef5f9de2bd883f5a79ebb8b9411f8e3ac1f7a
---- /dev/null
-+++ b/src/Misc/MultiCore.cpp
-@@ -0,0 +1,369 @@
-+#include "MultiCore.h"
-+
-+#include <Phobos.h>
-+#include <Unsorted.h>
-+#include <FPSCounter.h>
-+#include <TacticalClass.h>
-+#include <GameOptionsClass.h>
-+#include <InfantryClass.h>
-+#include <UnitClass.h>
-+#include <BuildingClass.h>
-+#include <AircraftClass.h>
-+#include <AnimClass.h>
-+#include <ParticleSystemClass.h>
-+#include <Ext/Techno/Body.h>
-+#include <Helpers/Macro.h>
-+
-+#include <Windows.h>
-+#include <cstdlib>
-+#include <cmath>
-+#include <mmsystem.h>
-+#include <avrt.h>
-+
-+// ============================================================================
-+// MultiCore / performance integration
-+//
-+// Ported from RT-Soviet Combustion (RSC) by Sovietianqi (GPLv3):
-+//   https://github.com/Sovietianqi/RT-Soviet-Combustion
-+//
-+// The A layer only touches OS scheduling (affinity / MMCSS / timer) and is
-+// entirely single-threaded. The B layer re-implements RSC's throttling at
-+// Phobos hook sites so that RSC's "skip the whole function" behaviour can
-+// never bypass Phobos' own internal hooks.
-+//
-+// The RSC render-thread subsystem is intentionally NOT ported: it runs game
-+// code on a worker thread and is incompatible with Phobos' global state.
-+// ============================================================================
-+
-+namespace MultiCoreImpl
-+{
-+	static UINT g_TimerPeriod = 0;
-+	static HANDLE g_hAvrt = nullptr;
-+	static DWORD g_dwAvrtIdx = 0;
-+	static bool g_LowFpsMode = false;
-+	static bool g_Initialized = false;
-+}
-+
-+// ============================================================================
-+// A - Scheduling
-+// ============================================================================
-+
-+void MultiCore::Init()
-+{
-+	// The settings hook can fire more than once (e.g. when options are
-+	// reloaded); only apply the scheduling changes once.
-+	if (MultiCoreImpl::g_Initialized || !Phobos::Config::MultiCore_Enable)
-+		return;
-+
-+	MultiCoreImpl::g_Initialized = true;
-+
-+	HANDLE hProcess = GetCurrentProcess();
-+
-+	// If the process is pinned to a single logical core, hand it back the whole
-+	// system mask so the OS scheduler can balance threads across cores.
-+	if (Phobos::Config::MultiCore_Affinity)
-+	{
-+		DWORD_PTR processMask = 0;
-+		DWORD_PTR systemMask = 0;
-+
-+		if (GetProcessAffinityMask(hProcess, &processMask, &systemMask))
-+		{
-+			if ((processMask & (processMask - 1)) == 0)
-+				SetProcessAffinityMask(hProcess, systemMask);
-+		}
-+	}
-+
-+	// Register with the Multimedia Class Scheduler Service so the main thread
-+	// gets a stable, higher-priority timeslice.
-+	if (Phobos::Config::MultiCore_MMCSS)
-+	{
-+		MultiCoreImpl::g_hAvrt = AvSetMmThreadCharacteristicsW(L"Pro Audio", &MultiCoreImpl::g_dwAvrtIdx);
-+
-+		if (!MultiCoreImpl::g_hAvrt)
-+			MultiCoreImpl::g_hAvrt = AvSetMmThreadCharacteristicsW(L"Audio", &MultiCoreImpl::g_dwAvrtIdx);
-+	}
-+
-+	// 1 ms timer resolution reduces Sleep/Wait granularity jitter.
-+	if (Phobos::Config::MultiCore_HighResTimer)
-+	{
-+		if (timeBeginPeriod(1) == TIMERR_NOERROR)
-+			MultiCoreImpl::g_TimerPeriod = 1;
-+	}
-+}
-+
-+void MultiCore::Shutdown()
-+{
-+	if (MultiCoreImpl::g_hAvrt)
-+	{
-+		AvRevertMmThreadCharacteristics(MultiCoreImpl::g_hAvrt);
-+		MultiCoreImpl::g_hAvrt = nullptr;
-+	}
-+
-+	if (MultiCoreImpl::g_TimerPeriod)
-+	{
-+		timeEndPeriod(MultiCoreImpl::g_TimerPeriod);
-+		MultiCoreImpl::g_TimerPeriod = 0;
-+	}
-+}
-+
-+// ============================================================================
-+// B1 - target scan throttle helper (used by the existing 0x7098B9 hook)
-+// ============================================================================
-+
-+int MultiCore::TargetScanInterval(TechnoClass* pThis, bool hasTarget)
-+{
-+	if (!pThis)
-+		return 1;
-+
-+	int interval = 8;
-+
-+	switch (pThis->WhatAmI())
-+	{
-+	case AbstractType::Infantry:
-+		interval = Phobos::Config::MultiCore_TargetScanInterval_Infantry;
-+		break;
-+	case AbstractType::Building:
-+		interval = Phobos::Config::MultiCore_TargetScanInterval_Building;
-+		break;
-+	case AbstractType::Aircraft:
-+		interval = Phobos::Config::MultiCore_TargetScanInterval_Aircraft;
-+		break;
-+	case AbstractType::Unit:
-+		interval = Phobos::Config::MultiCore_TargetScanInterval_Unit;
-+		break;
-+	default:
-+		break;
-+	}
-+
-+	if (hasTarget)
-+		interval *= Math::max(Phobos::Config::MultiCore_TargetScanInterval_HasTargetMultiplier, 1);
-+
-+	return Math::max(interval, 1);
-+}
-+
-+// ============================================================================
-+// B2 - Greatest_Threat cache
-+//
-+// RSC hooks the function entry and returns the cached Target/LastTarget when it
-+// is still a valid, in-range enemy. This skips the expensive full-map threat
-+// scan. Phobos does not hook this address, so a dedicated hook is safe.
-+// ============================================================================
-+
-+DEFINE_HOOK(0x6F8DF0, TechnoClass_GreatestThreat_MultiCoreCache, 0x9)
-+{
-+	GET(TechnoClass*, pThis, ECX);
-+
-+	if (!Phobos::Config::MultiCore_Enable || !Phobos::Config::MultiCore_TargetCache)
-+		return 0;
-+
-+	auto const pWeapon = pThis->GetWeapon(0);
-+
-+	if (!pWeapon || !pWeapon->WeaponType)
-+		return 0;
-+
-+	const double range = pWeapon->WeaponType->Range * 256.0;
-+	const CoordStruct myPos = pThis->GetCoords();
-+
-+	auto const IsCacheable = [&](AbstractClass* pTarget, double factor) -> bool
-+	{
-+		if (!pTarget || pTarget->IsDead())
-+			return false;
-+
-+		const CoordStruct targetPos = pTarget->GetCoords();
-+		const int dx = std::abs(myPos.X - targetPos.X);
-+		const int dy = std::abs(myPos.Y - targetPos.Y);
-+
-+		if (dx > range || dy > range)
-+			return false;
-+
-+		return myPos.DistanceFrom(targetPos) <= range * factor;
-+	};
-+
-+	if (IsCacheable(pThis->Target, 1.2))
-+	{
-+		R->EAX(pThis->Target);
-+		return 0x6F9DAC;
-+	}
-+
-+	if (IsCacheable(pThis->LastTarget, 1.5))
-+	{
-+		R->EAX(pThis->LastTarget);
-+		return 0x6F9DAC;
-+	}
-+
-+	return 0;
-+}
-+
-+// ============================================================================
-+// B3 - LOD update throttling
-+//
-+// FPS is sampled every call; below 18 FPS the sim enters low mode and leaves it
-+// above 25 FPS (persistent hysteresis in MultiCore::IsLowFpsMode). In normal
-+// mode the update interval grows with the object's screen-centre distance.
-+// (frame + GetArrayIndex()) % interval spreads updates evenly across frames.
-+//
-+// Unit / Anim variants skip whole functions and therefore bypass Phobos' own
-+// AI hooks inside them; they stay opt-in and are marked experimental.
-+// ============================================================================
-+
-+bool MultiCore::IsLowFpsMode()
-+{
-+	const int fps = static_cast<int>(FPSCounter::CurrentFrameRate);
-+
-+	if (MultiCoreImpl::g_LowFpsMode)
-+	{
-+		if (fps > 25)
-+			MultiCoreImpl::g_LowFpsMode = false;
-+	}
-+	else
-+	{
-+		if (fps < 18)
-+			MultiCoreImpl::g_LowFpsMode = true;
-+	}
-+
-+	return MultiCoreImpl::g_LowFpsMode;
-+}
-+
-+int MultiCore::ScreenManhattanDistance(CoordStruct const& coords)
-+{
-+	auto const pTactical = TacticalClass::Instance;
-+
-+	if (!pTactical)
-+		return 0;
-+
-+	auto const [screenPos, visible] = pTactical->CoordsToClient(coords);
-+	auto const& options = GameOptionsClass::Instance;
-+
-+	const int centerX = options.ScreenWidth / 2;
-+	const int centerY = options.ScreenHeight / 2;
-+
-+	return std::abs(screenPos.X - centerX) + std::abs(screenPos.Y - centerY);
-+}
-+
-+// ParticleSystemClass::Update - no Phobos hook inside the skipped range.
-+DEFINE_HOOK(0x62FD60, ParticleSystemClass_Update_MultiCoreLOD, 0x9)
-+{
-+	GET(ParticleSystemClass*, pThis, ECX);
-+
-+	if (!Phobos::Config::MultiCore_Enable || !Phobos::Config::MultiCore_ParticleLOD)
-+		return 0;
-+
-+	int interval = 1;
-+
-+	if (MultiCore::IsLowFpsMode())
-+	{
-+		interval = (FPSCounter::CurrentFrameRate < 15) ? 6 : 3;
-+	}
-+	else
-+	{
-+		const int dist = MultiCore::ScreenManhattanDistance(pThis->GetCoords());
-+
-+		if (dist < 500)
-+			interval = 2;
-+		else if (dist < 1500)
-+			interval = 3;
-+		else if (dist < 3000)
-+			interval = 6;
-+		else
-+			interval = 12;
-+	}
-+
-+	if ((Unsorted::CurrentFrame + pThis->GetArrayIndex()) % interval != 0)
-+		return 0x62FE43;
-+
-+	return 0;
-+}
-+
-+// UnitClass::Update - EXPERIMENTAL: Phobos hooks inside this range.
-+DEFINE_HOOK(0x7360C0, UnitClass_Update_MultiCoreLOD, 0x9)
-+{
-+	GET(UnitClass*, pThis, ECX);
-+
-+	if (!Phobos::Config::MultiCore_Enable || !Phobos::Config::MultiCore_UnitLOD)
-+		return 0;
-+
-+	int interval = 1;
-+
-+	if (MultiCore::IsLowFpsMode())
-+	{
-+		interval = (FPSCounter::CurrentFrameRate < 15) ? 4 : 2;
-+	}
-+	else
-+	{
-+		const int dist = MultiCore::ScreenManhattanDistance(pThis->GetCoords());
-+
-+		if (dist < 500)
-+			interval = 1;
-+		else if (dist < 1500)
-+			interval = 2;
-+		else if (dist < 3000)
-+			interval = 4;
-+		else
-+			interval = 8;
-+	}
-+
-+	if ((Unsorted::CurrentFrame + pThis->GetArrayIndex()) % interval != 0)
-+		return 0x736988;
-+
-+	return 0;
-+}
-+
-+// AnimClass::Update - EXPERIMENTAL: Phobos hooks inside this range.
-+DEFINE_HOOK(0x423AC0, AnimClass_Update_MultiCoreLOD, 0x6)
-+{
-+	GET(AnimClass*, pThis, ECX);
-+
-+	if (!Phobos::Config::MultiCore_Enable || !Phobos::Config::MultiCore_AnimLOD)
-+		return 0;
-+
-+	int interval = 1;
-+
-+	if (MultiCore::IsLowFpsMode())
-+	{
-+		interval = (FPSCounter::CurrentFrameRate < 15) ? 8 : 4;
-+	}
-+	else
-+	{
-+		const int dist = MultiCore::ScreenManhattanDistance(pThis->GetCoords());
-+
-+		if (dist < 500)
-+			interval = 2;
-+		else if (dist < 1500)
-+			interval = 4;
-+		else
-+			interval = 8;
-+	}
-+
-+	if ((Unsorted::CurrentFrame + pThis->GetArrayIndex()) % interval != 0)
-+		return 0x424B49;
-+
-+	return 0;
-+}
-+
-+// ============================================================================
-+// B4 - emergency draw skip
-+//
-+// Only OverlayClass::Draw is covered: the skipped range contains no Phobos
-+// hooks. AnimClass::Draw is intentionally omitted because Phobos hooks inside
-+// its range.
-+// ============================================================================
-+
-+DEFINE_HOOK(0x5FD970, OverlayClass_Draw_MultiCoreEmergencySkip, 0x5)
-+{
-+	if (!Phobos::Config::MultiCore_Enable || !Phobos::Config::MultiCore_EmergencyDrawSkip)
-+		return 0;
-+
-+	const int fps = static_cast<int>(FPSCounter::CurrentFrameRate);
-+
-+	static bool lowFpsMode = false;
-+
-+	if (fps < 10)
-+		lowFpsMode = true;
-+	if (fps > 11)
-+		lowFpsMode = false;
-+
-+	if (lowFpsMode)
-+		return 0x5FDCB6;
-+
-+	return 0;
-+}
-diff --git a/src/Misc/MultiCore.h b/src/Misc/MultiCore.h
-new file mode 100644
-index 0000000000000000000000000000000000000000..d3aa7e2e755f650624cb026631c2445d88464687
---- /dev/null
-+++ b/src/Misc/MultiCore.h
-@@ -0,0 +1,22 @@
-+#pragma once
-+
-+#include <TechnoClass.h>
-+
-+// MultiCore / performance integration, ported from RT-Soviet Combustion (RSC)
-+// by Sovietianqi (GPLv3). See docs/MultiCore-Design.md.
-+class MultiCore
-+{
-+public:
-+	// A layer: process affinity, MMCSS thread priority, high resolution timer.
-+	static void Init();
-+	static void Shutdown();
-+
-+	// B1 helper: target-scan interval (in frames) for the given techno.
-+	static int TargetScanInterval(TechnoClass* pThis, bool hasTarget);
-+
-+	// B3 helper: persistent low-FPS mode with hysteresis.
-+	static bool IsLowFpsMode();
-+
-+	// B3 helper: screen-centre Manhattan distance (pixels) for LOD decisions.
-+	static int ScreenManhattanDistance(CoordStruct const& coords);
-+};
 diff --git a/src/Misc/PhobosToolTip.cpp b/src/Misc/PhobosToolTip.cpp
 index 5ae67f4f712ad369953ef409c34fcd7d3cd5dbd6..1b521e84ab5dd4fbf55eda78982ed6b815cb1991 100644
 --- a/src/Misc/PhobosToolTip.cpp
@@ -28565,7 +28759,7 @@ index ac02d779bfe160abae5a01e12d94d5d18d00db72..67d2acf08a0e32cb5de62d68ed53fa01
  }
  
 diff --git a/src/Phobos.INI.cpp b/src/Phobos.INI.cpp
-index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89f3e221f7 100644
+index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..c1b040c2e641b6979a1941ac4a9789b122a7c2cd 100644
 --- a/src/Phobos.INI.cpp
 +++ b/src/Phobos.INI.cpp
 @@ -1,6 +1,7 @@
@@ -28577,11 +28771,10 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  #include <ScenarioClass.h>
  #include <SessionClass.h>
  #include <MessageListClass.h>
-@@ -13,6 +14,12 @@
+@@ -13,6 +14,11 @@
  #include <Utilities/Macro.h>
  
  #include "Misc/BlittersFix.h"
-+#include "Misc/MultiCore.h"
 +#include "Misc/ZoomManager.h"
 +
 +#include <algorithm>
@@ -28590,7 +28783,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  
  bool Phobos::UI::DisableEmptySpawnPositions = false;
  bool Phobos::UI::ExtendedToolTips = false;
-@@ -28,6 +35,10 @@ const wchar_t* Phobos::UI::TimeLabel = L"";
+@@ -28,6 +34,10 @@ const wchar_t* Phobos::UI::TimeLabel = L"";
  const wchar_t* Phobos::UI::HarvesterLabel = L"";
  const wchar_t* Phobos::UI::ShowBriefingResumeButtonLabel = L"";
  const wchar_t* Phobos::UI::SWShotsFormat = L"";
@@ -28601,7 +28794,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  char Phobos::UI::ShowBriefingResumeButtonStatusLabel[32];
  bool Phobos::UI::PowerDelta_Show = false;
  double Phobos::UI::PowerDelta_ConditionYellow = 0.75;
-@@ -42,12 +53,17 @@ int Phobos::UI::SuperWeaponSidebar_Max = 0;
+@@ -42,12 +52,17 @@ int Phobos::UI::SuperWeaponSidebar_Max = 0;
  int Phobos::UI::SuperWeaponSidebar_MaxColumns = INT32_MAX;
  bool Phobos::UI::WeedsCounter_Show = false;
  bool Phobos::UI::AnchoredToolTips = false;
@@ -28619,7 +28812,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  bool Phobos::Config::ShowPlanningPath = false;
  bool Phobos::Config::ArtImageSwap = false;
  bool Phobos::Config::ShowPlacementPreview = false;
-@@ -55,6 +71,8 @@ bool Phobos::Config::EnableSelectBox = false;
+@@ -55,6 +70,8 @@ bool Phobos::Config::EnableSelectBox = false;
  bool Phobos::Config::DigitalDisplay_Enable = false;
  bool Phobos::Config::MessageApplyHoverState = false;
  bool Phobos::Config::MessageDisplayInCenter = false;
@@ -28628,7 +28821,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  bool Phobos::Config::RealTimeTimers = false;
  bool Phobos::Config::RealTimeTimers_Adaptive = false;
  int Phobos::Config::CampaignDefaultGameSpeed = 2;
-@@ -62,6 +80,7 @@ bool Phobos::Config::SkirmishUnlimitedColors = false;
+@@ -62,6 +79,7 @@ bool Phobos::Config::SkirmishUnlimitedColors = false;
  bool Phobos::Config::ShowDesignatorRange = false;
  bool Phobos::Config::SaveVariablesOnScenarioEnd = false;
  bool Phobos::Config::SaveGameOnScenarioStart = true;
@@ -28636,7 +28829,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  bool Phobos::Config::ShowBriefing = true;
  bool Phobos::Config::ShowHarvesterCounter = false;
  bool Phobos::Config::ShowPowerDelta = true;
-@@ -70,12 +89,133 @@ bool Phobos::Config::HideLightFlashEffects = true;
+@@ -70,12 +88,116 @@ bool Phobos::Config::HideLightFlashEffects = true;
  bool Phobos::Config::ShowFlashOnSelecting = false;
  bool Phobos::Config::UnitPowerDrain = false;
  int Phobos::Config::SuperWeaponSidebar_RequiredSignificance = 0;
@@ -28659,23 +28852,6 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
 +
 +bool Phobos::Config::RightClickCommands = false;
 +bool Phobos::Config::RightClickCommands_Debug = false;
-+
-+// MultiCore / performance integration (ported from RT-Soviet Combustion).
-+bool Phobos::Config::MultiCore_Enable = true;
-+bool Phobos::Config::MultiCore_Affinity = true;
-+bool Phobos::Config::MultiCore_MMCSS = true;
-+bool Phobos::Config::MultiCore_HighResTimer = true;
-+bool Phobos::Config::MultiCore_TargetScanThrottle = true;
-+int Phobos::Config::MultiCore_TargetScanInterval_Infantry = 15;
-+int Phobos::Config::MultiCore_TargetScanInterval_Unit = 6;
-+int Phobos::Config::MultiCore_TargetScanInterval_Building = 30;
-+int Phobos::Config::MultiCore_TargetScanInterval_Aircraft = 4;
-+int Phobos::Config::MultiCore_TargetScanInterval_HasTargetMultiplier = 2;
-+bool Phobos::Config::MultiCore_TargetCache = true;
-+bool Phobos::Config::MultiCore_ParticleLOD = false;
-+bool Phobos::Config::MultiCore_UnitLOD = false;
-+bool Phobos::Config::MultiCore_AnimLOD = false;
-+bool Phobos::Config::MultiCore_EmergencyDrawSkip = false;
  
  bool Phobos::Misc::CustomGS = false;
  int Phobos::Misc::CustomGS_ChangeInterval[7] = { -1, -1, -1, -1, -1, -1, -1 };
@@ -28770,7 +28946,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
  {
  	const auto phobosSection = "Phobos";
-@@ -86,11 +226,17 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
+@@ -86,11 +208,17 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
  	Phobos::Config::ShowPlacementPreview = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowPlacementPreview", true);
  	Phobos::Config::MessageApplyHoverState = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MessageApplyHoverState", false);
  	Phobos::Config::MessageDisplayInCenter = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MessageDisplayInCenter", false);
@@ -28789,7 +28965,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  	Phobos::Config::ShowBriefing = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowBriefing", true);
  	Phobos::Config::ShowPowerDelta = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowPowerDelta", true);
  	Phobos::Config::ShowHarvesterCounter = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowHarvesterCounter", true);
-@@ -98,6 +244,65 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
+@@ -98,6 +226,44 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
  	Phobos::Config::HideLightFlashEffects = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "HideLightFlashEffects", false);
  	Phobos::Config::ShowFlashOnSelecting = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowFlashOnSelecting", false);
  	Phobos::Config::SuperWeaponSidebar_RequiredSignificance = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "SuperWeaponSidebar.RequiredSignificance", 0);
@@ -28831,31 +29007,10 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
 +	// client options panel, off by default.
 +	Phobos::Config::RightClickCommands = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "RightClickCommands", false);
 +	Phobos::Config::RightClickCommands_Debug = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "RightClickCommands.Debug", false);
-+
-+	// MultiCore / performance integration (ported from RT-Soviet Combustion).
-+	Phobos::Config::MultiCore_Enable = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.Enable", true);
-+	Phobos::Config::MultiCore_Affinity = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.Affinity", true);
-+	Phobos::Config::MultiCore_MMCSS = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.MMCSS", true);
-+	Phobos::Config::MultiCore_HighResTimer = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.HighResTimer", true);
-+	Phobos::Config::MultiCore_TargetScanThrottle = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.TargetScanThrottle", true);
-+	Phobos::Config::MultiCore_TargetScanInterval_Infantry = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MultiCore.TargetScanInterval.Infantry", 15);
-+	Phobos::Config::MultiCore_TargetScanInterval_Unit = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MultiCore.TargetScanInterval.Unit", 6);
-+	Phobos::Config::MultiCore_TargetScanInterval_Building = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MultiCore.TargetScanInterval.Building", 30);
-+	Phobos::Config::MultiCore_TargetScanInterval_Aircraft = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MultiCore.TargetScanInterval.Aircraft", 4);
-+	Phobos::Config::MultiCore_TargetScanInterval_HasTargetMultiplier = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MultiCore.TargetScanInterval.HasTargetMultiplier", 2);
-+	Phobos::Config::MultiCore_TargetCache = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.TargetCache", true);
-+	Phobos::Config::MultiCore_ParticleLOD = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.ParticleLOD", false);
-+	Phobos::Config::MultiCore_UnitLOD = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.UnitLOD", false);
-+	Phobos::Config::MultiCore_AnimLOD = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.AnimLOD", false);
-+	Phobos::Config::MultiCore_EmergencyDrawSkip = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCore.EmergencyDrawSkip", false);
-+
-+	// Apply the A layer (affinity / MMCSS / timer) once, now that the config is
-+	// known. Init() is idempotent.
-+	MultiCore::Init();
  
  	// Custom game speeds, 6 - i so that GS6 is index 0, just like in the engine
  	Phobos::Config::CampaignDefaultGameSpeed = 6 - CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "CampaignDefaultGameSpeed", 4);
-@@ -137,18 +342,23 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
+@@ -137,18 +303,23 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
  
  		ini_uimd.ReadString(GameStrings::ToolTips, "CostLabel", NONE_STR, Phobos::readBuffer);
  		Phobos::UI::CostLabel = GeneralUtils::LoadStringOrDefault(Phobos::readBuffer, L"$");
@@ -28883,7 +29038,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  	}
  
  	// Sidebar
-@@ -157,7 +367,7 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
+@@ -157,7 +328,7 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
  			ini_uimd.ReadBool(SIDEBAR_SECTION, "HarvesterCounter.Show", false);
  
  		ini_uimd.ReadString(SIDEBAR_SECTION, "HarvesterCounter.Label", NONE_STR, Phobos::readBuffer);
@@ -28892,7 +29047,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  
  		Phobos::UI::HarvesterCounter_ConditionYellow =
  			ini_uimd.ReadDouble(SIDEBAR_SECTION, "HarvesterCounter.ConditionYellow", Phobos::UI::HarvesterCounter_ConditionYellow);
-@@ -215,6 +425,11 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
+@@ -215,6 +386,11 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
  
  		Phobos::UI::SuperWeaponSidebar_MaxColumns =
  			ini_uimd.ReadInteger(SIDEBAR_SECTION, "SuperWeaponSidebar.MaxColumns", Phobos::UI::SuperWeaponSidebar_MaxColumns);
@@ -28904,7 +29059,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  	}
  
  	// UISettings
-@@ -226,6 +441,48 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
+@@ -226,6 +402,48 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
  		strcpy_s(Phobos::UI::ShowBriefingResumeButtonStatusLabel, Phobos::readBuffer);
  	}
  
@@ -28953,7 +29108,7 @@ index 32f6a0b953ac0a0a3fcfe302a6b11dd43793a16a..8c8afff166abb1f9cc40fa84760fca89
  	return 0;
  }
  
-@@ -237,6 +494,25 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
+@@ -237,6 +455,25 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
  
  	Phobos::Config::ArtImageSwap = pINI_RULESMD->ReadBool(GameStrings::General, "ArtImageSwap", false);
  	Phobos::Config::UnitPowerDrain = pINI_RULESMD->ReadBool(GameStrings::General, "UnitPowerDrain", false);
@@ -28996,10 +29151,10 @@ index 4b315ec68847174e9320696205585ed66e8e08fd..06caac03233f296fcc5af116d9c9e277
  	{
  		ScenarioClass::WasGameSaved = true;
 diff --git a/src/Phobos.cpp b/src/Phobos.cpp
-index c061b5017003dd9694a59bb2f427012c6fe8cb5c..402059fd353212e0eef9015f8497c329268fbfcb 100644
+index c061b5017003dd9694a59bb2f427012c6fe8cb5c..dfdaab4f29770df4bf9ca125232da21b2fd2a12e 100644
 --- a/src/Phobos.cpp
 +++ b/src/Phobos.cpp
-@@ -1,14 +1,27 @@
+@@ -1,14 +1,26 @@
  #include "Phobos.h"
  
  #include <Drawing.h>
@@ -29016,7 +29171,6 @@ index c061b5017003dd9694a59bb2f427012c6fe8cb5c..402059fd353212e0eef9015f8497c329
  #include "Utilities/Parser.h"
 +#include <Ext/TechnoType/Body.h>
 +#include <Ext/Rules/Body.h>
-+#include "Misc/MultiCore.h"
 +
 +#include <Windows.h>
 +#include <RadBeam.h>
@@ -29027,7 +29181,7 @@ index c061b5017003dd9694a59bb2f427012c6fe8cb5c..402059fd353212e0eef9015f8497c329
  
  #ifndef IS_RELEASE_VER
  bool HideWarning = false;
-@@ -43,7 +56,7 @@ void Phobos::CmdLineParse(char** ppArgs, int nNumArgs)
+@@ -43,7 +55,7 @@ void Phobos::CmdLineParse(char** ppArgs, int nNumArgs)
  	bool foundInclude = false;
  	bool dontSetExceptionHandler =
  #ifdef DEBUG
@@ -29036,33 +29190,15 @@ index c061b5017003dd9694a59bb2f427012c6fe8cb5c..402059fd353212e0eef9015f8497c329
  #else
  		false;
  #endif // DEBUG
-@@ -176,6 +189,12 @@ bool __stdcall DllMain(HANDLE hInstance, DWORD dwReason, LPVOID v)
- 	{
- 		Phobos::hInstance = hInstance;
- 	}
-+	else if (dwReason == DLL_PROCESS_DETACH)
-+	{
-+		// MultiCore A layer teardown. Restoring here is safe; the RSC exit
-+		// hook address (0x7CD8F1) is mid-instruction on this gamemd build.
-+		MultiCore::Shutdown();
-+	}
- 	return true;
- }
+@@ -186,6 +198,7 @@ DEFINE_HOOK(0x7CD810, ExeRun, 0x9)
  
-@@ -184,8 +203,12 @@ DEFINE_HOOK(0x7CD810, ExeRun, 0x9)
- 	Phobos::ExeRun();
- 	AresHelper::Init();
- 
-+	// MultiCore A layer is applied from Phobos.INI.cpp once [Phobos] settings
-+	// have been read (see MultiCore::Init).
-+
  	return 0;
  }
 +
  // Avoid confusing the profiler unless really necessary
  #ifdef DEBUG
  DEFINE_NAKED_HOOK(0x7CD8EA, _ExeTerminate)
-@@ -223,39 +246,354 @@ DEFINE_HOOK(0x67E68A, LoadGame_UnsetFlag, 0x5)
+@@ -223,39 +236,354 @@ DEFINE_HOOK(0x67E68A, LoadGame_UnsetFlag, 0x5)
  {
  	Phobos::IsLoadingSaveGame = false;
  	Phobos::ApplyOptimizations();
@@ -29422,7 +29558,7 @@ index c061b5017003dd9694a59bb2f427012c6fe8cb5c..402059fd353212e0eef9015f8497c329
  
  // Mainly used to disable hooks for optimization.
  // Called after loading saved game and at end of scenario start after all INI data etc has been initialized.
-@@ -299,7 +637,7 @@ void Phobos::ApplyOptimizations()
+@@ -299,7 +627,7 @@ void Phobos::ApplyOptimizations()
  		Patch::Apply_RAW(0x51AA40, { 0x83, 0xEC, 0x2C, 0x53, 0x55 });
  
  		// Disable UnitClass_AssignDestination_SyncLog
@@ -29432,7 +29568,7 @@ index c061b5017003dd9694a59bb2f427012c6fe8cb5c..402059fd353212e0eef9015f8497c329
  		// Disable AircraftClass_OverrideMission_SyncLog
  		Patch::Apply_RAW(0x41BB30, { 0x8B, 0x81, 0xAC, 0x0, 0x0, 0x0 });
 diff --git a/src/Phobos.h b/src/Phobos.h
-index e30ca6b06659adadaa6f0df521d7b170151b9e83..05b87fd949d390694aff8db3327598ad752515ee 100644
+index e30ca6b06659adadaa6f0df521d7b170151b9e83..e06bc2fef6cdfe4c3cc9792285f80bc3172e2fea 100644
 --- a/src/Phobos.h
 +++ b/src/Phobos.h
 @@ -1,4 +1,4 @@
@@ -29514,7 +29650,7 @@ index e30ca6b06659adadaa6f0df521d7b170151b9e83..05b87fd949d390694aff8db3327598ad
  		static bool ShowBriefing;
  		static bool ShowPowerDelta;
  		static bool ShowHarvesterCounter;
-@@ -106,6 +129,44 @@ public:
+@@ -106,6 +129,28 @@ public:
  		static bool ShowFlashOnSelecting;
  		static bool UnitPowerDrain;
  		static int SuperWeaponSidebar_RequiredSignificance;
@@ -29540,22 +29676,6 @@ index e30ca6b06659adadaa6f0df521d7b170151b9e83..05b87fd949d390694aff8db3327598ad
 +		static bool RightClickCommands;
 +		static bool RightClickCommands_Debug;
 +
-+		// MultiCore / performance integration (ported from RT-Soviet Combustion).
-+		static bool MultiCore_Enable;
-+		static bool MultiCore_Affinity;
-+		static bool MultiCore_MMCSS;
-+		static bool MultiCore_HighResTimer;
-+		static bool MultiCore_TargetScanThrottle;
-+		static int MultiCore_TargetScanInterval_Infantry;
-+		static int MultiCore_TargetScanInterval_Unit;
-+		static int MultiCore_TargetScanInterval_Building;
-+		static int MultiCore_TargetScanInterval_Aircraft;
-+		static int MultiCore_TargetScanInterval_HasTargetMultiplier;
-+		static bool MultiCore_TargetCache;
-+		static bool MultiCore_ParticleLOD;
-+		static bool MultiCore_UnitLOD;
-+		static bool MultiCore_AnimLOD;
-+		static bool MultiCore_EmergencyDrawSkip;
  	};
  
  	class Misc
