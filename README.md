@@ -1,19 +1,30 @@
 # GC enhancements
 
-This repository preserves the supplied GC-customized Phobos source snapshot. The cutover to mainline Phobos plus GC DLLs is planned; runtime behavior is unchanged.
+This migration branch separates the GC source delta from pinned Phobos/YRpp dependencies. It prepares reproducible builds; feature extraction to companion DLLs and runtime cutover remain unqualified. The imported `src/` and `YRpp/` trees stay available until native build and restart/save/load gates pass.
 
-YRpp is vendored, including imported local changes. Ordinary cloning includes it; the inherited upstream instructions below describe Phobos's original submodule workflow.
+| Build target | Source / Visual Studio solution | Configurations |
+| --- | --- | --- |
+| `reference` (default) | GC patches reconstructed at `build/gc-reference/Phobos.sln` | Debug, DevBuild, Release |
+| `upstream` | Untouched pinned core at `.deps/upstream/phobos/Phobos.sln` | Debug, Release; DevBuild maps to Release with NIGHTLY branding |
+| `legacy` | Current imported checkout at `Phobos.sln` | Debug, DevBuild, Release |
 
-- **Visual Studio:** open `Phobos.sln`, install the `.vsconfig` components, and select Debug / x86 (the project builds Win32). Debug, DevBuild and Release remain native MSBuild configurations.
-- **Windows command line:** run `scripts/build_debug.bat`, `build_devbuild.bat` or `build_release.bat`. These require no Python or Make. The launchers reuse a Developer Command Prompt or use Visual Studio Installer's locator; no executable is bundled. Additional MSBuild arguments are forwarded.
-- **VS Code:** use the shared build/docs/maintenance tasks. Run the setup task to copy missing local settings, then adjust your game paths. For MSVC IntelliSense, launch `code .` from a VS 2022 Developer Command Prompt, or set the local x86 compiler path. Native debugging remains Windows-only.
-- **macOS/Linux:** source editing, documentation and portable maintenance are supported; DLL compilation and game runtime require Windows/MSVC.
+Use Python 3.10+ and Git to prepare the source on any platform:
 
-Optional POSIX entry point: `make help`, `make docs`, `make clean`, `make setup-vscode`, and `make debug|devbuild|release` on Windows with Make available. Override `PYTHON` as needed, e.g. `make docs PYTHON=.venv/bin/python`. Make delegates to `scripts/dev.py`; the Visual Studio project remains the build authority.
+```sh
+python scripts/dev.py prepare-deps
+python scripts/dev.py assemble-gc
+python scripts/dev.py verify-gc
+```
 
-For portable tasks, use Python 3.10+ in a virtual environment: install `docs/requirements.txt`, then run `python scripts/dev.py docs` (or `python3`). HTML goes to ignored `docs/_build/html/`. Locale work additionally needs `docs/requirements-locale.txt`; `docs-locale` updates tracked zh_CN translations. `clean` removes only Debug, DevBuild and Release; setup preserves existing local settings.
+Use `python3` where appropriate. Pins are in `dependencies.lock.json`; preparation fetches missing checkouts and refuses dirty or mismatched existing ones. The reference uses an explicit historical comparison base and reviewed header-era pin, not a claim of recovered ancestry. `integration/reference/` contains the GC patches and a complete source manifest. It preserves the imported code plus our two fixes, including its existing defects and save-version semantics; it is not the port to latest Phobos.
 
-GC research and preparation notes are local-only under `local-docs/`, excluded through this checkout's `.git/info/exclude`; they are absent from fresh clones. Source/binary compatibility and Windows build validation remain pending.
+On Windows, install the Visual Studio 2022 components in `.vsconfig`, then run `python scripts/dev.py build --target reference` or `--target upstream`. Each target retains its own solution/project settings and outputs. VS Code's shared build task selects target/configuration; MSVC IntelliSense needs a Developer Command Prompt or your local x86 compiler path. Open the corresponding prepared solution in Visual Studio. Existing batch build scripts continue to build the legacy checkout without Python or Make.
+
+The optional root Makefile exposes the same tasks: `make help`, `make assemble-gc`, `make debug TARGET=upstream`. macOS/Linux support preparation, editing, tests and docs; native DLL/game validation requires Windows/MSVC.
+
+While legacy sources remain authoritative, edit them here, stage new source files, then run `python scripts/dev.py export-gc` and `assemble-gc`. Do not edit generated assembly files; modified source or linked paths are refused, and prior outputs/local metadata are preserved during verified reassembly. Run portable checks with `python -m unittest discover -s scripts/tests -v`. The dependency-layer workflow adds three-platform checks and Windows builds; CI and runtime acceptance must be obtained before deleting vendor trees.
+
+Documentation uses `docs/requirements.txt` and `python scripts/dev.py docs`; HTML goes to ignored `docs/_build/html/`. Locale work additionally needs `docs/requirements-locale.txt`. Research/setup notes stay in locally excluded `local-docs/`. Applicable GPL and dependency notices are retained.
 
 ---
 

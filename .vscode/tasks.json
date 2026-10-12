@@ -2,24 +2,20 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build Phobos Debug",
+      "label": "Build selected DLL",
       "type": "process",
       "command": "python3",
+      "windows": {
+        "command": "python"
+      },
       "args": [
         "${workspaceFolder}/scripts/dev.py",
         "build",
+        "--target",
+        "${input:buildTarget}",
         "--configuration",
-        "Debug"
+        "${input:buildConfiguration}"
       ],
-      "windows": {
-        "command": "cmd.exe",
-        "args": [
-          "/d",
-          "/c",
-          "call",
-          "scripts\\build_debug.bat"
-        ]
-      },
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -30,54 +26,84 @@
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "Build Phobos DevBuild",
+      "label": "Prepare pinned dependencies",
       "type": "process",
       "command": "python3",
+      "windows": {
+        "command": "python"
+      },
       "args": [
         "${workspaceFolder}/scripts/dev.py",
-        "build",
-        "--configuration",
-        "DevBuild"
+        "prepare-deps"
       ],
-      "windows": {
-        "command": "cmd.exe",
-        "args": [
-          "/d",
-          "/c",
-          "call",
-          "scripts\\build_devbuild.bat"
-        ]
-      },
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "group": "build",
-      "problemMatcher": "$msCompile"
+      "problemMatcher": []
     },
     {
-      "label": "Build Phobos Release",
+      "label": "Check dependency pins",
       "type": "process",
       "command": "python3",
+      "windows": {
+        "command": "python"
+      },
       "args": [
         "${workspaceFolder}/scripts/dev.py",
-        "build",
-        "--configuration",
-        "Release"
+        "check-deps"
       ],
-      "windows": {
-        "command": "cmd.exe",
-        "args": [
-          "/d",
-          "/c",
-          "call",
-          "scripts\\build_release.bat"
-        ]
-      },
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "group": "build",
-      "problemMatcher": "$msCompile"
+      "problemMatcher": []
+    },
+    {
+      "label": "Export GC source delta",
+      "type": "process",
+      "command": "python3",
+      "windows": {
+        "command": "python"
+      },
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "export-gc"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Assemble GC reference",
+      "type": "process",
+      "command": "python3",
+      "windows": {
+        "command": "python"
+      },
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "assemble-gc"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Verify GC reference",
+      "type": "process",
+      "command": "python3",
+      "windows": {
+        "command": "python"
+      },
+      "args": [
+        "${workspaceFolder}/scripts/dev.py",
+        "verify-gc"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
     },
     {
       "label": "Build Phobos docs with Sphinx",
@@ -142,6 +168,30 @@
         "cwd": "${workspaceFolder}"
       },
       "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "buildTarget",
+      "type": "pickString",
+      "description": "Choose the DLL source: reconstructed GC reference, untouched mainline, or legacy checkout",
+      "options": [
+        "reference",
+        "upstream",
+        "legacy"
+      ],
+      "default": "reference"
+    },
+    {
+      "id": "buildConfiguration",
+      "type": "pickString",
+      "description": "MSBuild configuration (upstream DevBuild maps to Release/NIGHTLY)",
+      "options": [
+        "Debug",
+        "DevBuild",
+        "Release"
+      ],
+      "default": "Debug"
     }
   ]
 }
