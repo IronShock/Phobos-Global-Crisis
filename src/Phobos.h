@@ -1,0 +1,172 @@
+﻿#pragma once
+#include <Phobos.version.h>
+#include <Windows.h>
+
+#include <string>
+
+class CCINIClass;
+class AbstractClass;
+
+// Shared state for the per-mission continue-save feature (see
+// Misc/Hooks.ContinueGame.cpp). The in-game menu Quit hook requests the save,
+// and the main-loop hook performs it in a safe context.
+namespace ContinueGameTemp
+{
+	extern bool PendingContinueSave;
+	extern bool SavedContinueGame;
+}
+
+constexpr auto NONE_STR = "<none>";
+constexpr auto NONE_STR2 = "none";
+constexpr auto SIDEBAR_SECTION = "Sidebar";
+constexpr auto UISETTINGS_SECTION = "UISettings";
+
+class Phobos
+{
+public:
+	static void CmdLineParse(char**, int);
+
+	static void ExeRun();
+	static void ExeTerminate();
+
+	//variables
+	static HANDLE hInstance;
+
+	static const size_t readLength = 2048;
+	static char readBuffer[readLength];
+	static wchar_t wideBuffer[readLength];
+	static constexpr auto readDelims = ",";
+
+	static const char* AppIconPath;
+	static const wchar_t* VersionDescription;
+	static bool DisplayDamageNumbers;
+	static bool IsLoadingSaveGame;
+	static bool ShouldSave;
+	static std::wstring CustomGameSaveDescription;
+	static void ScheduleGameSave(const std::wstring& description);
+	static void PassiveSaveGame();
+	static void SaveContinueGame();
+	static void DeleteContinueGame();
+#ifdef DEBUG
+	static bool DetachFromDebugger();
+#endif
+	static void ApplyOptimizations();
+
+	class UI
+	{
+	public:
+		static bool DisableEmptySpawnPositions;
+		static bool ExtendedToolTips;
+		static int MaxToolTipWidth;
+		static bool HarvesterCounter_Show;
+		static double HarvesterCounter_ConditionYellow;
+		static double HarvesterCounter_ConditionRed;
+		static bool ProducingProgress_Show;
+		static bool PowerDelta_Show;
+		static double PowerDelta_ConditionYellow;
+		static double PowerDelta_ConditionRed;
+		static bool CenterPauseMenuBackground;
+		static bool SuperWeaponSidebar;
+		static bool SuperWeaponSidebar_Pyramid;
+		static int SuperWeaponSidebar_Interval;
+		static int SuperWeaponSidebar_LeftOffset;
+		static int SuperWeaponSidebar_CameoHeight;
+		static int SuperWeaponSidebar_Max;
+		static int SuperWeaponSidebar_MaxColumns;
+		static bool WeedsCounter_Show;
+		static bool AnchoredToolTips;
+		static bool CinemaMode;
+
+		static const wchar_t* CostLabel;
+		static const wchar_t* PowerLabel;
+		static const wchar_t* PowerBlackoutLabel;
+		static const wchar_t* TimeLabel;
+		static const wchar_t* HarvesterLabel;
+		static const wchar_t* ShowBriefingResumeButtonLabel;
+		static const wchar_t* SWShotsFormat;
+		static const wchar_t* ChargeLabel;
+		static char ShowBriefingResumeButtonStatusLabel[0x20];
+		static const wchar_t* BattlePoints_Label;
+		static const wchar_t* BattlePointsSidebar_Label;
+		static bool BattlePointsSidebar_Label_InvertPosition;
+	};
+
+	class Config
+	{
+	public:
+		static bool ToolTipDescriptions;
+		static bool ToolTipBlur;
+		static bool PrioritySelectionFiltering;
+		static bool DevelopmentCommands;
+		static bool SuperWeaponSidebarCommands;
+		static bool ReverseMove;
+		static bool TacticalGear;
+		static bool TacticalPause;
+		static int SmudgeCapacity;
+		static bool ArtImageSwap;
+		static bool ShowPlacementPreview;
+		static bool EnableBuildingPlacementPreview;
+		static bool EnableSelectBox;
+		static bool DigitalDisplay_Enable;
+		static bool MessageApplyHoverState;
+		static bool MessageDisplayInCenter;
+		static int MessageDisplayInCenter_LabelsCount;
+		static int MessageDisplayInCenter_RecordsCount;
+		static bool RealTimeTimers;
+		static bool RealTimeTimers_Adaptive;
+		static int CampaignDefaultGameSpeed;
+		static bool SkirmishUnlimitedColors;
+		static bool ShowDesignatorRange;
+		static bool SaveVariablesOnScenarioEnd;
+		static bool SaveGameOnScenarioStart;
+		static bool ContinueGameOnExit;
+		static bool ShowBriefing;
+		static bool ShowPowerDelta;
+		static bool ShowHarvesterCounter;
+		static bool ShowWeedsCounter;
+		static bool ShowPlanningPath;
+		static bool HideLightFlashEffects;
+		static bool ShowFlashOnSelecting;
+		static bool UnitPowerDrain;
+		static int SuperWeaponSidebar_RequiredSignificance;
+		static bool ShowGameTime;
+		static int ShowGameTime_BoardOpacity;
+		static bool TacticalZoom;
+		static bool TacticalZoom_Scroll;
+		static bool TacticalZoom_KeyEnabled;
+		static double TacticalZoom_Max;
+		static double TacticalZoom_Step;
+		static bool TacticalZoom_Smooth;
+		static bool ShowFPS;
+		static double TextScale;
+		static bool TextScale_Smooth;
+		static bool FormationEnabled;
+		static int FormationNearThreshold;
+		static int FormationFarThreshold;
+		static int FormationSpacing;
+		static int FormationSpacingInfantry;
+
+		// Mainstream-RTS control scheme: left mouse only selects, right mouse
+		// issues orders. Off by default (keeps the original YR controls).
+		static bool RightClickCommands;
+		static bool RightClickCommands_Debug;
+
+	};
+
+	class Misc
+	{
+	public:
+		static bool CustomGS;
+		static int CustomGS_ChangeInterval[7];
+		static int CustomGS_ChangeDelay[7];
+		static int CustomGS_DefaultDelay[7];
+	};
+
+	class Optimizations
+	{
+	public:
+		static bool Applied;
+		static bool DisableRadDamageOnBuildings;
+		static bool DisableSyncLogging;
+	};
+};

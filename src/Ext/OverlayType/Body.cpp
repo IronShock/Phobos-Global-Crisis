@@ -1,0 +1,180 @@
+#include "Body.h"
+
+#include <OverlayTypeClass.h>
+#include <TacticalClass.h>
+#include <ConvertClass.h>
+
+#include <Ext/Rules/Body.h>
+
+#include <Utilities/GeneralUtils.h>
+
+OverlayTypeExt::ExtContainer OverlayTypeExt::ExtMap;
+
+bool OverlayTypeExt::CanPlaceBuildingOnOverlay(int overlayTypeIndex, BuildingTypeClass* pBuildingType, bool requireToBeRemovable)
+{
+	if (overlayTypeIndex < 0 || overlayTypeIndex >= OverlayTypeClass::Array.Count)
+		return false;
+
+	auto const pOverlayType = OverlayTypeClass::Array[overlayTypeIndex];
+	auto const pTypeExt = OverlayTypeExt::ExtMap.Find(pOverlayType);
+
+	if (!pTypeExt->CanBeBuiltOn.Get(pOverlayType->Tiberium ? RulesExt::Global()->Tiberium_CanBeBuiltOn
+		: pOverlayType->Wall ? RulesExt::Global()->Wall_CanBeBuiltOn
+		: pOverlayType->IsARock ? RulesExt::Global()->Rock_CanBeBuiltOn
+		: false))
+	{
+		return false;
+	}
+
+	const bool remove = pTypeExt->CanBeBuiltOn_Remove.Get(RulesExt::Global()->CanBeBuiltOnOverlay_Remove);
+
+	if (((pBuildingType && pBuildingType->Wall) || pOverlayType->Wall) && !remove)
+		return false;
+
+	return requireToBeRemovable ? remove : true;
+}
+
+void OverlayTypeExt::RemoveOverlayFromCell(int overlayTypeIndex, CellClass* pCell, HouseClass* pSource)
+{
+	if (overlayTypeIndex != -1 && OverlayTypeClass::Array[overlayTypeIndex]->Wall)
+	{
+		if (pSource && pCell->WallOwnerIndex == pSource->ArrayIndex)
+			pSource->SellWall(pCell->MapCoords, true);
+		else
+			pCell->DamageWall(-1);
+	}
+	else
+	{
+		pCell->OverlayTypeIndex = -1;
+		pCell->OverlayData = 0;
+		pCell->RecalcAttributes(-1);
+	}
+}
+
+// =============================
+// load / save
+
+template <typename T>
+void OverlayTypeExt::ExtData::Serialize(T& Stm)
+{
+	Stm
+		.Process(this->CanBeBuiltOn)
+		.Process(this->CanBeBuiltOn_Remove)
+		.Process(this->PaletteFile)
+		.Process(this->CustomPalette)
+		.Process(this->IgnoreObject)
+		;
+}
+
+void OverlayTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
+{
+	auto pThis = this->OwnerObject();
+
+	const char* pSection = pThis->ID;
+	INI_EX exINI(pINI);
+
+	this->CanBeBuiltOn.Read(exINI, pSection, "CanBeBuiltOn");
+	this->CanBeBuiltOn_Remove.Read(exINI, pSection, "CanBeBuiltOn.Remove");
+
+	this->IgnoreObject.Read(exINI, pSection, "IgnoreObject");
+
+	this->CustomPalette.LoadFromINI(pINI, pSection, "CustomPalette");
+
+	auto pArtSection = pThis->ImageFile;
+	INI_EX exArtINI(&CCINIClass::INI_Art);
+
+	this->ZAdjust.Read(exArtINI, pArtSection, "ZAdjust");
+
+	this->PaletteFile.Read(&CCINIClass::INI_Art, pArtSection, "Palette");
+	this->Palette = GeneralUtils::BuildPalette(this->PaletteFile);
+}
+
+void OverlayTypeExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
+{
+	Extension<OverlayTypeClass>::LoadFromStream(Stm);
+	this->Serialize(Stm);
+
+	this->Palette = GeneralUtils::BuildPalette(this->PaletteFile);
+}
+
+void OverlayTypeExt::ExtData::SaveToStream(PhobosStreamWriter& Stm)
+{
+	Extension<OverlayTypeClass>::SaveToStream(Stm);
+	this->Serialize(Stm);
+}
+
+bool OverlayTypeExt::LoadGlobals(PhobosStreamReader& Stm)
+{
+	return Stm
+		.Success();
+}
+
+bool OverlayTypeExt::SaveGlobals(PhobosStreamWriter& Stm)
+{
+	return Stm
+		.Success();
+}
+
+// =============================
+// container
+
+OverlayTypeExt::ExtContainer::ExtContainer() : Container("OverlayTypeClass") { }
+OverlayTypeExt::ExtContainer::~ExtContainer() = default;
+
+// =============================
+// container hooks
+
+DEFINE_HOOK_AGAIN(0x5FE3AF, OverlayTypeClass_CTOR, 0x5)
+DEFINE_HOOK(0x5FE3A2, OverlayTypeClass_CTOR, 0x5)
+{
+	GET(OverlayTypeClass*, pItem, EAX);
+
+	OverlayTypeExt::ExtMap.TryAllocate(pItem);
+
+	return 0;
+}
+
+DEFINE_HOOK(0x5FEF61, OverlayTypeClass_SDDTOR, 0x5)
+{
+	GET(OverlayTypeClass*, pItem, ESI);
+
+	OverlayTypeExt::ExtMap.Remove(pItem);
+
+	return 0;
+}
+
+DEFINE_HOOK_AGAIN(0x5FEAF0, OverlayTypeClass_SaveLoad_Prefix, 0xA)
+DEFINE_HOOK(0x5FEC10, OverlayTypeClass_SaveLoad_Prefix, 0x8)
+{
+	GET_STACK(OverlayTypeClass*, pItem, 0x4);
+	GET_STACK(IStream*, pStm, 0x8);
+
+	OverlayTypeExt::ExtMap.PrepareStream(pItem, pStm);
+
+	return 0;
+}
+
+DEFINE_HOOK(0x5FEBFA, OverlayTypeClass_Load_Suffix, 0x6)
+{
+	OverlayTypeExt::ExtMap.LoadStatic();
+
+	return 0;
+}
+
+DEFINE_HOOK(0x5FEC2A, OverlayTypeClass_Save_Suffix, 0x6)
+{
+	OverlayTypeExt::ExtMap.SaveStatic();
+
+	return 0;
+}
+
+//DEFINE_HOOK_AGAIN(0x5FEA1E, OverlayTypeClass_LoadFromINI, 0xA)// Section dont exist!
+DEFINE_HOOK(0x5FEA11, OverlayTypeClass_LoadFromINI, 0xA)
+{
+	GET(OverlayTypeClass*, pItem, ESI);
+	GET_STACK(CCINIClass*, pINI, STACK_OFFSET(0x28C, 0x4));
+
+	OverlayTypeExt::ExtMap.LoadFromINI(pItem, pINI);
+
+	return 0;
+}
