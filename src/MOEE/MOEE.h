@@ -46,4 +46,5 @@ namespace MOEE
 	namespace WeaponRange { void Draw(); }   // Ctrl + single unit: weapon range ellipse
 	namespace GridView { void Poll(); void Draw(); } // toggleable tactical ground grid
 	namespace ScaleBar { void Draw(); }      // bottom-bar zoom scale bar (ZoomManager)
+	namespace VecText { void EnsureInit(); }  // global vector text
 }

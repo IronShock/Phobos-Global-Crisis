@@ -40,8 +40,44 @@ namespace MOEE
 		Debug::Log("%s\n", buffer);
 	}
 
+	static LONG CALLBACK MOEE_Veh(EXCEPTION_POINTERS* ep)
+	{
+		static int s_n = 0;
+
+		if (ep && ep->ExceptionRecord && s_n < 8)
+		{
+			const DWORD code = ep->ExceptionRecord->ExceptionCode;
+
+			if (code != 0x406D1388u && code != 0x80000003u && code != 0xE06D7363u)
+			{
+				const unsigned eip = ep->ContextRecord
+					? static_cast<unsigned>(ep->ContextRecord->Eip) : 0u;
+				s_n++;
+				Log("fault", "code=0x%08X eip=0x%08X addr=0x%08X",
+					static_cast<unsigned>(code), eip,
+					static_cast<unsigned>(
+						reinterpret_cast<size_t>(ep->ExceptionRecord->ExceptionAddress)));
+			}
+		}
+
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
+
 	void Poll()
 	{
+		// One-time diagnostics: log the Phobos image base and install a vectored
+		// exception handler so a crash address can be mapped back to a function
+		// via the build's Phobos.map (RVA = crash eip - base).
+		static bool s_diag = false;
+
+		if (!s_diag)
+		{
+			s_diag = true;
+			AddVectoredExceptionHandler(1, MOEE_Veh);
+			Log("diag", "phobos base=0x%08X",
+				static_cast<unsigned>(reinterpret_cast<size_t>(Phobos::hInstance)));
+		}
+
 		MegaListCap::Poll();
 		Observer::Poll();
 		WaypointCap::Poll();

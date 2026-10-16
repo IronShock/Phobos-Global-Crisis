@@ -843,6 +843,63 @@ MOEE.ScaleBar.Y=1               ; bottom margin (pixels)
 MOEE.ScaleBar.Len=250           ; bar length (pixels, 80..2000)
 ```
 
+### 12.2 Vector text (VecText)
+
+A port of MO_EE's global vector-text takeover: the engine's bitmap glyph
+rasterisation is replaced with GDI-rendered TrueType glyphs while every metric,
+wrap and alignment path still goes through the engine.
+
+- Hooked at the same five BitFont entry points Phobos' `TextScale` uses, but via
+  Syringe hooks with a naked `ret 0x10` takeover stub and plain `return 0`
+  fall-through - **no runtime trampolines** (both `GetTextDimension` and
+  `BitFont::Blit` are `thiscall` + 4 stack args with a `ret 10h` epilogue,
+  verified by disassembling `gamemd.exe`).
+- Font selection mirrors the CnCNet client's
+  `Resources/Translations/<lang>/Fonts.ini` chain: one face for Latin/digits and
+  another for CJK, picked per glyph. Font files are searched in the game folder,
+  the client's `Resources/Translations/*/Fonts` and `Resources/Fonts` folders,
+  then the system fonts.
+- `CjkOnly` (default) takes over **CJK glyphs only**; Latin and digits keep the
+  engine's bitmap font.
+- **Sizing** follows the engine: the pixel size is calibrated to the engine's own
+  glyph ink height (measured from the bitmap font data), and it inherits the
+  engine's current line height. Because `TextScale` swaps the engine font per
+  target surface, the vector text ends up with exactly the same scope: in-game
+  text scales, the sidebar / dialogs / shell do not.
+- `GetTextDimension` is taken over to return the **true line count** for wrapped
+  text (the engine returns a single line height), so multi-line message
+  background boxes cover every line.
+- `TextScale::Update()` is called from the takeover paths so its per-call
+  bookkeeping (font swap + message-list row pitch) keeps running.
+- Extras: dialog-button text is captured and re-laid out (centred in the
+  button); the campaign briefing body is redrawn as a block (line pitch,
+  tracking, wrapping by ink width, optional double-line border mark); top-strip
+  digits can take their own size / vertical nudge.
+
+New `RA2MD.ini` → `[Phobos]` keys:
+
+```ini
+MOEE.VecText=true
+MOEE.VecText.FontFace=HarmonyOS_Sans_SC_Regular.ttf    ; CJK face
+MOEE.VecText.FontFaceLatin=Roboto_SemiCondensed-Medium.ttf
+MOEE.VecText.FontFaceBold=HarmonyOS_Sans_SC_Bold.ttf
+MOEE.VecText.FontFaceLatinBold=Roboto_SemiCondensed-Bold.ttf
+MOEE.VecText.FontPx=0            ; 0 = auto-calibrate to the engine glyph size
+MOEE.VecText.Bold=false
+MOEE.VecText.DigitTrack=0        ; digit tracking tweak (px, -8..8)
+MOEE.VecText.CjkOnly=true        ; only CJK glyphs are vectorised
+MOEE.VecText.MenuTake=true       ; replace dialog-button text (centred re-layout)
+MOEE.VecText.CreditPx=0          ; top-strip digit size (0 = off; CjkOnly=false only)
+MOEE.VecText.CreditDY=0
+MOEE.VecText.Brief=true          ; campaign briefing body self-draw
+MOEE.VecText.BriefLine=125       ; line pitch, percent of font size
+MOEE.VecText.BriefOwn=true       ; 1 = natural advance placement
+MOEE.VecText.BriefTrack=0        ; letter spacing (px)
+MOEE.VecText.BriefMark=true      ; dark double-line border around the text
+MOEE.VecText.BriefWidth=580      ; body width (0 = engine default)
+MOEE.VecText.BriefAdv=true       ; 1 = per-glyph advance, 0 = uniform cell width
+```
+
 ### Credits / 鸣谢
 
 Ported from **[MagicShiba/MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements)**

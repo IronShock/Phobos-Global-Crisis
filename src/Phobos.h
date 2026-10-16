@@ -201,6 +201,25 @@ public:
 		static int MOEE_ScaleBar_X;
 		static int MOEE_ScaleBar_Y;
 		static int MOEE_ScaleBar_Len;
+		static bool MOEE_VecText;
+		static char MOEE_VecText_FontFace[0x40];
+		static char MOEE_VecText_FontFaceLatin[0x40];
+		static char MOEE_VecText_FontFaceBold[0x40];
+		static char MOEE_VecText_FontFaceLatinBold[0x40];
+		static int MOEE_VecText_FontPx;
+		static bool MOEE_VecText_Bold;
+		static int MOEE_VecText_DigitTrack;
+		static bool MOEE_VecText_CjkOnly;
+		static bool MOEE_VecText_MenuTake;
+		static int MOEE_VecText_CreditPx;
+		static int MOEE_VecText_CreditDY;
+		static bool MOEE_VecText_Brief;
+		static int MOEE_VecText_BriefLine;
+		static bool MOEE_VecText_BriefOwn;
+		static int MOEE_VecText_BriefTrack;
+		static bool MOEE_VecText_BriefMark;
+		static int MOEE_VecText_BriefWidth;
+		static bool MOEE_VecText_BriefAdv;
 
 	};
 

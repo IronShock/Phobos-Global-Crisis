@@ -38,8 +38,14 @@ DEFINE_HOOK(0x692300, DisplayClass_ProcessClickCoords_TranslateCoordinates, 0x7)
 
 	if (pPoint)
 	{
+		// Use ScreenToTactical (NOT ...Clamped): a click outside the on-screen
+		// tactical area (i.e. on the sidebar / HUD) must be left untouched so the
+		// engine's own "outside the viewport" rejection still applies. Clamped had
+		// no such check and mapped e.g. a right-sidebar superweapon cameo click
+		// into a valid viewport cell, so the map side fired the ability in place.
+		// For clicks inside the area both functions are identical.
 		static Point2D translatedPoint;
-		translatedPoint = ZoomManager::ScreenToTacticalClamped(*pPoint);
+		translatedPoint = ZoomManager::ScreenToTactical(*pPoint);
 		R->Stack<Point2D*>(0x4, &translatedPoint);
 	}
 

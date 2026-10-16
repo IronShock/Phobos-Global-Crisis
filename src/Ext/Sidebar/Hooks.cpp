@@ -112,6 +112,30 @@ DEFINE_HOOK(0x72FCB5, InitSideRectangles_CenterBackground, 0x5)
 
 #pragma region NewButtonsRelated
 
+// True when the cursor is over the vanilla build/production sidebar column.
+// DisplayClass::ProcessClickCoords (0x692300) only rejects points with a negative
+// X/Y - a click on the sidebar (right of the viewport for NOD, left for GDI) is
+// otherwise converted into a map cell, so a superweapon/ability fires on the spot.
+// That is normally masked because no coordinate translation happens, but it shows
+// clearly while tactical zoom is active. Skip the map side for the whole column.
+static bool ClickInVanillaSidebar()
+{
+	void* m = *(void**)0x00887640u;   // WWMouseClass::Instance
+	const auto* sb = reinterpret_cast<const RectangleStruct*>(0x00886F90u); // SidebarBounds {X,Y,W,H}
+	if (!m)
+		return false;
+
+	const int mx = *reinterpret_cast<int*>(reinterpret_cast<char*>(m) + 0x1C);
+	const int my = *reinterpret_cast<int*>(reinterpret_cast<char*>(m) + 0x20);
+	const int w = sb->Width;
+
+	if (w < 64 || w > 512) return false;
+	if (sb->X < 0 || sb->X > 8192) return false;
+	if (my < 0 || my > 8192) return false;
+
+	return mx >= sb->X && mx < sb->X + w;
+}
+
 DEFINE_HOOK(0x692419, DisplayClass_ProcessClickCoords_SkipOnNewButtons, 0x7)
 {
 	enum { DoNothing = 0x6925FC };
@@ -119,7 +143,8 @@ DEFINE_HOOK(0x692419, DisplayClass_ProcessClickCoords_SkipOnNewButtons, 0x7)
 	return (SWSidebarClass::IsEnabled() && SWSidebarClass::Instance.CurrentColumn
 		|| SWSidebarClass::Instance.ToggleButton && SWSidebarClass::Instance.ToggleButton->IsHovering
 		|| MessageColumnClass::Instance.IsBlocked()
-		|| FilterButtonClass::IsAnyHovering()  // Ä¿±êÉ¸Ñ¡°´Å¥ÐüÍ£Ê±À¹½Ø
+		|| FilterButtonClass::IsAnyHovering()  // Ä¿ï¿½ï¿½É¸Ñ¡ï¿½ï¿½Å¥ï¿½ï¿½Í£Ê±ï¿½ï¿½ï¿½ï¿½
+		|| ClickInVanillaSidebar()
 		)? DoNothing : 0;
 }
 
@@ -127,7 +152,7 @@ DEFINE_HOOK(0x6A5082, SidebarClass_InitClear_InitializeNewButtons, 0x5)
 {
 	SWSidebarClass::Instance.InitClear();
 	MessageColumnClass::Instance.InitClear();
-	FilterButtonClass::ClearButtons();  // Ïú»ÙÉ¸Ñ¡°´Å¥
+	FilterButtonClass::ClearButtons();  // ï¿½ï¿½ï¿½ï¿½É¸Ñ¡ï¿½ï¿½Å¥
 	return 0;
 }
 
@@ -135,7 +160,7 @@ DEFINE_HOOK(0x6A5839, SidebarClass_InitIO_InitializeNewButtons, 0x5)
 {
 	SWSidebarClass::Instance.InitIO();
 	MessageColumnClass::Instance.InitIO();
-	FilterButtonClass::InitButtons();  // ´´½¨É¸Ñ¡°´Å¥
+	FilterButtonClass::InitButtons();  // ï¿½ï¿½ï¿½ï¿½É¸Ñ¡ï¿½ï¿½Å¥
 	return 0;
 }
 

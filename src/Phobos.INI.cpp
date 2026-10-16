@@ -153,6 +153,25 @@ bool Phobos::Config::MOEE_ScaleBar = false;
 int Phobos::Config::MOEE_ScaleBar_X = 40;
 int Phobos::Config::MOEE_ScaleBar_Y = 1;
 int Phobos::Config::MOEE_ScaleBar_Len = 250;
+bool Phobos::Config::MOEE_VecText = true;
+char Phobos::Config::MOEE_VecText_FontFace[0x40] = "HarmonyOS_Sans_SC_Regular.ttf";
+char Phobos::Config::MOEE_VecText_FontFaceLatin[0x40] = "Roboto_SemiCondensed-Medium.ttf";
+char Phobos::Config::MOEE_VecText_FontFaceBold[0x40] = "HarmonyOS_Sans_SC_Bold.ttf";
+char Phobos::Config::MOEE_VecText_FontFaceLatinBold[0x40] = "Roboto_SemiCondensed-Bold.ttf";
+int Phobos::Config::MOEE_VecText_FontPx = 0;
+bool Phobos::Config::MOEE_VecText_Bold = false;
+int Phobos::Config::MOEE_VecText_DigitTrack = 0;
+bool Phobos::Config::MOEE_VecText_CjkOnly = true;
+bool Phobos::Config::MOEE_VecText_MenuTake = true;
+int Phobos::Config::MOEE_VecText_CreditPx = 0;
+int Phobos::Config::MOEE_VecText_CreditDY = 0;
+bool Phobos::Config::MOEE_VecText_Brief = true;
+int Phobos::Config::MOEE_VecText_BriefLine = 125;
+bool Phobos::Config::MOEE_VecText_BriefOwn = true;
+int Phobos::Config::MOEE_VecText_BriefTrack = 0;
+bool Phobos::Config::MOEE_VecText_BriefMark = true;
+int Phobos::Config::MOEE_VecText_BriefWidth = 580;
+bool Phobos::Config::MOEE_VecText_BriefAdv = true;
 
 bool Phobos::Misc::CustomGS = false;
 int Phobos::Misc::CustomGS_ChangeInterval[7] = { -1, -1, -1, -1, -1, -1, -1 };
@@ -391,6 +410,38 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.ScaleBar.Y", 1), 0, 200);
 	Phobos::Config::MOEE_ScaleBar_Len = std::clamp(
 		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.ScaleBar.Len", 250), 80, 2000);
+
+	// Global vector-text takeover (MO_EE VecText port, staged).
+	Phobos::Config::MOEE_VecText = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText", true);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.VecText.FontFace", "HarmonyOS_Sans_SC_Regular.ttf",
+		Phobos::Config::MOEE_VecText_FontFace);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.VecText.FontFaceLatin", "Roboto_SemiCondensed-Medium.ttf",
+		Phobos::Config::MOEE_VecText_FontFaceLatin);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.VecText.FontFaceBold", "HarmonyOS_Sans_SC_Bold.ttf",
+		Phobos::Config::MOEE_VecText_FontFaceBold);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.VecText.FontFaceLatinBold", "Roboto_SemiCondensed-Bold.ttf",
+		Phobos::Config::MOEE_VecText_FontFaceLatinBold);
+	Phobos::Config::MOEE_VecText_FontPx = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.VecText.FontPx", 0), 0, 40);
+	Phobos::Config::MOEE_VecText_Bold = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText.Bold", false);
+	Phobos::Config::MOEE_VecText_DigitTrack = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.VecText.DigitTrack", 0), -8, 8);
+	Phobos::Config::MOEE_VecText_CjkOnly = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText.CjkOnly", true);
+	Phobos::Config::MOEE_VecText_MenuTake = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText.MenuTake", true);
+	Phobos::Config::MOEE_VecText_CreditPx = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.VecText.CreditPx", 0), 0, 40);
+	Phobos::Config::MOEE_VecText_CreditDY = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.VecText.CreditDY", 0), -16, 16);
+	Phobos::Config::MOEE_VecText_Brief = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText.Brief", true);
+	Phobos::Config::MOEE_VecText_BriefLine = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.VecText.BriefLine", 125), 0, 400);
+	Phobos::Config::MOEE_VecText_BriefOwn = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText.BriefOwn", true);
+	Phobos::Config::MOEE_VecText_BriefTrack = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.VecText.BriefTrack", 0), -8, 8);
+	Phobos::Config::MOEE_VecText_BriefMark = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText.BriefMark", true);
+	Phobos::Config::MOEE_VecText_BriefWidth = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.VecText.BriefWidth", 580), 0, 4096);
+	Phobos::Config::MOEE_VecText_BriefAdv = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText.BriefAdv", true);
 
 	// Custom game speeds, 6 - i so that GS6 is index 0, just like in the engine
 	Phobos::Config::CampaignDefaultGameSpeed = 6 - CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "CampaignDefaultGameSpeed", 4);

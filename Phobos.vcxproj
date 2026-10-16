@@ -125,6 +125,8 @@
     <ClCompile Include="src\MOEE\MOEE.WeaponRange.cpp" />
     <ClCompile Include="src\MOEE\MOEE.GridView.cpp" />
     <ClCompile Include="src\MOEE\MOEE.Observer.cpp" />
+    <ClCompile Include="src\MOEE\MOEE.GdiText.cpp" />
+    <ClCompile Include="src\MOEE\MOEE.VecText.cpp" />
     <ClCompile Include="src\Misc\Hooks.Gamespeed.cpp" />
     <ClCompile Include="src\Misc\Hooks.GameSpeedLock.cpp" />
     <ClCompile Include="src\Misc\Hooks.Ares.cpp" />
@@ -314,6 +316,8 @@
     <ClInclude Include="src\Locomotion\AttachmentLocomotionClass.h"/>
     <ClInclude Include="src\MOEE\MOEE.h" />
     <ClInclude Include="src\MOEE\MOEE.OrderUtil.h" />
+    <ClInclude Include="src\MOEE\MOEE.GdiText.h" />
+    <ClInclude Include="src\MOEE\MOEE.VecText.h" />
     <ClInclude Include="src\Misc\BlittersFix.h" />
     <ClInclude Include="src\Ext\CaptureManager\Body.h" />
     <ClInclude Include="src\Misc\FlyingStrings.h" />
@@ -498,6 +502,8 @@
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <ProfileGuidedDatabase>$(IntDir)$(TargetName).pgd</ProfileGuidedDatabase>
       <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+      <GenerateMapFile>true</GenerateMapFile>
+      <MapFileName>$(OutDir)$(TargetName).map</MapFileName>
     </Link>
     <PostBuildEvent>
       <Command />
