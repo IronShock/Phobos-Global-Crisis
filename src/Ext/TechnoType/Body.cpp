@@ -11,6 +11,7 @@
 #include <Ext/BuildingType/Body.h>
 #include <Ext/BulletType/Body.h>
 #include <Ext/Techno/Body.h>
+#include <Ext/WeaponType/Body.h>
 #include <New/Type/InsigniaTypeClass.h>
 
 #include <Utilities/GeneralUtils.h>
@@ -577,6 +578,36 @@ WeaponTypeClass* TechnoTypeExt::GetWeaponType(TechnoTypeClass* pThis, int weapon
 	const auto pWeaponStruct = pThis->GetWeapon(weaponIndex);
 
 	return pWeaponStruct ? pWeaponStruct->WeaponType : nullptr;
+}
+
+// ExtraFire: lazy per-TechnoType cache of "any weapon declares an ExtraFire". This keeps
+// TechnoExt::UpdateExtraFire from doing MaxWeapons * 2 container lookups for every techno
+// on every frame. Only ever called during gameplay, i.e. long after INI load has finished.
+bool TechnoTypeExt::ExtData::HasExtraFire() const
+{
+	if (!this->HasExtraFireCached.has_value())
+	{
+		auto const pType = this->OwnerObject();
+		bool any = false;
+
+		for (int i = 0; i < TechnoTypeClass::MaxWeapons && !any; ++i)
+		{
+			// Elite weapons fall back to the normal ones inside GetWeaponType, so checking
+			// both ranks covers "normal has ExtraFire" and "elite has ExtraFire".
+			for (int elite = 0; elite < 2 && !any; ++elite)
+			{
+				if (auto const pWeapon = TechnoTypeExt::GetWeaponType(pType, i, elite != 0))
+				{
+					if (WeaponTypeExt::ExtMap.Find(pWeapon)->ExtraFire_Weapons.size() > 0)
+						any = true;
+				}
+			}
+		}
+
+		this->HasExtraFireCached = any;
+	}
+
+	return *this->HasExtraFireCached;
 }
 
 PipScale TechnoTypeExt::ParsePipScaleString(const char* str)

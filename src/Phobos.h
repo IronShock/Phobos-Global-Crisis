@@ -135,6 +135,10 @@ public:
 		static bool TacticalZoom_Scroll;
 		static bool TacticalZoom_KeyEnabled;
 		static double TacticalZoom_Max;
+		static double TacticalZoom_Min;
+		static int TacticalZoom_ZoomOutRepaint;
+		static bool TacticalZoom_ZoomOutKeepText;
+		static bool TacticalZoom_ZoomOutBandFix;
 		static double TacticalZoom_Step;
 		static bool TacticalZoom_Smooth;
 		static bool ShowFPS;
@@ -150,6 +154,53 @@ public:
 		// issues orders. Off by default (keeps the original YR controls).
 		static bool RightClickCommands;
 		static bool RightClickCommands_Debug;
+		// [GC] Enables the INI/heap diagnostics added while hunting the map-INI UAF:
+		// full INI list validation (VirtualQuery-heavy), HeapValidate, the INIEntry
+		// destructor probe and the per-frame ExtraFire log. Off by default - they cost
+		// seconds per map load. Turn on only when re-hunting that class of bug.
+		static bool DebugGCDiagnostics;
+
+		// MO_ExperienceEnhancements port (src/MOEE/). Read from
+		// RA2MD.ini -> [Phobos] with the "MOEE." prefix.
+		static bool MOEE_MegaListCap;
+		static bool MOEE_Observer;
+		static int MOEE_WaypointCap;
+		static char MOEE_AttackMove[0x40];
+		static int MOEE_RepairAll;
+		static int MOEE_RepairAll_Interval;
+		static int MOEE_RepairAll_Batch;
+		static bool MOEE_RepairAll_DoubleClick;
+		static int MOEE_RepairAll_DblFrames;
+		static int MOEE_PlaceScatter;
+		static int MOEE_PlaceScatter_Interval;
+		static int MOEE_PlaceScatter_Batch;
+		static int MOEE_PlaceScatter_Dist;
+		static int MOEE_OrderThrottle;
+		static char MOEE_TreeChop[0x40];
+		static int MOEE_TreeChop_Range;
+		static char MOEE_FuzzyAttack[0x40];
+		static int MOEE_FuzzyAttack_Range;
+		static int MOEE_FuzzyAttack_SquadSize;
+		static char MOEE_SmartOrder[0x40];
+		static int MOEE_SmartOrder_NodeStep;
+		static char MOEE_PatrolCircle[0x40];
+		static int MOEE_PatrolCircle_Size;
+		static bool MOEE_PatrolCircle_Commit;
+		static char MOEE_SmartArea[0x40];
+		static int MOEE_SmartArea_Range;
+		static int MOEE_SmartArea_SquadSize;
+		static bool MOEE_DeployPreview;
+		static bool MOEE_DeployPreview_AutoDeploy;
+		static int MOEE_DeployPreview_Timeout;
+		static char MOEE_DeployPreview_Key[0x40];
+		static bool MOEE_MapCenter;
+		static bool MOEE_WeaponRange;
+		static char MOEE_Grid[0x40];
+		static int MOEE_Grid_Radius;
+		static bool MOEE_ScaleBar;
+		static int MOEE_ScaleBar_X;
+		static int MOEE_ScaleBar_Y;
+		static int MOEE_ScaleBar_Len;
 
 	};
 

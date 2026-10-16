@@ -22,6 +22,10 @@ public:
 	// Safety cap for the number of ExtraFire entries read per weapon.
 	static constexpr int MaxExtraFire = 16;
 
+	// Default tolerance (raw DirStruct units, ~2.8 degrees) used by ExtraFire.CheckFacing
+	// when ExtraFireN.FacingTolerance is not set.
+	static constexpr int DefaultFacingTolerance = 0x200;
+
 	class ExtData final : public Extension<WeaponTypeClass>
 	{
 	public:
@@ -64,6 +68,39 @@ public:
 		ValueableVector<bool> ExtraFire_UseAmmo;
 		ValueableVector<bool> ExtraFire_CheckParentRange;
 		ValueableVector<bool> ExtraFire_CheckFacing;
+
+		// Extended options. Every ExtraFire option above and below is a parallel vector and
+		// MUST be pushed in the same LoadFromINIFile loop (Body.cpp), so that all of them
+		// keep the same length and can be indexed by the same ExtraFire number.
+		ValueableVector<bool> ExtraFire_OnlyWhenParentFires; // only fire in the window in which the parent slot fired
+		ValueableVector<bool> ExtraFire_AutoTarget;          // OwnTarget=no only: acquire a target when the firer has none
+		ValueableVector<bool> ExtraFire_UseAmmo2;            // consume from the Ammo.Secondary pool
+		ValueableVector<bool> ExtraFire_TurnToTarget;        // rotate the turret towards the target while facing is not yet valid
+		ValueableVector<int> ExtraFire_FacingTolerances;     // CheckFacing tolerance in raw DirStruct units
+		ValueableVector<double> ExtraFire_DamageMultipliers; // damage multiplier applied on top of the firer's firepower
+		ValueableVector<double> ExtraFire_Chances;           // 0..1 chance to actually fire when everything else allows it
+
+		// Mount model. Image points at a UnitType whose art is drawn at this entry's firing
+		// position. Every frame/facing decision comes from that UnitType itself
+		// (Facings / StandingFrames / StartStandFrame), so there are deliberately no
+		// StartFrame/Frames keys here.
+		ValueableVector<bool> ExtraFire_Image_HouseColors;   // remap the drawn model to the owner's house colour
+		ValueableVector<int> ExtraFire_Image_RotationAdjusts; // angular offset of the drawn art, 1/256 circle per unit
+		ValueableVector<bool> ExtraFire_Image_Muzzles;        // fire from the attached model's own art muzzle
+		std::vector<Nullable<CoordStruct>> ExtraFire_Image_FLHs;    // model position; unset = the firing FLH
+		std::vector<Nullable<bool>> ExtraFire_Image_OnTurrets;      // model FLH follows the turret; unset = ExtraFireN.OnTurret
+		ValueableVector<int> ExtraFire_TurretROTs;           // mount turn rate in raw direction units per frame
+		ValueableVector<bool> ExtraFire_Turrets;             // the mount keeps its own facing instead of the parent turret
+		std::vector<Point2D> ExtraFire_Image_Offsets;        // extra screen-space offset for the drawn model
+		std::vector<std::string> ExtraFire_ImageIDs;         // UnitType ID whose art is drawn (empty = no model)
+
+		// Resolved lazily on first use (weapon INI is parsed before techno types exist) and
+		// never serialized. TechnoTypeClass instances are stable for the session, which is
+		// the same assumption Phobos makes for every other stored type pointer.
+		mutable std::vector<TechnoTypeClass*> ExtraFire_ImageTypes;
+		mutable std::vector<char> ExtraFire_ImageResolved;
+
+		TechnoTypeClass* GetExtraFireImageType(int index) const;
 
 		Nullable<PartialVector2D<int>> ROF_RandomDelay;
 		ValueableVector<int> ChargeTurret_Delays;

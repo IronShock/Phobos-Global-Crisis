@@ -588,20 +588,54 @@ MultiWeapon=yes
 A weapon can declare additional weapons (`ExtraFire0`, `ExtraFire1`, ...) that the firer
 fires autonomously, each on its own `ROF`, alongside the weapon that declared them. Each
 extra weapon can override its firing position (`FLH`), pick its own target
-(`OwnTarget`), use its own range, optionally consume ammo, and optionally require the
-target to be within the parent weapon's range (`CheckParentRange`). `Burst`/`Burst.Delays`
-are supported.
+(`OwnTarget`/`AutoTarget`, with explicit attack orders always taking priority and
+neutrals never auto-acquired), use its own range, optionally consume ammo (primary or
+`Ammo.Secondary`), apply its own damage multiplier and firing chance, and optionally
+require the target to be within the parent weapon's range (`CheckParentRange`).
+`Burst`/`Burst.Delays` are supported. Reload timers are frozen while the firer is
+paralysed or under EMP, and are unaffected by veterancy changes.
+
+An entry can also be given a **visible model** with `Image=<UnitType ID>`: the referenced
+vehicle's art is drawn at that entry's firing position, and with `Turret` (which defaults to
+`OwnTarget`) the mount gets its own facing and independently tracks and aims at its own
+target, even while reloading. Frame and rotation come from
+the referenced UnitType's own art config, so no frame keys are needed. The model position is
+specified the same way as an `Attachment` mount: `Image.FLH` / `Image.IsOnTurret` override
+the firing `FLH` / `OnTurret` for the model alone (both default to the firing values), and
+`Image.RotationAdjust` applies an `AttachmentN.RotationAdjust`-style angle to the art.
+By default (`Image.Muzzle=yes`) the weapon fires from the mounted model's own muzzle - read
+from the mount unit itself for voxels, or from the model type's art (`PrimaryFireFLH` +
+`TurretOffset`) for SHPs - so a mounted gun shoots out of its own barrel and no `FLH` needs
+to be written. `Image.Muzzle=no` fires from the parent's muzzle instead.
+`Image.Offset` is a final screen-pixel nudge and `Image.HouseColor` applies the owner's
+house colour.
 
 ```ini
-[SOMEWEAPON]                  ; WeaponType
-ExtraFire0=SOMEOTHERWEAPON    ; WeaponType - fires independently alongside this weapon
-ExtraFire0.FLH=0,0,0          ; firing position (defaults to parent slot FLH)
-ExtraFire0.OnTurret=yes       ; FLH rotates with turret (default yes)
-ExtraFire0.OwnTarget=no       ; pick nearest valid enemy independently
-ExtraFire0.Range=             ; acquisition range in cells (default: weapon Range)
-ExtraFire0.UseAmmo=no         ; each shot consumes 1 unit Ammo
-ExtraFire0.CheckParentRange=no; target must be within parent weapon range (beats OwnTarget)
-ExtraFire0.CheckFacing=yes    ; turret/body must actually face the target (beats OwnTarget)
+[SOMEWEAPON]                       ; WeaponType
+ExtraFire0=SOMEOTHERWEAPON         ; WeaponType - fires independently alongside this weapon
+ExtraFire0.FLH=0,0,0               ; firing position (defaults to parent slot FLH)
+ExtraFire0.OnTurret=yes            ; FLH rotates with turret (default yes)
+ExtraFire0.OwnTarget=no            ; pick nearest valid enemy independently
+ExtraFire0.AutoTarget=no           ; OwnTarget=no only: acquire a target when the firer has none
+ExtraFire0.Range=                  ; acquisition range in cells (default: weapon Range)
+ExtraFire0.UseAmmo=no              ; each shot consumes 1 unit Ammo
+ExtraFire0.UseAmmo2=no             ; each shot consumes 1 unit Ammo.Secondary instead
+ExtraFire0.CheckParentRange=no     ; target must be within parent weapon range (beats OwnTarget)
+ExtraFire0.CheckFacing=yes         ; turret/body must actually face the target (beats OwnTarget)
+ExtraFire0.FacingTolerance=512     ; CheckFacing tolerance in raw direction units (~2.8 degrees)
+ExtraFire0.TurnToTarget=no         ; nudge the turret towards the target while waiting to face it
+ExtraFire0.OnlyWhenParentFires=no  ; fire only in the window the parent slot just fired in
+ExtraFire0.DamageMultiplier=1.0    ; damage multiplier on top of the firer's firepower
+ExtraFire0.Chance=1.0              ; 0..1 chance to fire when every other gate allows it
+ExtraFire0.Image=                  ; UnitType ID - model drawn at this entry's firing position
+ExtraFire0.Image.FLH=              ; integer - model position, defaults to ExtraFire0.FLH
+ExtraFire0.Image.IsOnTurret=       ; boolean - model FLH rotates with the turret, defaults to ExtraFire0.OnTurret
+ExtraFire0.Image.RotationAdjust=0  ; integer - art angle offset, 1/256 of a circle per unit
+ExtraFire0.Image.Muzzle=yes        ; boolean - fire from the mounted model's own muzzle (default yes)
+ExtraFire0.Image.Offset=0,0        ; screen pixel offset for the drawn model
+ExtraFire0.Image.HouseColor=yes    ; remap the drawn model to the owner's house colour (default yes)
+ExtraFire0.Turret=no               ; the mount keeps its own facing (independent turret)
+ExtraFire0.Turret.ROT=             ; turn rate, same units as the game's ROT (default the type's ROT)
 ```
 
 ---
@@ -695,6 +729,130 @@ crashes. Debug-log only.
 
 ---
 
+## 12. MO_ExperienceEnhancements port
+
+Several quality-of-life, queue and observer modules from
+**MO_ExperienceEnhancements** by **MagicShiba** are ported into this build. The
+upstream project is a standalone Ares plugin for Mental Omega (3.3.6); here the
+modules are rewritten in Phobos' `DEFINE_HOOK` / INI-config style while keeping
+the original hook and patch addresses (both projects target the same YR 1.001
+`gamemd.exe`).
+
+Ported so far (see `src/MOEE/`):
+
+- **Observer fix** (`MOEE.Observer`) – multi-observer support (aligns the local
+  `CurrentPlayer` to the global Observer house) and observer panel ordering
+  (human houses first, AI after, no observer slots).
+- **MegaMissionList capacity** (`MOEE.MegaListCap`) – raises
+  `EventClass::MegaMissionList` from 256 to 4096 entries (single player only).
+- **Waypoint limits** (`MOEE.WaypointCap`) – raises the single-player waypoint
+  limits (vanilla 16 per route / 128 planning) to a configurable value; the
+  original branch/planning checks are reproduced through Phobos hooks and an
+  in-place immediate patch, multiplayer always keeps vanilla behaviour.
+- **Custom attack-move hotkey** (`MOEE.AttackMove`) – any hotkey can issue
+  `Mission::AttackMove` (vanilla Ctrl+Shift+LMB) through the standard
+  `EventClass::OutList` path; holding Z queues a planning waypoint.
+- **Repair simplification** (`MOEE.RepairAll`) – Ctrl+repair / double-click
+  repair / automatic repair of all damaged own buildings, reusing the vanilla
+  wrench trigger points and issuing standard `EventType::Repair` events.
+- **Place scatter** (`MOEE.PlaceScatter`) – pushes your own ground units out of
+  the footprint when placing a building (on click, or continuously while the
+  ghost follows the cursor), issuing standard `Mission::Move` events.
+- **Order throttle** (`MOEE.OrderThrottle`) – removes the single-player 128-event
+  per-frame OutList limit by writing over-budget orders straight into DoList
+  (capacity 16384) at the three vanilla "OutList full" branches. Multiplayer is
+  bit-identical to vanilla. This is what makes large groups and
+  `MOEE.WaypointCap=0` (unlimited waypoints) safe in single player.
+- **Tree chop** (`MOEE.TreeChop`) – Ctrl+Z+Middle: a range box follows the
+  cursor and, on release, every tree inside is force-attacked, distributed
+  round-robin across the selected ground units.
+- **Fuzzy attack** (`MOEE.FuzzyAttack`) – Ctrl+Middle: fuzzy force-attack for
+  hard-to-click targets. Scans a range box (nearest ring first), groups the
+  selection "`SquadSize` to one" and draws red unit→target lines while held.
+- **Smart order** (`MOEE.SmartOrder`) – bare Middle click: context-sensitive
+  order (attack / enter / capture, decided per unit by the engine), or a
+  point-scatter around the clicked cell on empty ground (infantry pack 3 per
+  cell). Green preview lines while held.
+- **Patrol circle** (`MOEE.PatrolCircle`) – Z+Middle: places a patrol ring for
+  the whole selection (tap = square, drag = rectangle). Every waypoint is
+  issued as a planning MegaMission, then connected (`PlanConnect`) and committed
+  (`PlanCommit`).
+- **Smart area** (`MOEE.SmartArea`) – Shift+Middle: area-context order. For each
+  unit picks the first target the engine allows (attack / enter / capture /
+  sabotage) with a per-target `SquadSize` quota; never issues move orders.
+- **Deploy preview** (`MOEE.DeployPreview`) – Middle-held footprint preview for a
+  base-deployable unit; on release it is ordered there and deployed on arrival.
+  Claims the bare middle button while such a unit is selected (SmartOrder yields).
+
+### 12.1 UI / map (second group)
+
+- **Map centering** (`MOEE.MapCenter`) – replaces the engine's `Clamp_Center`
+  (`0x6D8640`). When the viewport is larger than the map the camera is pinned to
+  the map centre instead of toggling between inverted bounds, fixing the
+  left/right jitter at high resolutions.
+- **Weapon range** (`MOEE.WeaponRange`) – Ctrl + a single selected unit draws the
+  current weapon's maximum range (and minimum range when non-zero) as an ellipse.
+- **Ground grid** (`MOEE.GridView`) – toggleable tactical ground grid via a
+  hotkey; cells carrying a building or terrain are drawn red.
+- **Zoom scale bar** (`MOEE.ScaleBar`) – bottom-bar scale with ticks from
+  `MinZoom` to `MaxZoom`; highlights the current level and sets `ZoomManager`'s
+  zoom when a tick is clicked. Drives the existing ZoomManager rather than a
+  second zoom pipeline.
+
+New `RA2MD.ini` → `[Phobos]` keys:
+
+```ini
+MOEE.Observer=true          ; observer panel fix
+MOEE.MegaListCap=true       ; MegaMissionList 256 -> 4096 (single player only)
+MOEE.WaypointCap=128        ; single-player waypoint cap (0 = unlimited, max 4096; MP always vanilla 16/128)
+MOEE.AttackMove=X2          ; custom attack-move hotkey ("0"/"None" disables; e.g. X2, Middle, Ctrl+Z+Middle)
+MOEE.RepairAll=0            ; repair simplification: 0=off, 1=manual (Ctrl/double-click), 2=automatic
+MOEE.RepairAll.Interval=30  ; automatic rescan interval (frames, 5..600)
+MOEE.RepairAll.Batch=24     ; max Repair events per scan (1..96)
+MOEE.RepairAll.DoubleClick=true   ; also trigger on double-clicking the wrench
+MOEE.RepairAll.DblFrames=12 ; double-click window (frames, 3..60)
+MOEE.PlaceScatter=1         ; clear units out of the footprint: 0=off, 1=on click, 2=also chase the ghost
+MOEE.PlaceScatter.Interval=30   ; Mode 2 rescan interval (frames, 5..300)
+MOEE.PlaceScatter.Batch=16      ; max Move events per trigger (1..64)
+MOEE.PlaceScatter.Dist=2        ; extra cells to push past the footprint (1..4)
+MOEE.OrderThrottle=1            ; single-player order cap removal (0=off, 1=on); multiplayer always vanilla
+MOEE.TreeChop=Ctrl+Z+Middle     ; quick tree chopping hotkey ("None"/"0" disables)
+MOEE.TreeChop.Range=4           ; scan box size in cells (2..16)
+MOEE.FuzzyAttack=Ctrl+Middle    ; fuzzy force-attack hotkey ("None"/"0" disables)
+MOEE.FuzzyAttack.Range=4        ; scan box size in cells (2..16)
+MOEE.FuzzyAttack.SquadSize=4    ; units per target (>SquadSize splits evenly; 2..16)
+MOEE.SmartOrder=Middle          ; smart middle-click hotkey ("None"/"0" disables)
+MOEE.SmartOrder.NodeStep=2      ; line-drag sampling step (reserved; 1..8)
+MOEE.PatrolCircle=Z+Middle      ; patrol ring hotkey ("None"/"0" disables)
+MOEE.PatrolCircle.Size=4        ; ring size in cells (2..16)
+MOEE.PatrolCircle.Commit=true   ; commit the plan after connecting the ring
+MOEE.SmartArea=Shift+Middle     ; area-context order hotkey ("None"/"0" disables)
+MOEE.SmartArea.Range=4          ; scan box size in cells (2..16)
+MOEE.SmartArea.SquadSize=4      ; units per target per pass (1..16)
+MOEE.DeployPreview=true         ; base-deploy footprint preview + auto deploy
+MOEE.DeployPreview.AutoDeploy=true   ; deploy automatically once the unit arrives
+MOEE.DeployPreview.Timeout=675  ; arrival tracking timeout (frames, 30..4500)
+MOEE.DeployPreview.Key=Middle   ; trigger key for the preview
+MOEE.MapCenter=true             ; pin the camera to the map centre when the viewport is larger
+MOEE.WeaponRange=true           ; Ctrl + single unit: draw the weapon range ellipse
+MOEE.Grid=Ctrl+G                ; toggle the tactical ground grid ("None"/"0" disables)
+MOEE.Grid.Radius=20             ; grid half-window in cells around the camera (8..40)
+MOEE.ScaleBar=false             ; bottom-bar zoom scale bar (requires TacticalZoom)
+MOEE.ScaleBar.X=40              ; right margin from the sidebar (pixels)
+MOEE.ScaleBar.Y=1               ; bottom margin (pixels)
+MOEE.ScaleBar.Len=250           ; bar length (pixels, 80..2000)
+```
+
+### Credits / 鸣谢
+
+Ported from **[MagicShiba/MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements)**
+（MO_ExperienceEnhancements · 心灵终结体验优化拓展）.
+All credit for the original design, reverse-engineering and implementations
+goes to **MagicShiba** and the upstream contributors. Please support and check
+out the original project.
+
+---
+
 ## Full INI key index
 
 ### `rulesmd.ini` → `[General]`
@@ -737,8 +895,8 @@ crashes. Debug-log only.
 
 ### `RA2MD.INI` → `[Phobos]`
 `ContinueGameOnExit`, `Formation*`, `MessageApplyHoverState`,
-`MessageDisplayInCenter*`, `RightClickCommands*`,
-`ShowGameTime*`, `TacticalZoom*`, `TextScale*`
+`MessageDisplayInCenter*`, `MOEE.*` (ported from MO_ExperienceEnhancements),
+`RightClickCommands*`, `ShowGameTime*`, `TacticalZoom*`, `TextScale*`
 
 ### `uimd.ini`
 `[TacticalZoom] *`, `[ToolTips] BattlePoints.Label`,

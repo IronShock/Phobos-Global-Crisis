@@ -31,9 +31,9 @@ namespace RightClickOrder
 //   WM_RBUTTONDOWN (0x204) -> cancel
 //   WM_RBUTTONUP   (0x205) -> cancel
 //
-// 0x6930A0 is already hooked by ZoomManager's middle-click reset, so we hook the
-// free 5-byte instruction right before the message switch instead (after the
-// handler's prologue, esi = this and the message pointer is at [esp+0x2C]).
+// 0x6930A0 is already hooked elsewhere, so we hook the free 5-byte instruction
+// right before the message switch instead (after the handler's prologue,
+// esi = this and the message pointer is at [esp+0x2C]).
 //
 // When the option is enabled we rewrite right-button messages into left-button
 // ones so the stock left-click order path runs for the right button, and record

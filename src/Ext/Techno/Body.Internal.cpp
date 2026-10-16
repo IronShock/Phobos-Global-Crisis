@@ -94,6 +94,33 @@ CoordStruct TechnoExt::GetFLHAbsoluteCoords(TechnoClass* pThis, CoordStruct pCoo
 	return location;
 }
 
+// ExtraFire mount: the same transform chain as GetFLHAbsoluteCoords, except the rotation
+// comes from the mount's own facing instead of the parent's turret, and no turret offset is
+// applied - a mount is an independent piece positioned purely by its own FLH.
+CoordStruct TechnoExt::GetMountAbsoluteCoords(TechnoClass* pThis, CoordStruct flh, DirStruct mountFacing)
+{
+	auto const pFoot = abstract_cast<FootClass*, true>(pThis);
+	Matrix3D mtx;
+
+	// Step 1: body transform matrix
+	if (pFoot && pFoot->Locomotor)
+		mtx = pFoot->Locomotor->Draw_Matrix(nullptr);
+	else // no locomotor means no rotation or transform of any kind (f.ex. buildings)
+		mtx.MakeIdentity();
+
+	// Step 2: rotate by the mount's facing relative to the body's
+	mtx.RotateZ(static_cast<float>(mountFacing.GetRadian<32>() - pThis->PrimaryFacing.Current().GetRadian<32>()));
+
+	// Step 3: apply FLH offset
+	mtx.Translate((float)flh.X, (float)flh.Y, (float)flh.Z);
+
+	auto const result = mtx.GetTranslation();
+
+	// Step 4: apply as an offset to global object coords
+	// Resulting coords are mirrored along X axis, so we mirror it back
+	return pThis->GetRenderCoords() + CoordStruct { (int)result.X, -(int)result.Y, (int)result.Z };
+}
+
 CoordStruct TechnoExt::GetBurstFLH(TechnoClass* pThis, int weaponIndex, bool& FLHFound)
 {
 	FLHFound = false;

@@ -2278,6 +2278,24 @@ msgid "Aircraft"
 msgstr "战机"
 
 #: ../New-or-Enhanced-Logics.md:486
+msgid "Aircraft SHP images"
+msgstr "战机 SHP 图像"
+
+msgid "Vanilla's aircraft drawing code is voxel-only: an `AircraftType` whose art provides no voxel (no `Voxel=yes`, no `VXL`) is not drawn at all. Such aircraft are now drawn from their SHP image instead, with a matching shadow."
+msgstr "原版的战机绘制代码只有体素一条路：如果某个 `AircraftType` 的 art 没有提供体素（没有 `Voxel=yes`、没有 `VXL`），它根本不会被绘制。现在这类战机会改用自己的 SHP 图像绘制，并带有配套阴影。"
+
+msgid "The SHP is expected to hold 32 rotation frames per animation, laid out the same way as the existing SHP body draws (`frame` follows the aircraft's body facing, with the usual 45 degree offset)."
+msgstr "该 SHP 应包含 32 个旋转帧（每个动作），布局与既有的 SHP 车体绘制一致（`frame` 跟随战机车体朝向，并带通常的 45 度偏移）。"
+
+msgid "The shadow uses the engine's own shadow positioning (the locomotor's `Shadow_Point`) with a darkened blit of the same frame, so it follows the aircraft's altitude."
+msgstr "阴影使用引擎自身的阴影定位（运动学的 `Shadow_Point`），并以压暗方式绘制同一帧，因此会跟随战机的高度。"
+
+msgid "This works together with `Image.Empty` / `Image.ConditionYellow` / `Image.ConditionRed`, since the image is picked by the same code."
+msgstr "由于图像由同一处代码选取，本功能与 `Image.Empty` / `Image.ConditionYellow` / `Image.ConditionRed` 兼容。"
+
+msgid "Known limitation: the shadow does not react to pitch/roll (the voxel shadow's tilt handling is not replicated)."
+msgstr "已知限制：阴影不会随俯仰/侧倾变化（未复刻体素阴影的倾斜处理）。"
+
 msgid "Damaged aircraft image changes"
 msgstr "战机伤残更换图像"
 
@@ -9098,8 +9116,14 @@ msgstr "每把额外武器都有各自的开火位置、目标选择与装填速
 msgid "`ExtraFireN.FLH` overrides the firing position and defaults to the parent weapon slot's `FLH`. `ExtraFireN.OnTurret` makes that FLH rotate with the turret and defaults to `yes`."
 msgstr "`ExtraFireN.FLH` 覆盖开火位置，缺省为父武器槽的 `FLH`。`ExtraFireN.OnTurret` 使该 FLH 随炮塔旋转，缺省为 `yes`。"
 
-msgid "`ExtraFireN.OwnTarget=yes` makes it pick the nearest valid enemy within range instead of using the firer's current target."
-msgstr "`ExtraFireN.OwnTarget=yes` 使其在射程内自行选取最近的合法敌人，而不使用开火者当前的目标。"
+msgid "`ExtraFireN.OwnTarget=yes` makes it pick the nearest valid enemy within range instead of using the firer's current target. This only decides *what* it shoots at; whether it also aims with its own facing is a separate concern (`Turret`)."
+msgstr "`ExtraFireN.OwnTarget=yes` 使其在射程内自行选取最近的合法敌人，而不使用开火者当前的目标。它只决定**打谁**；是否同时用自己的朝向瞄准是另一件事（见 `Turret`）。"
+
+msgid "An explicit attack order is always obeyed regardless of this setting: if the firer's current target is a Techno, in range and usable by the extra weapon, that target is used first and independent acquisition only happens when there is no usable order."
+msgstr "无论该设置如何，显式的攻击命令总是优先：若开火者当前的目标是一个 Techno（单位/建筑等）、位于射程内且该副武器可用，则优先使用该目标；只有在没有可用命令目标时才会自行索敌。"
+
+msgid "Independent acquisition never picks allies or neutral (civilian/tech) houses; an ordered attack on a neutral house is still carried out."
+msgstr "自行索敌永远不会选中盟友或中立（平民/科技）阵营；但被下令攻击中立阵营时仍会执行。"
 
 msgid "`ExtraFireN.Range` sets its acquisition/range in cells and defaults to the extra weapon's own `Range`."
 msgstr "`ExtraFireN.Range` 以格为单位设置其索敌/射程，缺省为额外武器自身的 `Range`。"
@@ -9110,20 +9134,62 @@ msgstr "`ExtraFireN.UseAmmo=yes` 使每发消耗单位 1 点 `Ammo`。"
 msgid "`ExtraFireN.CheckParentRange=yes` requires the target to also be within the parent weapon's range; this takes precedence over `OwnTarget` (the effective range becomes the smaller of the two)."
 msgstr "`ExtraFireN.CheckParentRange=yes` 要求目标同时位于父武器射程内；其优先级高于 `OwnTarget`（有效射程取两者较小值）。"
 
-msgid "`ExtraFireN.CheckFacing=yes` (default) requires the turret (or the body, for turretless units) to actually point at the target before firing; while it is still rotating or aimed elsewhere the extra weapon holds fire. Takes precedence over `OwnTarget`."
-msgstr "`ExtraFireN.CheckFacing=yes`（默认）要求炮塔（无炮塔单位则为车体）**真正对准目标**后才开火；正在转向或指向别处时该额外武器不开火。其优先级高于 `OwnTarget`。"
+msgid "`ExtraFireN.CheckFacing=yes` (default) requires the turret (or the body, for turretless units) to actually point at the target before firing; while it is still rotating or aimed elsewhere the extra weapon holds fire. Takes precedence over `OwnTarget`. The tolerated angle is `ExtraFireN.FacingTolerance` in raw direction units (`0x10000` per full circle, so the default `0x200` is about 2.8 degrees)."
+msgstr "`ExtraFireN.CheckFacing=yes`（默认）要求炮塔（无炮塔单位则为车体）**真正对准目标**后才开火；正在转向或指向别处时该额外武器不开火。其优先级高于 `OwnTarget`。允许的角度偏差由 `ExtraFireN.FacingTolerance` 以原始方向单位指定（整圈为 `0x10000`，故默认值 `0x200` 约 2.8 度）。"
+
+msgid "`ExtraFireN.TurnToTarget=yes` additionally rotates the turret towards the target while the facing gate is not satisfied yet. This is a best-effort nudge: the unit's own turret logic runs afterwards and may still aim elsewhere."
+msgstr "`ExtraFireN.TurnToTarget=yes` 在朝向判定尚未通过时额外把炮塔转向目标。这只是尽力而为的微调：单位自身的炮塔逻辑随后运行，仍可能把炮塔转向别处。"
+
+msgid "`ExtraFireN.AutoTarget=yes` only applies when `OwnTarget=no`: if the firer has no target of its own, the extra weapon acquires one just like `OwnTarget=yes` would, instead of holding fire."
+msgstr "`ExtraFireN.AutoTarget=yes` 仅在 `OwnTarget=no` 时生效：若开火者自身没有目标，额外武器会像 `OwnTarget=yes` 那样自行索敌，而不是不开火。"
+
+msgid "`ExtraFireN.DamageMultiplier` scales the fired damage on top of the firer's firepower multiplier (default `1.0`)."
+msgstr "`ExtraFireN.DamageMultiplier` 在开火者的火力倍率之上再缩放造成的伤害（默认 `1.0`）。"
+
+msgid "`ExtraFireN.Chance` is a `0.0`-`1.0` probability that the shot is actually fired once every other gate allows it (default `1.0`). A failed roll does not consume the reload timer."
+msgstr "`ExtraFireN.Chance` 是 `0.0`-`1.0` 的概率，表示在其他所有条件都满足后实际开火的几率（默认 `1.0`）。判定失败不会消耗装填计时器。"
+
+msgid "`ExtraFireN.UseAmmo2=yes` makes each shot consume one point of the firer's `Ammo.Secondary` pool instead of `Ammo`. As with `UseAmmo`, a type with no ammo pool of its own ignores the flag."
+msgstr "`ExtraFireN.UseAmmo2=yes` 使每发消耗开火者的 `Ammo.Secondary` 弹药池而不是 `Ammo`。与 `UseAmmo` 相同，自身没有弹药池的类型会忽略该标记。"
+
+msgid "`ExtraFireN.OnlyWhenParentFires=yes` makes the extra weapon fire only in the window in which the weapon slot that declared it has just fired, instead of on its own independent schedule."
+msgstr "`ExtraFireN.OnlyWhenParentFires=yes` 使该额外武器仅在声明它的武器槽刚刚开火的那个窗口内开火，而不再按自身独立的节奏开火。"
+
+msgid "`ExtraFireN.Image=<UnitType ID>` gives the entry a visible model, drawn at its own firing position. The ID must be a **vehicle** (`UnitType`), because that is where the frame information lives; anything else logs a warning once and draws nothing."
+msgstr "`ExtraFireN.Image=<载具 ID>` 为该条目提供一个可见模型，绘制在其自身的开火位置。该 ID 必须是**载具**（`UnitType`），因为帧信息就在它身上；指向其它类型只会记录一次警告且不绘制任何东西。"
+
+msgid "Rotation and frames are read from that UnitType's own art configuration (`Facings`, `StandingFrames`, `StartStandFrame`), so there are deliberately no `StartFrame`/`Frames` keys on the ExtraFire side."
+msgstr "旋转与帧全部读取自该载具自身的 art 配置（`Facings`、`StandingFrames`、`StartStandFrame`），因此 ExtraFire 侧刻意不提供 `StartFrame`/`Frames` 键。"
+
+msgid "`ExtraFireN.Image.Offset=x,y` shifts the drawn model in screen pixels on top of the FLH-derived position."
+msgstr "`ExtraFireN.Image.Offset=x,y` 在由 FLH 推导出的位置上，以屏幕像素为单位微调绘制模型。"
+
+msgid "`ExtraFireN.Image.FLH=x,y,z` and `ExtraFireN.Image.IsOnTurret=yes/no` override the model's position and whether that position rotates with the turret, independently of the firing `FLH` / `OnTurret`. Both default to the firing values, so a model can be placed somewhere other than the muzzle."
+msgstr "`ExtraFireN.Image.FLH=x,y,z` 与 `ExtraFireN.Image.IsOnTurret=yes/no` 可以独立于开火用的 `FLH` / `OnTurret` 覆盖模型的位置以及该位置是否随炮塔旋转。两者缺省都取开火值，因此模型可以摆放在枪口以外的位置。"
+
+msgid "`ExtraFireN.Image.RotationAdjust` rotates the drawn art itself, in units of 1/256 of a circle; it is the same key and the same units as `AttachmentN.RotationAdjust` and does not move the position."
+msgstr "`ExtraFireN.Image.RotationAdjust` 旋转绘制的美术资源本身，单位为一圈的 1/256；与 `AttachmentN.RotationAdjust` 是同一个键、同一套单位，且不会移动位置。"
+
+msgid "`ExtraFireN.Image.Muzzle` (default `yes`) makes the shot and its muzzle flash come out of the attached model's own barrel instead of the parent's. For a voxel model the muzzle is read from the mount itself, so it follows the mount's own turret; for an SHP model it is derived from that model type's art (`PrimaryFireFLH`, or `ElitePrimaryFireFLH` for elite firers, plus `TurretOffset`). With this on no `FLH` needs to be written at all - only the model pivot has to be placed with `Image.FLH`. Set `Image.Muzzle=no` to fire from the parent's muzzle again."
+msgstr "`ExtraFireN.Image.Muzzle`（默认 `yes`）使弹丸（连同枪口动画）从所挂载模型自身的炮口射出，而不是父单位的枪口。体素模型的枪口直接取自挂载本身，因此会跟随挂载自己的炮塔；SHP 模型则取自该模型类型自身的 art（`PrimaryFireFLH`，精英开火者取 `ElitePrimaryFireFLH`，再加上 `TurretOffset`）。启用后完全不必写 `FLH`，只需用 `Image.FLH` 把模型的枢轴摆好。设为 `Image.Muzzle=no` 可恢复从父单位枪口开火。"
+
+msgid "`ExtraFireN.Image.HouseColor` (default `yes`) remaps the drawn SHP model to the owner's house colour. A voxel mount is a real mount unit, so the engine applies the house colour there on its own. Set `no` to draw the model with its own colours."
+msgstr "`ExtraFireN.Image.HouseColor`（默认 `yes`）将绘制的 SHP 模型重映射为拥有者的阵营颜色。体素挂载本身就是真实的挂载单位，房色由引擎自动处理。设为 `no` 则使用模型自身的颜色。"
+
+msgid "`ExtraFireN.Turret=yes` (default `no`) gives the mount **its own facing and firing direction**, independently of `OwnTarget`: it turns towards whatever target it is using instead of following the parent turret, and `CheckFacing` then compares against the mount's facing rather than the parent's. Combined with `OwnTarget=yes` this is a fully independent turret (its own target *and* its own aim); with `OwnTarget=no` it aims its own facing at the firer's target. The mount keeps tracking while its weapon is reloading. `ExtraFireN.Turret.ROT` sets the turn rate and uses the same units as the game's own `ROT` (a DirType step of 1/256 of a circle per frame); it defaults to the firer type's `ROT`. Without `Turret=yes` the model simply follows the parent turret (or the body), matching the FLH transform."
+msgstr "`ExtraFireN.Turret=yes`（默认 `no`）使该挂载拥有**自己的朝向与开火方向**，与 `OwnTarget` 彼此独立：它会朝自己当前使用的目标转动，而不是跟随父车炮塔，此时 `CheckFacing` 也改为对比挂载朝向。与 `OwnTarget=yes` 组合即为完全独立的炮塔（自己的目标 + 自己的瞄准）；配合 `OwnTarget=no` 则是用自身朝向去瞄父单位的目标。挂载在武器装填期间也会持续跟踪。`ExtraFireN.Turret.ROT` 设置转向速度，与游戏自身的 `ROT` 同单位（DirType，1 = 1/256 圈每帧），缺省取开火者类型的 `ROT`。未设 `Turret=yes` 时，模型仅跟随父车炮塔（或无炮塔时跟随车体），与 FLH 变换保持一致。"
 
 msgid "The reload interval is the extra weapon's `ROF` (affected by `ROF.RandomDelay` and the firer's AttachEffect `ROFMultiplier`). `Burst` and `Burst.Delays` are supported: the burst shots are spaced by `Burst.Delays` and the full `ROF` cooldown only starts after the last shot of the burst."
 msgstr "装填间隔为额外武器的 `ROF`（受 `ROF.RandomDelay` 与开火者的附加效果 `ROFMultiplier` 影响）。支持 `Burst` 与 `Burst.Delays`：连发之间按 `Burst.Delays` 间隔，整轮打完最后一发后才开始完整的 `ROF` 冷却。"
 
-msgid "The extra weapon fires whenever it has a valid target, regardless of the parent weapon's state, and does not use or interfere with the shared rearm timer."
-msgstr "只要额外武器有合法目标就会开火，与父武器状态无关，且不使用也不干扰共享的装填计时器。"
+msgid "The extra weapon fires whenever it has a valid target, regardless of the parent weapon's state, and does not use or interfere with the shared rearm timer. While the firer is paralyzed or under EMP its reload timers are frozen rather than counting down."
+msgstr "只要额外武器有合法目标就会开火，与父武器状态无关，且不使用也不干扰共享的装填计时器。开火者被瘫痪或处于 EMP 状态时其装填计时器会被冻结而不是继续倒数。"
 
-msgid "Works for all TechnoTypes. Elite units read the extra weapons declared on their `Elite` weapon entries."
-msgstr "适用于所有科技类型。精英单位读取其 `Elite` 武器条目上声明的额外武器。"
+msgid "Works for all TechnoTypes. Elite units read the extra weapons declared on their `Elite` weapon entries, and changing veterancy rank does not reset or shuffle the per-extra-weapon state."
+msgstr "适用于所有科技类型。精英单位读取其 `Elite` 武器条目上声明的额外武器，且老兵等级变化不会重置或错乱各额外武器的状态。"
 
-msgid "Limitations: no turret facing/aiming, no `DelayedFire`, and extra weapons do not chain (an `ExtraFire` weapon's own `ExtraFire` is not fired)."
-msgstr "限制：不做炮塔朝向/瞄准、不支持 `DelayedFire`，且额外武器不再链式（额外武器自身的 `ExtraFire` 不会被触发）。"
+msgid "Limitations: no `DelayedFire`, and extra weapons do not chain (an `ExtraFire` weapon's own `ExtraFire` is not fired)."
+msgstr "限制：不支持 `DelayedFire`，且额外武器不再链式（额外武器自身的 `ExtraFire` 不会被触发）。"
 
 #: ../New-or-Enhanced-Logics.md:2588
 msgid "Delayed firing"

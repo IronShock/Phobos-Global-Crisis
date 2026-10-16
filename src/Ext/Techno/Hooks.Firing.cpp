@@ -1135,7 +1135,12 @@ DEFINE_HOOK(0x6FDD50, TechnoClass_Fire_SecondaryAmmoWeapon, 0x6)
 	GET(TechnoClass* const, pThis, ECX);
 	GET_STACK(int, nWeaponIndex, STACK_OFFSET(0x0, 0x8));
 
-	TechnoExt::ExtMap.Find(pThis)->CurrentFireWeaponIndex = nWeaponIndex;
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	pExt->CurrentFireWeaponIndex = nWeaponIndex;
+
+	// ExtraFire.OnlyWhenParentFires: remember the frame on which each slot last fired.
+	if (nWeaponIndex >= 0 && nWeaponIndex < TechnoTypeClass::MaxWeapons)
+		pExt->ExtraFireParentFireFrame[nWeaponIndex] = static_cast<int>(Unsorted::CurrentFrame);
 
 	return 0;
 }

@@ -499,6 +499,20 @@ Image.ConditionRed=           ; AircraftType entry
 Note that the AircraftTypes had to be defined under [AircraftTypes].
 ```
 
+### Aircraft SHP images
+
+- Vanilla's aircraft drawing code is voxel-only: an `AircraftType` whose art provides no voxel (no `Voxel=yes`, no `VXL`) is not drawn at all. Such aircraft are now drawn from their SHP image instead, with a matching shadow.
+- The SHP is expected to hold 32 rotation frames per animation, laid out the same way as the existing SHP body draws (`frame` follows the aircraft's body facing, with the usual 45 degree offset).
+- The shadow uses the engine's own shadow positioning (the locomotor's `Shadow_Point`) with a darkened blit of the same frame, so it follows the aircraft's altitude.
+- This works together with `Image.Empty` / `Image.ConditionYellow` / `Image.ConditionRed`, since the image is picked by the same code.
+- Known limitation: the shadow does not react to pitch/roll (the voxel shadow's tilt handling is not replicated).
+
+In `artmd.ini`:
+```ini
+[SOMEAIRCRAFT]                ; AircraftType art section - no Voxel=yes, provide a SHP
+Image=SOMEAIRCRAFT.SHP
+```
+
 ## Animations
 
 ### Anim-to-Unit
@@ -2616,27 +2630,59 @@ MultiWeapon=yes
 - Up to 16 extra weapons per weapon, numbered `ExtraFire0`, `ExtraFire1`, ... (read contiguously starting from `ExtraFire0` until the first missing index). `ExtraFire=` is an alias for `ExtraFire0`.
 - Each extra weapon gets its own firing position, target selection and reload rate:
   - `ExtraFireN.FLH` overrides the firing position and defaults to the parent weapon slot's `FLH`. `ExtraFireN.OnTurret` makes that FLH rotate with the turret and defaults to `yes`.
-  - `ExtraFireN.OwnTarget=yes` makes it pick the nearest valid enemy within range instead of using the firer's current target.
+  - `ExtraFireN.OwnTarget=yes` makes it pick the nearest valid enemy within range instead of using the firer's current target. This only decides *what* it shoots at; whether it also aims with its own facing is a separate concern (`Turret`).
+  - An explicit attack order is always obeyed regardless of this setting: if the firer's current target is a Techno, in range and usable by the extra weapon, that target is used first and independent acquisition only happens when there is no usable order.
+  - Independent acquisition never picks allies or neutral (civilian/tech) houses; an ordered attack on a neutral house is still carried out.
   - `ExtraFireN.Range` sets its acquisition/range in cells and defaults to the extra weapon's own `Range`.
   - `ExtraFireN.UseAmmo=yes` makes each shot consume one point of the unit's `Ammo`.
   - `ExtraFireN.CheckParentRange=yes` requires the target to also be within the parent weapon's range; this takes precedence over `OwnTarget` (the effective range becomes the smaller of the two).
-  - `ExtraFireN.CheckFacing=yes` (default) requires the turret (or the body, for turretless units) to actually point at the target before firing; while it is still rotating or aimed elsewhere the extra weapon holds fire. Takes precedence over `OwnTarget`.
+  - `ExtraFireN.CheckFacing=yes` (default) requires the turret (or the body, for turretless units) to actually point at the target before firing; while it is still rotating or aimed elsewhere the extra weapon holds fire. Takes precedence over `OwnTarget`. The tolerated angle is `ExtraFireN.FacingTolerance` in raw direction units (`0x10000` per full circle, so the default `0x200` is about 2.8 degrees).
+  - `ExtraFireN.TurnToTarget=yes` additionally rotates the turret towards the target while the facing gate is not satisfied yet. This is a best-effort nudge: the unit's own turret logic runs afterwards and may still aim elsewhere.
+  - `ExtraFireN.AutoTarget=yes` only applies when `OwnTarget=no`: if the firer has no target of its own, the extra weapon acquires one just like `OwnTarget=yes` would, instead of holding fire.
+  - `ExtraFireN.DamageMultiplier` scales the fired damage on top of the firer's firepower multiplier (default `1.0`).
+  - `ExtraFireN.Chance` is a `0.0`-`1.0` probability that the shot is actually fired once every other gate allows it (default `1.0`). A failed roll does not consume the reload timer.
+  - `ExtraFireN.UseAmmo2=yes` makes each shot consume one point of the firer's `Ammo.Secondary` pool instead of `Ammo`. As with `UseAmmo`, a type with no ammo pool of its own ignores the flag.
+  - `ExtraFireN.OnlyWhenParentFires=yes` makes the extra weapon fire only in the window in which the weapon slot that declared it has just fired, instead of on its own independent schedule.
+  - `ExtraFireN.Image=<UnitType ID>` gives the entry a visible model, drawn at its own firing position. The ID must be a **vehicle** (`UnitType`), because that is where the frame information lives; anything else logs a warning once and draws nothing.
+    - Rotation and frames are read from that UnitType's own art configuration (`Facings`, `StandingFrames`, `StartStandFrame`), so there are deliberately no `StartFrame`/`Frames` keys on the ExtraFire side.
+    - `ExtraFireN.Image.Offset=x,y` shifts the drawn model in screen pixels on top of the FLH-derived position.
+    - `ExtraFireN.Image.FLH=x,y,z` and `ExtraFireN.Image.IsOnTurret=yes/no` override the model's position and whether that position rotates with the turret, independently of the firing `FLH` / `OnTurret`. Both default to the firing values, so a model can be placed somewhere other than the muzzle.
+    - `ExtraFireN.Image.RotationAdjust` rotates the drawn art itself, in units of 1/256 of a circle; it is the same key and the same units as `AttachmentN.RotationAdjust` and does not move the position.
+    - `ExtraFireN.Image.Muzzle` (default `yes`) makes the shot and its muzzle flash come out of the attached model's own barrel instead of the parent's. For a voxel model the muzzle is read from the mount itself, so it follows the mount's own turret; for an SHP model it is derived from that model type's art (`PrimaryFireFLH`, or `ElitePrimaryFireFLH` for elite firers, plus `TurretOffset`). With this on no `FLH` needs to be written at all - only the model pivot has to be placed with `Image.FLH`. Set `Image.Muzzle=no` to fire from the parent's muzzle again.
+    - `ExtraFireN.Image.HouseColor` (default `yes`) remaps the drawn SHP model to the owner's house colour. A voxel mount is a real mount unit, so the engine applies the house colour there on its own. Set `no` to draw the model with its own colours.
+    - `ExtraFireN.Turret=yes` (default `no`) gives the mount **its own facing and firing direction**, independently of `OwnTarget`: it turns towards whatever target it is using instead of following the parent turret, and `CheckFacing` then compares against the mount's facing rather than the parent's. Combined with `OwnTarget=yes` this is a fully independent turret (its own target *and* its own aim); with `OwnTarget=no` it aims its own facing at the firer's target. The mount keeps tracking while its weapon is reloading. `ExtraFireN.Turret.ROT` sets the turn rate and uses the same units as the game's own `ROT` (a DirType step of 1/256 of a circle per frame); it defaults to the firer type's `ROT`. Without `Turret=yes` the model simply follows the parent turret (or the body), matching the FLH transform.
   - The reload interval is the extra weapon's `ROF` (affected by `ROF.RandomDelay` and the firer's AttachEffect `ROFMultiplier`). `Burst` and `Burst.Delays` are supported: the burst shots are spaced by `Burst.Delays` and the full `ROF` cooldown only starts after the last shot of the burst.
-- The extra weapon fires whenever it has a valid target, regardless of the parent weapon's state, and does not use or interfere with the shared rearm timer.
-- Works for all TechnoTypes. Elite units read the extra weapons declared on their `Elite` weapon entries.
-- Limitations: no turret facing/aiming, no `DelayedFire`, and extra weapons do not chain (an `ExtraFire` weapon's own `ExtraFire` is not fired).
+- The extra weapon fires whenever it has a valid target, regardless of the parent weapon's state, and does not use or interfere with the shared rearm timer. While the firer is paralyzed or under EMP its reload timers are frozen rather than counting down.
+- Works for all TechnoTypes. Elite units read the extra weapons declared on their `Elite` weapon entries, and changing veterancy rank does not reset or shuffle the per-extra-weapon state.
+- Limitations: no `DelayedFire`, and extra weapons do not chain (an `ExtraFire` weapon's own `ExtraFire` is not fired).
 
 In `rulesmd.ini`:
 ```ini
-[SOMEWEAPON]                    ; WeaponType
+[SOMEWEAPON]                       ; WeaponType
 ExtraFire0=SOMEOTHERWEAPON
 ExtraFire0.FLH=0,0,0
 ExtraFire0.OnTurret=yes
 ExtraFire0.OwnTarget=no
+ExtraFire0.AutoTarget=no
 ExtraFire0.Range=
 ExtraFire0.UseAmmo=no
+ExtraFire0.UseAmmo2=no
 ExtraFire0.CheckParentRange=no
 ExtraFire0.CheckFacing=yes
+ExtraFire0.FacingTolerance=512
+ExtraFire0.TurnToTarget=no
+ExtraFire0.OnlyWhenParentFires=no
+ExtraFire0.DamageMultiplier=1.0
+ExtraFire0.Chance=1.0
+ExtraFire0.Image=                  ; UnitType ID - model drawn at this entry's firing position
+ExtraFire0.Image.FLH=              ; integer - model position, defaults to ExtraFire0.FLH
+ExtraFire0.Image.IsOnTurret=       ; boolean - model FLH rotates with the turret, defaults to ExtraFire0.OnTurret
+ExtraFire0.Image.RotationAdjust=0  ; integer - art angle offset, 1/256 of a circle per unit
+ExtraFire0.Image.Muzzle=yes        ; boolean - fire from the mounted model's own muzzle (default yes)
+ExtraFire0.Image.Offset=0,0        ; screen pixel offset for the drawn model
+ExtraFire0.Image.HouseColor=yes    ; remap the drawn model to the owner's house colour (default yes)
+ExtraFire0.Turret=no               ; the mount keeps its own facing (independent turret)
+ExtraFire0.Turret.ROT=             ; turn rate, same units as the game's ROT (default the type's ROT)
 ```
 
 ### Delayed firing

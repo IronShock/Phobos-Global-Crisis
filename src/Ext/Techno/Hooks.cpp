@@ -731,13 +731,37 @@ DEFINE_HOOK(0x414987, AircraftClass_Draw_Extra, 0x6)
 	return Continue;
 }
 
+// Aircraft art without a voxel has no HVA, and the engine divides by its FrameCount at
+// 0x4145BD before any of its voxel-path escape checks run. Patch the type up here so that
+// division is safe, then let the original instruction's effect (ECX = HVA) stand.
+DEFINE_HOOK(0x4145B6, AircraftClass_Draw_NullHvaGuard, 0x6)
+{
+	GET(AircraftTypeClass*, pType, ESI);
+
+	TechnoExt::EnsureAircraftHVA(pType);
+
+	R->ECX(pType->MainVoxel.HVA);
+
+	return 0x4145BC;
+}
+
 DEFINE_HOOK(0x414665, AircraftClass_Draw_ExtraSHP, 0x6)
 {
 	enum { Continue = 0x41466B };
 
 	GET(AircraftClass*, pThis, EBP);
 
-	R->EAX<AircraftTypeClass*>(TechnoExt::GetAircraftTypeExtra(pThis));
+	auto const pType = TechnoExt::GetAircraftTypeExtra(pThis);
+
+	// The engine's aircraft draw is voxel-only: it bails out immediately when the type has no
+	// Voxel flag, or has one but no loaded VXL. An aircraft using an SHP image therefore has
+	// to be drawn here. The engine's own early return still runs afterwards, untouched.
+	TechnoExt::LogAircraftSHPOnce(pThis, pType);
+
+	if (pType->Image && !pType->MainVoxel.VXL)
+		TechnoExt::DrawAircraftSHP(pThis, pType);
+
+	R->EAX<AircraftTypeClass*>(pType);
 
 	return Continue;
 }

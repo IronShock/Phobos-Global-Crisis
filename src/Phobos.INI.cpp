@@ -94,6 +94,11 @@ bool Phobos::Config::TacticalZoom = false;
 bool Phobos::Config::TacticalZoom_Scroll = true;
 bool Phobos::Config::TacticalZoom_KeyEnabled = true;
 double Phobos::Config::TacticalZoom_Max = 3.6;
+double Phobos::Config::TacticalZoom_Min = 1.0;
+int Phobos::Config::TacticalZoom_ZoomOutRepaint = 1;
+bool Phobos::Config::TacticalZoom_ZoomOutKeepText = true;
+bool Phobos::Config::TacticalZoom_ZoomOutBandFix = false;
+bool Phobos::Config::DebugGCDiagnostics = false;
 double Phobos::Config::TacticalZoom_Step = 0.2;
 bool Phobos::Config::TacticalZoom_Smooth = true;
 bool Phobos::Config::ShowFPS = false;
@@ -107,6 +112,47 @@ int Phobos::Config::FormationSpacingInfantry = 256;
 
 bool Phobos::Config::RightClickCommands = false;
 bool Phobos::Config::RightClickCommands_Debug = false;
+
+// MO_ExperienceEnhancements port (src/MOEE/).
+bool Phobos::Config::MOEE_MegaListCap = true;
+bool Phobos::Config::MOEE_Observer = true;
+int Phobos::Config::MOEE_WaypointCap = 128;
+char Phobos::Config::MOEE_AttackMove[0x40] = "X2";
+int Phobos::Config::MOEE_RepairAll = 0;
+int Phobos::Config::MOEE_RepairAll_Interval = 30;
+int Phobos::Config::MOEE_RepairAll_Batch = 24;
+bool Phobos::Config::MOEE_RepairAll_DoubleClick = true;
+int Phobos::Config::MOEE_RepairAll_DblFrames = 12;
+int Phobos::Config::MOEE_PlaceScatter = 1;
+int Phobos::Config::MOEE_PlaceScatter_Interval = 30;
+int Phobos::Config::MOEE_PlaceScatter_Batch = 16;
+int Phobos::Config::MOEE_PlaceScatter_Dist = 2;
+int Phobos::Config::MOEE_OrderThrottle = 1;
+char Phobos::Config::MOEE_TreeChop[0x40] = "Ctrl+Z+Middle";
+int Phobos::Config::MOEE_TreeChop_Range = 4;
+char Phobos::Config::MOEE_FuzzyAttack[0x40] = "Ctrl+Middle";
+int Phobos::Config::MOEE_FuzzyAttack_Range = 4;
+int Phobos::Config::MOEE_FuzzyAttack_SquadSize = 4;
+char Phobos::Config::MOEE_SmartOrder[0x40] = "Middle";
+int Phobos::Config::MOEE_SmartOrder_NodeStep = 2;
+char Phobos::Config::MOEE_PatrolCircle[0x40] = "Z+Middle";
+int Phobos::Config::MOEE_PatrolCircle_Size = 4;
+bool Phobos::Config::MOEE_PatrolCircle_Commit = true;
+char Phobos::Config::MOEE_SmartArea[0x40] = "Shift+Middle";
+int Phobos::Config::MOEE_SmartArea_Range = 4;
+int Phobos::Config::MOEE_SmartArea_SquadSize = 4;
+bool Phobos::Config::MOEE_DeployPreview = true;
+bool Phobos::Config::MOEE_DeployPreview_AutoDeploy = true;
+int Phobos::Config::MOEE_DeployPreview_Timeout = 675;
+char Phobos::Config::MOEE_DeployPreview_Key[0x40] = "Middle";
+bool Phobos::Config::MOEE_MapCenter = true;
+bool Phobos::Config::MOEE_WeaponRange = true;
+char Phobos::Config::MOEE_Grid[0x40] = "Ctrl+G";
+int Phobos::Config::MOEE_Grid_Radius = 20;
+bool Phobos::Config::MOEE_ScaleBar = false;
+int Phobos::Config::MOEE_ScaleBar_X = 40;
+int Phobos::Config::MOEE_ScaleBar_Y = 1;
+int Phobos::Config::MOEE_ScaleBar_Len = 250;
 
 bool Phobos::Misc::CustomGS = false;
 int Phobos::Misc::CustomGS_ChangeInterval[7] = { -1, -1, -1, -1, -1, -1, -1 };
@@ -203,6 +249,7 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 	const auto phobosSection = "Phobos";
 
 	Phobos::Config::ToolTipDescriptions = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ToolTipDescriptions", true);
+	Phobos::Config::DebugGCDiagnostics = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.GCDiagnostics", false);
 	Phobos::Config::ToolTipBlur = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ToolTipBlur", false);
 	Phobos::Config::PrioritySelectionFiltering = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "PrioritySelectionFiltering", true);
 	Phobos::Config::ShowPlacementPreview = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowPlacementPreview", true);
@@ -264,6 +311,86 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 	// client options panel, off by default.
 	Phobos::Config::RightClickCommands = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "RightClickCommands", false);
 	Phobos::Config::RightClickCommands_Debug = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "RightClickCommands.Debug", false);
+
+	// MO_ExperienceEnhancements port toggles (see src/MOEE/). Defaults match the
+	// upstream plugin (enabled).
+	Phobos::Config::MOEE_MegaListCap = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.MegaListCap", true);
+	Phobos::Config::MOEE_Observer = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.Observer", true);
+	// 0 = unlimited (single player), 1..4096 = cap. Multiplayer always uses vanilla 16/128.
+	Phobos::Config::MOEE_WaypointCap = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.WaypointCap", 128);
+	// Custom attack-move hotkey. "0"/"None" disables it. e.g. X2 / Middle / Ctrl+Z+Middle.
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.AttackMove", "X2", Phobos::Config::MOEE_AttackMove);
+	// Repair simplification: 0 = off, 1 = manual (Ctrl/double-click), 2 = automatic.
+	Phobos::Config::MOEE_RepairAll = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.RepairAll", 0), 0, 2);
+	Phobos::Config::MOEE_RepairAll_Interval = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.RepairAll.Interval", 30), 5, 600);
+	Phobos::Config::MOEE_RepairAll_Batch = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.RepairAll.Batch", 24), 1, 96);
+	Phobos::Config::MOEE_RepairAll_DoubleClick =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.RepairAll.DoubleClick", true);
+	Phobos::Config::MOEE_RepairAll_DblFrames = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.RepairAll.DblFrames", 12), 3, 60);
+	// Clear own ground units out of the building footprint when placing:
+	// 0 = off, 1 = on click, 2 = also chase the hovering ghost.
+	Phobos::Config::MOEE_PlaceScatter = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.PlaceScatter", 1), 0, 2);
+	Phobos::Config::MOEE_PlaceScatter_Interval = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.PlaceScatter.Interval", 30), 5, 300);
+	Phobos::Config::MOEE_PlaceScatter_Batch = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.PlaceScatter.Batch", 16), 1, 64);
+	Phobos::Config::MOEE_PlaceScatter_Dist = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.PlaceScatter.Dist", 2), 1, 4);
+	// Single-player order cap removal (direct DoList write); multiplayer always
+	// keeps vanilla behaviour. 0 = disabled, 1 = enabled.
+	Phobos::Config::MOEE_OrderThrottle = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.OrderThrottle", 1), 0, 1);
+	// Smart middle-click / hotkey modules.
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.TreeChop", "Ctrl+Z+Middle", Phobos::Config::MOEE_TreeChop);
+	Phobos::Config::MOEE_TreeChop_Range = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.TreeChop.Range", 4), 2, 16);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.FuzzyAttack", "Ctrl+Middle", Phobos::Config::MOEE_FuzzyAttack);
+	Phobos::Config::MOEE_FuzzyAttack_Range = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.FuzzyAttack.Range", 4), 2, 16);
+	Phobos::Config::MOEE_FuzzyAttack_SquadSize = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.FuzzyAttack.SquadSize", 4), 2, 16);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.SmartOrder", "Middle", Phobos::Config::MOEE_SmartOrder);
+	Phobos::Config::MOEE_SmartOrder_NodeStep = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.SmartOrder.NodeStep", 2), 1, 8);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.PatrolCircle", "Z+Middle", Phobos::Config::MOEE_PatrolCircle);
+	Phobos::Config::MOEE_PatrolCircle_Size = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.PatrolCircle.Size", 4), 2, 16);
+	Phobos::Config::MOEE_PatrolCircle_Commit =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.PatrolCircle.Commit", true);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.SmartArea", "Shift+Middle", Phobos::Config::MOEE_SmartArea);
+	Phobos::Config::MOEE_SmartArea_Range = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.SmartArea.Range", 4), 2, 16);
+	Phobos::Config::MOEE_SmartArea_SquadSize = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.SmartArea.SquadSize", 4), 1, 16);
+	Phobos::Config::MOEE_DeployPreview =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.DeployPreview", true);
+	Phobos::Config::MOEE_DeployPreview_AutoDeploy =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.DeployPreview.AutoDeploy", true);
+	Phobos::Config::MOEE_DeployPreview_Timeout = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.DeployPreview.Timeout", 675), 30, 4500);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.DeployPreview.Key", "Middle",
+		Phobos::Config::MOEE_DeployPreview_Key);
+	// High-resolution map centering: pin the camera to the map centre when the
+	// viewport is larger than the map (fixes the left/right jitter).
+	Phobos::Config::MOEE_MapCenter = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.MapCenter", true);
+	// Ctrl + single unit: draw the current weapon range.
+	Phobos::Config::MOEE_WeaponRange = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.WeaponRange", true);
+	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.Grid", "Ctrl+G", Phobos::Config::MOEE_Grid);
+	Phobos::Config::MOEE_Grid_Radius = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.Grid.Radius", 20), 8, 40);
+	// Bottom-bar zoom scale bar driving ZoomManager.
+	Phobos::Config::MOEE_ScaleBar = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.ScaleBar", false);
+	Phobos::Config::MOEE_ScaleBar_X = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.ScaleBar.X", 40), 0, 1000);
+	Phobos::Config::MOEE_ScaleBar_Y = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.ScaleBar.Y", 1), 0, 200);
+	Phobos::Config::MOEE_ScaleBar_Len = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.ScaleBar.Len", 250), 80, 2000);
 
 	// Custom game speeds, 6 - i so that GS6 is index 0, just like in the engine
 	Phobos::Config::CampaignDefaultGameSpeed = 6 - CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "CampaignDefaultGameSpeed", 4);
@@ -422,6 +549,18 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 		Phobos::Config::TacticalZoom_Max = ini_uimd.ReadDouble(section, "TacticalZoom.Max",
 			ini_uimd.ReadDouble(section, "Max", 3.6));
 
+		Phobos::Config::TacticalZoom_Min = ini_uimd.ReadDouble(section, "TacticalZoom.Min",
+			ini_uimd.ReadDouble(section, "Min", 1.0));
+
+		Phobos::Config::TacticalZoom_ZoomOutRepaint = ini_uimd.ReadInteger(section, "TacticalZoom.ZoomOutRepaint",
+			ini_uimd.ReadInteger(section, "ZoomOutRepaint", 1));
+
+		Phobos::Config::TacticalZoom_ZoomOutKeepText = ini_uimd.ReadBool(section, "TacticalZoom.ZoomOutKeepText",
+			ini_uimd.ReadBool(section, "ZoomOutKeepText", true));
+
+		Phobos::Config::TacticalZoom_ZoomOutBandFix = ini_uimd.ReadBool(section, "TacticalZoom.ZoomOutBandFix",
+			ini_uimd.ReadBool(section, "ZoomOutBandFix", false));
+
 		Phobos::Config::TacticalZoom_Step = ini_uimd.ReadDouble(section, "TacticalZoom.Step",
 			ini_uimd.ReadDouble(section, "Step", 0.2));
 
@@ -438,6 +577,13 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 		ZoomManager::ScrollEnabled = Phobos::Config::TacticalZoom_Scroll;
 		ZoomManager::KeyEnabled = Phobos::Config::TacticalZoom_KeyEnabled;
 		ZoomManager::MaxZoom = std::max(1.0, Phobos::Config::TacticalZoom_Max);
+		// Zoom-out support: <1.0 lets the viewport grow past the window (R > A) and
+		// the larger frame is downsampled back into the window (see ZoomManager).
+		// Clamped to [0.2, 1.0]; 1.0 disables zoom-out entirely (vanilla behaviour).
+		ZoomManager::MinZoom = std::clamp(Phobos::Config::TacticalZoom_Min, 0.2, 1.0);
+		ZoomManager::ZoomOutRepaint = std::clamp(Phobos::Config::TacticalZoom_ZoomOutRepaint, 0, 3);
+		ZoomManager::ZoomOutKeepText = Phobos::Config::TacticalZoom_ZoomOutKeepText;
+		ZoomManager::ZoomOutBandFix = Phobos::Config::TacticalZoom_ZoomOutBandFix;
 		ZoomManager::Step = std::max(0.01, Phobos::Config::TacticalZoom_Step);
 		ZoomManager::Smooth = Phobos::Config::TacticalZoom_Smooth;
 

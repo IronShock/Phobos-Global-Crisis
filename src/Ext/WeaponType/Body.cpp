@@ -123,9 +123,33 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			extra.Read<true>(exINI, pSection, "ExtraFire");
 
 		if (!extra.isset())
-			break;
+		{
+			// Distinguish "there is no such index" (end of the contiguous block, stop) from
+			// "the index exists but names a weapon that does not" (a typo, which must not
+			// silently drop this and every later entry). The latter is reported and kept as
+			// an empty slot so the parallel arrays stay aligned.
+			char keyBuffer[0x40];
+			_snprintf_s(keyBuffer, _TRUNCATE, "ExtraFire%d", i);
+
+			bool keyPresent = exINI.ReadString(pSection, keyBuffer) && exINI.value()[0] != '\0';
+
+			if (!keyPresent && i == 0)
+				keyPresent = exINI.ReadString(pSection, "ExtraFire") && exINI.value()[0] != '\0';
+
+			if (!keyPresent)
+				break;
+
+			Debug::Log("[ExtraFire] [%s]ExtraFire%d names a weapon that does not exist; the entry is skipped.\n",
+				pSection, i);
+		}
 
 		this->ExtraFire_Weapons.push_back(extra.Get());
+
+		Valueable<bool> ownTarget { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OwnTarget", i);
+		ownTarget.Read(exINI, pSection, tempBuffer);
+		if (i == 0) ownTarget.Read(exINI, pSection, "ExtraFire.OwnTarget");
+		this->ExtraFire_OwnTarget.push_back(ownTarget.Get());
 
 		Nullable<CoordStruct> flh;
 		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.FLH", i);
@@ -138,12 +162,6 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 		extraRange.Read(exINI, pSection, tempBuffer);
 		if (!extraRange.isset() && i == 0) extraRange.Read(exINI, pSection, "ExtraFire.Range");
 		this->ExtraFire_Ranges.push_back(extraRange);
-
-		Valueable<bool> ownTarget { false };
-		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OwnTarget", i);
-		ownTarget.Read(exINI, pSection, tempBuffer);
-		if (i == 0) ownTarget.Read(exINI, pSection, "ExtraFire.OwnTarget");
-		this->ExtraFire_OwnTarget.push_back(ownTarget.Get());
 
 		Valueable<bool> onTurret { true };
 		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OnTurret", i);
@@ -168,6 +186,108 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 		checkFacing.Read(exINI, pSection, tempBuffer);
 		if (i == 0) checkFacing.Read(exINI, pSection, "ExtraFire.CheckFacing");
 		this->ExtraFire_CheckFacing.push_back(checkFacing.Get());
+
+		Valueable<bool> onlyWhenParentFires { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.OnlyWhenParentFires", i);
+		onlyWhenParentFires.Read(exINI, pSection, tempBuffer);
+		if (i == 0) onlyWhenParentFires.Read(exINI, pSection, "ExtraFire.OnlyWhenParentFires");
+		this->ExtraFire_OnlyWhenParentFires.push_back(onlyWhenParentFires.Get());
+
+		Valueable<bool> autoTarget { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.AutoTarget", i);
+		autoTarget.Read(exINI, pSection, tempBuffer);
+		if (i == 0) autoTarget.Read(exINI, pSection, "ExtraFire.AutoTarget");
+		this->ExtraFire_AutoTarget.push_back(autoTarget.Get());
+
+		Valueable<bool> useAmmo2 { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.UseAmmo2", i);
+		useAmmo2.Read(exINI, pSection, tempBuffer);
+		if (i == 0) useAmmo2.Read(exINI, pSection, "ExtraFire.UseAmmo2");
+		this->ExtraFire_UseAmmo2.push_back(useAmmo2.Get());
+
+		Valueable<bool> turnToTarget { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.TurnToTarget", i);
+		turnToTarget.Read(exINI, pSection, tempBuffer);
+		if (i == 0) turnToTarget.Read(exINI, pSection, "ExtraFire.TurnToTarget");
+		this->ExtraFire_TurnToTarget.push_back(turnToTarget.Get());
+
+		Valueable<int> facingTolerance { WeaponTypeExt::DefaultFacingTolerance };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.FacingTolerance", i);
+		facingTolerance.Read(exINI, pSection, tempBuffer);
+		if (i == 0) facingTolerance.Read(exINI, pSection, "ExtraFire.FacingTolerance");
+		this->ExtraFire_FacingTolerances.push_back(facingTolerance.Get());
+
+		Valueable<double> damageMultiplier { 1.0 };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.DamageMultiplier", i);
+		damageMultiplier.Read(exINI, pSection, tempBuffer);
+		if (i == 0) damageMultiplier.Read(exINI, pSection, "ExtraFire.DamageMultiplier");
+		this->ExtraFire_DamageMultipliers.push_back(damageMultiplier.Get());
+
+		Valueable<double> chance { 1.0 };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Chance", i);
+		chance.Read(exINI, pSection, tempBuffer);
+		if (i == 0) chance.Read(exINI, pSection, "ExtraFire.Chance");
+		this->ExtraFire_Chances.push_back(chance.Get());
+
+		Valueable<int> turretROT { 0 };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Turret.ROT", i);
+		turretROT.Read(exINI, pSection, tempBuffer);
+		if (i == 0) turretROT.Read(exINI, pSection, "ExtraFire.Turret.ROT");
+		this->ExtraFire_TurretROTs.push_back(turretROT.Get());
+
+		Valueable<bool> turret { false };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Turret", i);
+		turret.Read(exINI, pSection, tempBuffer);
+		if (i == 0) turret.Read(exINI, pSection, "ExtraFire.Turret");
+		this->ExtraFire_Turrets.push_back(turret.Get());
+
+		Valueable<bool> imageHouseColor { true };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Image.HouseColor", i);
+		imageHouseColor.Read(exINI, pSection, tempBuffer);
+		if (i == 0) imageHouseColor.Read(exINI, pSection, "ExtraFire.Image.HouseColor");
+		this->ExtraFire_Image_HouseColors.push_back(imageHouseColor.Get());
+
+		Valueable<Point2D> imageOffset { { 0, 0 } };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Image.Offset", i);
+		imageOffset.Read(exINI, pSection, tempBuffer);
+		if (i == 0) imageOffset.Read(exINI, pSection, "ExtraFire.Image.Offset");
+		this->ExtraFire_Image_Offsets.push_back(imageOffset.Get());
+
+		// The model is referenced by UnitType ID and resolved lazily, because weapon sections
+		// are parsed before the techno type arrays are populated.
+		std::string imageID;
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Image", i);
+
+		if (exINI.ReadString(pSection, tempBuffer) && exINI.value()[0])
+			imageID = exINI.value();
+		else if (i == 0 && exINI.ReadString(pSection, "ExtraFire.Image") && exINI.value()[0])
+			imageID = exINI.value();
+
+		this->ExtraFire_ImageIDs.push_back(imageID);
+
+		Nullable<CoordStruct> imageFLH;
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Image.FLH", i);
+		imageFLH.Read(exINI, pSection, tempBuffer);
+		if (!imageFLH.isset() && i == 0) imageFLH.Read(exINI, pSection, "ExtraFire.Image.FLH");
+		this->ExtraFire_Image_FLHs.push_back(imageFLH);
+
+		Nullable<bool> imageOnTurret;
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Image.IsOnTurret", i);
+		imageOnTurret.Read(exINI, pSection, tempBuffer);
+		if (!imageOnTurret.isset() && i == 0) imageOnTurret.Read(exINI, pSection, "ExtraFire.Image.IsOnTurret");
+		this->ExtraFire_Image_OnTurrets.push_back(imageOnTurret);
+
+		Valueable<int> imageRotationAdjust { 0 };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Image.RotationAdjust", i);
+		imageRotationAdjust.Read(exINI, pSection, tempBuffer);
+		if (i == 0) imageRotationAdjust.Read(exINI, pSection, "ExtraFire.Image.RotationAdjust");
+		this->ExtraFire_Image_RotationAdjusts.push_back(imageRotationAdjust.Get());
+
+		Valueable<bool> imageMuzzle { true };
+		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.Image.Muzzle", i);
+		imageMuzzle.Read(exINI, pSection, tempBuffer);
+		if (i == 0) imageMuzzle.Read(exINI, pSection, "ExtraFire.Image.Muzzle");
+		this->ExtraFire_Image_Muzzles.push_back(imageMuzzle.Get());
 	}
 	this->Laser_IsSingleColor.Read(exINI, pSection, "IsSingleColor");
 	this->VisualScatter.Read(exINI, pSection, "VisualScatter");
@@ -306,8 +426,72 @@ void WeaponTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->DelayedFire_OnlyOnInitialBurst)
 		.Process(this->DelayedFire_AnimOffset)
 		.Process(this->DelayedFire_AnimOnTurret)
+		// NOTE: new fields must always be appended at the very end of this chain. The
+		// reader compares the block size it consumed against the stored one, so inserting
+		// anywhere but the end invalidates every pre-existing savegame.
+		.Process(this->ExtraFire_OnlyWhenParentFires)
+		.Process(this->ExtraFire_AutoTarget)
+		.Process(this->ExtraFire_UseAmmo2)
+		.Process(this->ExtraFire_TurnToTarget)
+		.Process(this->ExtraFire_FacingTolerances)
+		.Process(this->ExtraFire_DamageMultipliers)
+		.Process(this->ExtraFire_Chances)
+		.Process(this->ExtraFire_Turrets)
+		.Process(this->ExtraFire_TurretROTs)
+		.Process(this->ExtraFire_Image_HouseColors)
+		.Process(this->ExtraFire_Image_Offsets)
+		.Process(this->ExtraFire_ImageIDs)
+		.Process(this->ExtraFire_Image_FLHs)
+		.Process(this->ExtraFire_Image_OnTurrets)
+		.Process(this->ExtraFire_Image_RotationAdjusts)
+		.Process(this->ExtraFire_Image_Muzzles)
 		;
 };
+
+// ExtraFire mount model: resolve the UnitType whose art this entry draws. Deferred to first
+// use because weapon types are parsed before techno types exist, and cached afterwards since
+// TechnoTypeClass instances are stable for the session. A non-UnitType or unknown ID logs
+// once and yields nullptr, so no model is drawn for that entry.
+TechnoTypeClass* WeaponTypeExt::ExtData::GetExtraFireImageType(int index) const
+{
+	if (index < 0 || index >= static_cast<int>(this->ExtraFire_ImageIDs.size()))
+		return nullptr;
+
+	if (index >= static_cast<int>(this->ExtraFire_ImageResolved.size()))
+	{
+		this->ExtraFire_ImageResolved.resize(this->ExtraFire_ImageIDs.size(), 0);
+		this->ExtraFire_ImageTypes.resize(this->ExtraFire_ImageIDs.size(), nullptr);
+	}
+
+	if (!this->ExtraFire_ImageResolved[index])
+	{
+		this->ExtraFire_ImageResolved[index] = 1;
+
+		auto const& imageID = this->ExtraFire_ImageIDs[index];
+
+		if (!imageID.empty())
+		{
+			if (auto const pType = TechnoTypeClass::Find(imageID.c_str()))
+			{
+				// Only UnitTypes carry Facings / StandingFrames / StartStandFrame, which is
+				// how the frame for a given facing is derived. Anything else has no model.
+				if (pType->WhatAmI() == AbstractType::UnitType)
+					this->ExtraFire_ImageTypes[index] = pType;
+				else
+					Debug::Log("[ExtraFire] Image=%s is not a UnitType, no model will be drawn.\n", imageID.c_str());
+			}
+			else
+			{
+				Debug::Log("[ExtraFire] Image=%s could not be resolved to a TechnoType.\n", imageID.c_str());
+			}
+		}
+	}
+
+	return this->ExtraFire_ImageTypes[index];
+}
+
+
+
 
 void WeaponTypeExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
 {

@@ -1056,6 +1056,11 @@ namespace Diagnostics
 
 	void ValidateINI(const char* tag, CCINIClass* pINI)
 	{
+		// Off by default: the walk below does several VirtualQuery calls per INI entry
+		// (rules has tens of thousands) and cost seconds per map load.
+		if (!Phobos::Config::DebugGCDiagnostics)
+			return;
+
 		if (!pINI || !IsReadable(pINI, sizeof(void*)))
 			return;
 
@@ -1238,6 +1243,14 @@ DEFINE_FUNCTION_JUMP(CALL, 0x5FD580, INIClass_ReadUUBlock_Probe_Thunk); // Overl
 // be fixed where the entry is registered/freed twice, not masked here.
 void* __fastcall INIEntry_Dtor_Probe(INIClass::INIEntry* pThis, void* /*edx*/, unsigned int flags)
 {
+	// Off by default: this runs for every INI entry destroyed (tens of thousands during a
+	// map load / teardown) and each diagnostic step below uses VirtualQuery.
+	if (!Phobos::Config::DebugGCDiagnostics)
+	{
+		using Fn = void*(__thiscall*)(INIClass::INIEntry*, unsigned int);
+		return reinterpret_cast<Fn>(0x52AD50)(pThis, flags);
+	}
+
 	const bool fieldsReadable = pThis && pThis->Key && pThis->Value
 		&& Diagnostics::IsReadable(pThis->Key, 1) && Diagnostics::IsReadable(pThis->Value, 65);
 
@@ -1391,22 +1404,28 @@ DEFINE_HOOK(0x685659, Scenario_ClearClasses, 0xa)
 	// so a double registration ("declared change to both") is dumped with a stack.
 	Savegame::ResetSwizzleDiag();
 
-	const bool heapOk = HeapValidate(GetProcessHeap(), 0, nullptr) != FALSE;
+	const bool heapOk = Phobos::Config::DebugGCDiagnostics
+		? (HeapValidate(GetProcessHeap(), 0, nullptr) != FALSE)
+		: true;
 
-	Debug::Log("[GC-diag] Scenario_ClearClasses: heapOk=%d Bld=%d Veh=%d Inf=%d Air=%d Ovl=%d Ani=%d War=%d Wpn=%d Sfx=%d\n",
-		heapOk,
-		BuildingTypeClass::Array.Count, UnitTypeClass::Array.Count, InfantryTypeClass::Array.Count,
-		AircraftTypeClass::Array.Count, OverlayTypeClass::Array.Count, AnimTypeClass::Array.Count,
-		WarheadTypeClass::Array.Count, WeaponTypeClass::Array.Count, SmudgeTypeClass::Array.Count);
+	if (Phobos::Config::DebugGCDiagnostics)
+	{
+		Debug::Log("[GC-diag] Scenario_ClearClasses: heapOk=%d Bld=%d Veh=%d Inf=%d Air=%d Ovl=%d Ani=%d War=%d Wpn=%d Sfx=%d\n",
+			heapOk,
+			BuildingTypeClass::Array.Count, UnitTypeClass::Array.Count, InfantryTypeClass::Array.Count,
+			AircraftTypeClass::Array.Count, OverlayTypeClass::Array.Count, AnimTypeClass::Array.Count,
+			WarheadTypeClass::Array.Count, WeaponTypeClass::Array.Count, SmudgeTypeClass::Array.Count);
 
-	Diagnostics::ValidateAllINIs("Scenario_ClearClasses");
+		Diagnostics::ValidateAllINIs("Scenario_ClearClasses");
 
-	// The map/scenario INI is not one of the static ones above; validate the INI
-	// the $Include handler last saw (the map INI), where the IsoMapPack5/Smudge
-	// corruption shows up.
-	Diagnostics::ValidateINI("ScenarioMap", Diagnostics::CurrentMapINI);
+		// The map/scenario INI is not one of the static ones above; validate the INI
+		// the $Include handler last saw (the map INI), where the IsoMapPack5/Smudge
+		// corruption shows up.
+		Diagnostics::ValidateINI("ScenarioMap", Diagnostics::CurrentMapINI);
 
-	PhobosTypeRegistry::ValidateCachedPointers();
+		PhobosTypeRegistry::ValidateCachedPointers();
+	}
+
 	PhobosTypeRegistry::Clear();
 	BulletExt::UCPassThrough_SavedTargets.clear();
 

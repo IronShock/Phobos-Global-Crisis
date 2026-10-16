@@ -1,10 +1,16 @@
 #include "Body.h"
 
 #include <TechnoClass.h>
+#include <UnitTypeClass.h>
 
 #include <Ext/Rules/Body.h>
+#include <Ext/WeaponType/Body.h>
 
 #include <cassert>
+#include <cstring>
+
+// Prefix of the attachment entry IDs generated for ExtraFire voxel mounts.
+static constexpr const char* ExtraFireMountIDPrefix = "EFM_";
 
 // Attaches this techno in a first available attachment "slot".
 // Returns true if the attachment is successful.
@@ -43,6 +49,10 @@ void TechnoExt::InitializeAttachments(TechnoClass* pThis)
 	// or scripts (not in the save), the empty slots remain and CreatePendingChildren()
 	// called after load will create their children via OnCreated().
 	bool skipOnCreated = Phobos::IsLoadingSaveGame;
+
+	// ExtraFire voxel models are rendered by the engine as attachment children, so their
+	// generated entries must exist before the slots below are created.
+	EnsureExtraFireMounts(pType);
 
 	if (!pTypeExt || pTypeExt->AttachmentData.empty())
 		return;
@@ -269,6 +279,141 @@ bool TechnoExt::IsAttached(TechnoClass* pThis)
 // TA.VirtualUnit: a child unit is "virtual" (unselectable, unattackable, no
 // pathfinding) when its attachment type has VirtualUnit=yes, or globally when
 // [General]TA.VirtualUnit=yes is set.
+// ExtraFire voxel mounts.
+//
+// A voxel model cannot be drawn by our own code outside the engine's voxel pipeline, and an
+// SHP-drawn parent never enters that pipeline. The engine can draw it as an ordinary child
+// unit though, which is exactly what the attachment system already does - so for every
+// ExtraFire entry whose Image is a voxel UnitType one generated attachment entry is appended
+// to the type's AttachmentData. Everything else (child creation, limbo sync, positioning,
+// facing, owner/state inheritance, save/load) is then handled by AttachmentClass as usual.
+void TechnoExt::EnsureExtraFireMounts(TechnoTypeClass* pType)
+{
+	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	if (!pTypeExt)
+		return;
+
+	// Idempotent across save/load: generated entries carry an "EFM_" ID, and on load the
+	// stored AttachmentData already contains them, so they must not be appended again.
+	for (auto const& existing : pTypeExt->AttachmentData)
+	{
+		if (strncmp(existing.ID, ExtraFireMountIDPrefix, strlen(ExtraFireMountIDPrefix)) == 0)
+			return;
+	}
+
+	// isElite=true falls back to the normal weapon inside GetWeaponType, so every
+	// (slot, entry) pair yields at most one mount regardless of the unit's rank.
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+	{
+		auto const pWeapon = TechnoTypeExt::GetWeaponType(pType, slot, true);
+
+		if (!pWeapon)
+			continue;
+
+		auto const pWeaponExt = WeaponTypeExt::ExtMap.Find(pWeapon);
+		const int count = static_cast<int>(pWeaponExt->ExtraFire_Weapons.size());
+
+		for (int i = 0; i < count; ++i)
+		{
+			if (pWeaponExt->ExtraFire_ImageIDs[i].empty())
+				continue;
+
+			// Only voxels need a real child; SHP models are drawn directly by DrawExtraFireMounts.
+			auto const pUnitType = static_cast<UnitTypeClass*>(pWeaponExt->GetExtraFireImageType(i));
+
+			if (!pUnitType)
+			{
+				Debug::Log("[ExtraFire] %s slot %d Entry %d: Image=%s did not resolve to a usable UnitType; no mount.\n",
+					pType->ID, slot, i, pWeaponExt->ExtraFire_ImageIDs[i].c_str());
+				continue;
+			}
+
+			if (pUnitType->Image)
+				continue; // SHP model: drawn by DrawExtraFireMounts, no child unit needed
+
+			if (!pUnitType->MainVoxel.VXL)
+			{
+				Debug::Log("[ExtraFire] %s slot %d Entry %d: Image=%s is neither an SHP nor a loaded voxel; no mount.\n",
+					pType->ID, slot, i, pUnitType->ID);
+				continue;
+			}
+
+			Debug::Log("[ExtraFire] %s slot %d Entry %d: mounting voxel %s.\n", pType->ID, slot, i, pUnitType->ID);
+
+			auto const pAttachType = AttachmentTypeClass::FindOrAllocate("EXTRAFIREMOUNT");
+
+			if (!pAttachType)
+				continue;
+
+			// Purely visual: never selected, never a valid target, no cell occupancy, and it
+			// must not act on its own - ExtraFire itself does the firing.
+			pAttachType->VirtualUnit = true;
+			pAttachType->OccupiesCell = false;
+			pAttachType->TransparentToMouse = true;
+			pAttachType->InheritCommands = false;
+			pAttachType->InheritOwner = true;
+			pAttachType->InheritStateEffects = true;
+			pAttachType->InheritDestruction = true;
+			pAttachType->RespawnAtCreation = true;
+			pAttachType->RespawnDelay = -1;
+
+			// Position: Image.FLH overrides ExtraFireN.FLH, which overrides the art FLH.
+			CoordStruct flh;
+
+			if (pWeaponExt->ExtraFire_Image_FLHs[i].isset())
+				flh = pWeaponExt->ExtraFire_Image_FLHs[i].Get();
+			else if (pWeaponExt->ExtraFire_FLHs[i].isset())
+				flh = pWeaponExt->ExtraFire_FLHs[i].Get();
+			else
+				flh = pType->GetWeapon(slot, true).FLH;
+
+			const bool isOnTurret = pWeaponExt->ExtraFire_Image_OnTurrets[i].isset()
+				? pWeaponExt->ExtraFire_Image_OnTurrets[i].Get()
+				: pWeaponExt->ExtraFire_OnTurret[i];
+
+			const int rotationAdjust = pWeaponExt->ExtraFire_Image_RotationAdjusts[i];
+
+			TechnoTypeExt::ExtData::AttachmentDataEntry entry;
+			entry.Type = AttachmentTypeClass::FindIndex("EXTRAFIREMOUNT");
+			entry.TechnoType = TechnoTypeClass::FindIndex(pUnitType->ID);
+			entry.FLH = flh;
+			entry.IsOnTurret = isOnTurret;
+			entry.RotationAdjust = static_cast<DirType>(rotationAdjust < 0 ? 0 : (rotationAdjust > 0xFF ? 0xFF : rotationAdjust));
+			_snprintf_s(entry.ID.data(), static_cast<size_t>(PhobosFixedString<32>::Size), _TRUNCATE,
+				"%s%d_%d", ExtraFireMountIDPrefix, slot, i);
+
+			pTypeExt->AttachmentData.push_back(entry);
+		}
+	}
+}
+
+bool TechnoExt::IsExtraFireMount(TechnoClass* pThis)
+{
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+
+	if (!pExt || !pExt->ParentAttachment)
+		return false;
+
+	auto const pData = pExt->ParentAttachment->Data;
+
+	return pData && strncmp(pData->ID, ExtraFireMountIDPrefix, strlen(ExtraFireMountIDPrefix)) == 0;
+}
+
+TechnoClass* TechnoExt::GetExtraFireMountChild(TechnoExt::ExtData* pExt, int slot, int entry)
+{
+	char id[0x20];
+	_snprintf_s(id, _TRUNCATE, "%s%d_%d", ExtraFireMountIDPrefix, slot, entry);
+
+	for (auto const& pAttachment : pExt->ChildAttachments)
+	{
+		if (pAttachment->Child && pAttachment->Data && strcmp(pAttachment->Data->ID, id) == 0)
+			return pAttachment->Child;
+	}
+
+	return nullptr;
+}
+
 bool TechnoExt::IsVirtualUnit(TechnoClass* pThis)
 {
 	auto const& pExt = TechnoExt::ExtMap.Find(pThis);

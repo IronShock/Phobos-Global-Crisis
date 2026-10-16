@@ -18,6 +18,8 @@
 
 class BulletClass;
 class WeaponTypeClass;
+class AircraftClass;
+class AircraftTypeClass;
 
 class TechnoExt
 {
@@ -27,6 +29,13 @@ public:
 	static constexpr DWORD Canary = 0x55555555;
 	static constexpr size_t ExtPointerOffset = 0x34C;
 	static constexpr bool ShouldConsiderInvalidatePointer = true;
+
+	// ExtraFire runtime state is indexed by a stable key, slot * ExtraFirePerSlot + entry,
+	// so it cannot desync when a unit changes type or veterancy rank (which changes which
+	// parent weapon, and therefore how many ExtraFire entries, a slot contributes).
+	// ExtraFirePerSlot must match WeaponTypeExt::MaxExtraFire (asserted in Body.Update.cpp).
+	static constexpr int ExtraFirePerSlot = 16;
+	static constexpr int ExtraFireMaxEntries = TechnoTypeClass::MaxWeapons * ExtraFirePerSlot;
 
 	static void ClearPathfindingCaches();
 
@@ -149,12 +158,17 @@ public:
 		bool NextChainBurstRearm;
 
 		// ExtraFire: autonomous additional weapons attached to this unit's weapons.
-		// Indexed by a running flat index over (weapon slot, extra fire index).
-		// Cooldowns are serialized; own targets are transient and invalidated on pointer changes.
+		// Indexed by the stable key slot * TechnoExt::ExtraFirePerSlot + entry index.
+		// Cooldowns and burst counters are serialized; own targets are transient and
+		// invalidated on pointer changes.
 		std::vector<CDTimerClass> ExtraFireCooldowns;
 		std::vector<AbstractClass*> ExtraFireOwnTargets;
 		std::vector<int> ExtraFireBurstIndex; // shots fired in the current ExtraFire burst (0 = idle)
-		int ExtraFireScanFrame; // throttle frame for ExtraFire.OwnTarget acquisition (transient)
+		std::vector<int> ExtraFireMountFacing; // per-entry mount facing in raw DirStruct units (serialized)
+		int ExtraFireScanFrame; // next frame at which ExtraFire.OwnTarget acquisition may scan (transient)
+		bool ExtraFireEmpPaused; // true while EMP/paralysis has paused the cooldowns (transient)
+		int ExtraFireParentFireFrame[TechnoTypeClass::MaxWeapons]; // last frame each slot fired; 0 = never (transient)
+		std::vector<TechnoClass*> ExtraFireScanBuffer; // scratch candidate list, reused by the shared scan (transient)
 
 		// Ares
 		std::optional<bool> AltOccupation; // if the unit marks cell occupation flags, this is set to whether it uses the "high" occupation members
@@ -238,6 +252,9 @@ public:
 			, NextChosenWeaponIndex { -1 }
 			, NextChainBurstRearm { false }
 			, ExtraFireScanFrame { 0 }
+			, ExtraFireEmpPaused { false }
+			, ExtraFireParentFireFrame { }
+			, ExtraFireScanBuffer { }
 			
 		{ }
 
@@ -324,6 +341,9 @@ public:
 	static bool HasRadioLinkWithDock(TechnoClass* pThis);
 
 	static CoordStruct GetFLHAbsoluteCoords(TechnoClass* pThis, CoordStruct flh, bool turretFLH = false);
+
+	// ExtraFire mount: body transform rotated by the mount's own facing, no turret offset.
+	static CoordStruct GetMountAbsoluteCoords(TechnoClass* pThis, CoordStruct flh, DirStruct mountFacing);
 	static void InitializeShield(TechnoClass* pThis);
 
 	static CoordStruct GetBurstFLH(TechnoClass* pThis, int weaponIndex, bool& FLHFound);
@@ -343,6 +363,13 @@ public:
 
 	static bool IsAttached(TechnoClass* pThis);
 	static bool IsVirtualUnit(TechnoClass* pThis);
+
+	// ExtraFire mounts: a voxel ExtraFireN.Image is rendered by making it an attachment child
+	// unit of the parent (the engine draws voxels itself), so the type data is extended with
+	// one generated attachment entry per voxel-Image ExtraFire entry.
+	static void EnsureExtraFireMounts(TechnoTypeClass* pType);
+	static bool IsExtraFireMount(TechnoClass* pThis);
+	static TechnoClass* GetExtraFireMountChild(ExtData* pExt, int slot, int entry);
 	static bool HasAttachmentLoco(FootClass* pThis); // FIXME shouldn't be here
 	static bool DoesntOccupyCellAsChild(TechnoClass* pThis);
 	static bool IsChildOf(TechnoClass* pThis, TechnoClass* pParent, bool deep = true);
@@ -364,6 +391,17 @@ public:
 	static double GetCurrentFirepowerMultiplier(TechnoClass* pThis);
 	static void DrawSelfHealPips(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);
 	static void DrawInsignia(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);
+	static void DrawExtraFireMounts(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);
+
+	// Vanilla AircraftClass::Draw is voxel-only; aircraft using an SHP image are drawn here.
+	static void DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType);
+
+	// Aircraft with no voxel have a null MainVoxel.HVA, which the engine divides by before it
+	// can bail out. Give them a valid HVA so that division cannot crash.
+	static void EnsureAircraftHVA(TechnoTypeClass* pType);
+
+	// One-shot per aircraft type diagnostic for the SHP drawing path.
+	static void LogAircraftSHPOnce(AircraftClass* pThis, AircraftTypeClass* pType);
 	static void ApplyGainedSelfHeal(TechnoClass* pThis);
 	static void SyncInvulnerability(TechnoClass* pFrom, TechnoClass* pTo);
 	static CoordStruct PassengerKickOutLocation(TechnoClass* pThis, FootClass* pPassenger, int maxAttempts);

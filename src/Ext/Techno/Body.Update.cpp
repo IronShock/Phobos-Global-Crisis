@@ -1,6 +1,10 @@
 // methods used in TechnoClass_AI hooks or anything similar
 #include "Body.h"
 
+#include <algorithm>
+#include <utility>
+#include <tuple>
+
 #include <SessionClass.h>
 #include <SpawnManagerClass.h>
 #include <ParticleSystemClass.h>
@@ -10,6 +14,7 @@
 #include <Kamikaze.h>
 #include <JumpjetLocomotionClass.h>
 #include <FlyLocomotionClass.h>
+#include <UnitTypeClass.h>
 
 #include <Ext/Anim/Body.h>
 #include <Ext/Bullet/Body.h>
@@ -1408,8 +1413,101 @@ void TechnoExt::ExtData::UpdateRecountBurst()
 // ExtraFire: autonomously fire additional weapons attached to this unit's weapons.
 // Each extra weapon tracks its own ROF cooldown, independent of the shared RearmTimer,
 // so it fires on its own schedule alongside the unit's normal weapons.
-// Max facing difference (raw DirStruct units, ~2.8 degrees) tolerated by ExtraFire.CheckFacing.
-static constexpr int ExtraFireFacingTolerance = 0x200;
+static_assert(TechnoExt::ExtraFirePerSlot == WeaponTypeExt::MaxExtraFire,
+	"TechnoExt::ExtraFirePerSlot must match WeaponTypeExt::MaxExtraFire for stable ExtraFire indexing.");
+
+namespace
+{
+	// An ExtraFire entry is only usable if the weapon exists and can create a projectile.
+	inline bool IsExtraFireUsable(WeaponTypeClass* pExtra)
+	{
+		return pExtra && !pExtra->NeverUse && pExtra->Projectile && pExtra->Warhead;
+	}
+
+	// Effective range of an ExtraFire entry: its own override, else the extra weapon's own
+	// range, further clamped to the parent weapon's range by CheckParentRange.
+	inline int GetExtraFireRange(WeaponTypeExt::ExtData* pParentExt, int i,
+		WeaponTypeClass* pExtra, TechnoClass* pThis, int parentRange)
+	{
+		int range = pParentExt->ExtraFire_Ranges[i].isset()
+			? static_cast<int>(pParentExt->ExtraFire_Ranges[i].Get())
+			: WeaponTypeExt::GetRangeWithModifiers(pExtra, pThis);
+
+		if (pParentExt->ExtraFire_CheckParentRange[i])
+			range = Math::min(range, parentRange);
+
+		return range;
+	}
+
+	// TEMPORARY diagnostic: one log line per (techno, entry) telling why an entry did or did
+	// not fire, so a stuck entry can be identified without guessing.
+	struct ExtraFireLogEntry
+	{
+		TechnoClass* Techno;
+		int Index;
+		const char* Reason;
+	};
+
+	// Transition diagnostic: each (techno, entry) logs only when its outcome changes, which
+	// gives a readable timeline of what actually happens across an ordered attack.
+	void LogExtraFireOnce(TechnoClass* pThis, int index, const char* pReason, int a = 0, int b = 0)
+	{
+		// [GC] Off by default: this is called per techno per extra-fire entry per frame and
+		// the de-duplication scan below is a linear search over an ever-growing vector.
+		if (!Phobos::Config::DebugGCDiagnostics)
+			return;
+
+		static std::vector<ExtraFireLogEntry> logged;
+
+		for (auto& entry : logged)
+		{
+			if (entry.Techno == pThis && entry.Index == index)
+			{
+				if (entry.Reason == pReason)
+					return;
+
+				entry.Reason = pReason;
+
+				auto const pType = pThis->GetTechnoType();
+
+				Debug::Log("[ExtraFire] %s idx %d: %s (a=%d b=%d)", pType ? pType->ID : "?", index, pReason, a, b);
+				return;
+			}
+		}
+
+		logged.push_back(ExtraFireLogEntry { pThis, index, pReason });
+
+		auto const pType = pThis->GetTechnoType();
+
+		Debug::Log("[ExtraFire] %s idx %d: %s (a=%d b=%d)", pType ? pType->ID : "?", index, pReason, a, b);
+	}
+
+	// Staggers OwnTarget acquisition of different technos inside the scan interval so a
+	// large army does not walk the whole techno array on the very same frame.
+	inline int GetExtraFireScanPhase(TechnoClass* pThis)
+	{
+		return static_cast<int>((reinterpret_cast<size_t>(pThis) >> 5) % 12u);
+	}
+
+	// ExtraFire.Image.Muzzle: the muzzle of the attached model itself, i.e. that model type's
+	// own art primary fire FLH plus the turret offset that moves it out to the barrel. Elite
+	// firers prefer the model's elite FLH, matching how the game treats that type.
+	inline CoordStruct GetExtraFireModelMuzzle(WeaponTypeExt::ExtData* pParentExt, int i, bool isElite)
+	{
+		auto const pUnitType = static_cast<UnitTypeClass*>(pParentExt->GetExtraFireImageType(i));
+
+		if (!pUnitType)
+			return CoordStruct::Empty;
+
+		auto const& weaponStruct = (isElite && pUnitType->EliteWeapon[0].WeaponType)
+			? pUnitType->EliteWeapon[0]
+			: pUnitType->Weapon[0];
+
+		auto const pTurretOffset = TechnoTypeExt::ExtMap.Find(pUnitType)->TurretOffset.GetEx();
+
+		return weaponStruct.FLH + CoordStruct { pTurretOffset->X, pTurretOffset->Y, pTurretOffset->Z };
+	}
+}
 
 void TechnoExt::ExtData::UpdateExtraFire()
 {
@@ -1419,27 +1517,33 @@ void TechnoExt::ExtData::UpdateExtraFire()
 	if (!pType || !pThis->IsAlive || pThis->InLimbo)
 		return;
 
+	// EMP / paralysis: freeze the cooldowns rather than letting them keep ticking down.
 	if (pThis->IsParalyzed() || pThis->IsUnderEMP())
-		return;
-
-	// Fast reject: does any weapon of this type declare an ExtraFire?
-	bool any = false;
-
-	for (int i = 0; i < TechnoTypeClass::MaxWeapons && !any; ++i)
 	{
-		for (int elite = 0; elite < 2; ++elite)
+		if (!this->ExtraFireEmpPaused)
 		{
-			auto const pWeapon = pType->GetWeapon(i, elite != 0).WeaponType;
+			for (auto& cooldown : this->ExtraFireCooldowns)
+				cooldown.Pause();
 
-			if (pWeapon && WeaponTypeExt::ExtMap.Find(pWeapon)->ExtraFire_Weapons.size() > 0)
-			{
-				any = true;
-				break;
-			}
+			this->ExtraFireEmpPaused = true;
 		}
+
+		return;
 	}
 
-	if (!any)
+	if (this->ExtraFireEmpPaused)
+	{
+		for (auto& cooldown : this->ExtraFireCooldowns)
+			cooldown.Resume();
+
+		this->ExtraFireEmpPaused = false;
+	}
+
+	// Fast reject: answered from a per-TechnoType cache instead of MaxWeapons * 2 container
+	// lookups for every techno on every frame.
+	const auto pTypeExt = this->TypeExtData;
+
+	if (!pTypeExt || !pTypeExt->HasExtraFire())
 	{
 		if (!this->ExtraFireCooldowns.empty())
 		{
@@ -1451,15 +1555,91 @@ void TechnoExt::ExtData::UpdateExtraFire()
 		return;
 	}
 
+	// Fixed-size runtime state, indexed by slot * ExtraFirePerSlot + entry.
+	if (this->ExtraFireCooldowns.size() < static_cast<size_t>(TechnoExt::ExtraFireMaxEntries))
+		this->ExtraFireCooldowns.resize(TechnoExt::ExtraFireMaxEntries);
+
+	if (this->ExtraFireOwnTargets.size() < static_cast<size_t>(TechnoExt::ExtraFireMaxEntries))
+		this->ExtraFireOwnTargets.resize(TechnoExt::ExtraFireMaxEntries, nullptr);
+
+	if (this->ExtraFireBurstIndex.size() < static_cast<size_t>(TechnoExt::ExtraFireMaxEntries))
+		this->ExtraFireBurstIndex.resize(TechnoExt::ExtraFireMaxEntries, 0);
+
+	// New mounts start aligned with the parent's turret rather than snapping to north.
+	if (this->ExtraFireMountFacing.size() < static_cast<size_t>(TechnoExt::ExtraFireMaxEntries))
+		this->ExtraFireMountFacing.resize(TechnoExt::ExtraFireMaxEntries, static_cast<int>(pThis->TurretFacing().Raw));
+
 	const bool isElite = pThis->Veterancy.IsElite();
 	const auto pOwner = pThis->Owner;
 	const int currentFrame = Unsorted::CurrentFrame;
 	const bool allowScan = currentFrame >= this->ExtraFireScanFrame;
 
 	if (allowScan)
-		this->ExtraFireScanFrame = currentFrame + 12;
+		this->ExtraFireScanFrame = currentFrame + 12 + GetExtraFireScanPhase(pThis);
 
-	int flat = 0;
+	// Shared OwnTarget acquisition: on a scan frame the techno array is walked at most once
+	// for this unit, regardless of how many ExtraFire entries need a target.
+	bool scanReady = false;
+
+	if (allowScan)
+	{
+		int maxScanRange = 0;
+
+		for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+		{
+			auto const pParentWeapon = TechnoTypeExt::GetWeaponType(pType, slot, isElite);
+
+			if (!pParentWeapon)
+				continue;
+
+			auto const pParentExt = WeaponTypeExt::ExtMap.Find(pParentWeapon);
+			const int count = static_cast<int>(pParentExt->ExtraFire_Weapons.size());
+
+			if (count <= 0)
+				continue;
+
+			const int parentRange = WeaponTypeExt::GetRangeWithModifiers(pParentWeapon, pThis);
+
+			for (int i = 0; i < count; ++i)
+			{
+				if (!pParentExt->ExtraFire_OwnTarget[i] && !pParentExt->ExtraFire_AutoTarget[i])
+					continue;
+
+				auto const pExtra = pParentExt->ExtraFire_Weapons[i];
+
+				if (!IsExtraFireUsable(pExtra))
+					continue;
+
+				maxScanRange = Math::max(maxScanRange,
+					GetExtraFireRange(pParentExt, i, pExtra, pThis, parentRange));
+			}
+		}
+
+		if (maxScanRange > 0)
+		{
+			this->ExtraFireScanBuffer.clear();
+
+			for (int n = 0; n < TechnoClass::Array.Count; ++n)
+			{
+				auto const pCand = TechnoClass::Array.GetItem(n);
+
+				if (!pCand || pCand == pThis || !pCand->IsAlive || pCand->InLimbo)
+					continue;
+
+				auto const pCandOwner = pCand->Owner;
+
+				// Never auto-acquire allies or neutral houses (civilian/tech buildings). An
+				// explicit attack order is still honoured - that path is separate below.
+				if (!pCandOwner || pOwner->IsAlliedWith(pCandOwner) || pCandOwner->IsNeutral())
+					continue;
+
+				if (pThis->DistanceFrom(pCand) <= maxScanRange)
+					this->ExtraFireScanBuffer.push_back(pCand);
+			}
+
+			scanReady = true;
+		}
+	}
 
 	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
 	{
@@ -1471,51 +1651,90 @@ void TechnoExt::ExtData::UpdateExtraFire()
 		auto const pParentExt = WeaponTypeExt::ExtMap.Find(pParentWeapon);
 		const int count = static_cast<int>(pParentExt->ExtraFire_Weapons.size());
 
-		if (count > 0)
+		if (count <= 0)
+			continue;
+
+		// Default FLH for this slot, rank-aware.
+		auto const& parentStruct = (isElite && pType->GetWeapon(slot, true).WeaponType)
+			? pType->GetWeapon(slot, true)
+			: pType->GetWeapon(slot, false);
+
+		// Parent weapon range (used by ExtraFireN.CheckParentRange).
+		const int parentRange = WeaponTypeExt::GetRangeWithModifiers(pParentWeapon, pThis);
+
+		for (int i = 0; i < count; ++i)
 		{
-			// Default FLH for this slot, rank-aware.
-			auto const& parentStruct = (isElite && pType->GetWeapon(slot, true).WeaponType)
-				? pType->GetWeapon(slot, true)
-				: pType->GetWeapon(slot, false);
+			const int index = slot * TechnoExt::ExtraFirePerSlot + i;
 
-			// Parent weapon range (used by ExtraFireN.CheckParentRange).
-			const int parentRange = WeaponTypeExt::GetRangeWithModifiers(pParentWeapon, pThis);
+			auto const pExtra = pParentExt->ExtraFire_Weapons[i];
 
-			for (int i = 0; i < count; ++i)
+			if (!IsExtraFireUsable(pExtra))
+				continue;
+
+			const int range = GetExtraFireRange(pParentExt, i, pExtra, pThis, parentRange);
+
+			const bool ownTarget = pParentExt->ExtraFire_OwnTarget[i];
+
+			LogExtraFireOnce(pThis, index, "entry evaluated", static_cast<int>(pThis->Target != nullptr), range);
+
+			// Determine target. Every target - ordered or self-acquired - is subject to this
+			// entry's own range, so an extra weapon never out-ranges the weapon it was declared on.
+			AbstractClass* pTarget = nullptr;
+
+			// An explicit attack order always wins, OwnTarget included: the firer's own target is
+			// adopted whenever it is a Techno, in range and usable by this weapon. Without this
+			// an OwnTarget entry would ignore attack commands completely.
+			// Target is what the attack mission is currently shooting at; ArchiveTarget is what
+			// the player actually ordered (the engine sets Target a frame or more later, and for
+			// some orders only after the mission starts). Both are honoured.
+			//
+			// Target may also be a cell or terrain - a forced attack on the ground - so any
+			// target the weapon can actually fire at is accepted. ArchiveTarget is only trusted
+			// for Technos: for harvesters and rally points it holds a cell that must not be shot
+			// at.
+			auto const tryOrderTarget = [&](AbstractClass* pOrdered, bool allowNonTechno) -> bool
 			{
-				const int index = flat + i;
+				if (!pOrdered)
+					return false;
 
-				if (index >= static_cast<int>(this->ExtraFireCooldowns.size()))
+				auto const pOrderedTechno = abstract_cast<TechnoClass*>(pOrdered);
+
+				if (!pOrderedTechno && !allowNonTechno)
+					return false;
+
+				if (pOrderedTechno
+					&& (!pOrderedTechno->Owner || pOwner->IsAlliedWith(pOrderedTechno->Owner)))
 				{
-					this->ExtraFireCooldowns.resize(index + 1);
-					this->ExtraFireOwnTargets.resize(index + 1, nullptr);
-					this->ExtraFireBurstIndex.resize(index + 1, 0);
+					return false;
 				}
 
-				if (this->ExtraFireCooldowns[index].InProgress())
-					continue;
+				if (pThis->DistanceFrom(pOrdered) > range)
+					return false;
 
-				auto const pExtra = pParentExt->ExtraFire_Weapons[i];
-
-				if (!pExtra || pExtra->NeverUse || !pExtra->Projectile || !pExtra->Warhead)
-					continue;
-
-				int range = pParentExt->ExtraFire_Ranges[i].isset()
-					? static_cast<int>(pParentExt->ExtraFire_Ranges[i].Get())
-					: WeaponTypeExt::GetRangeWithModifiers(pExtra, pThis);
-
-				// CheckParentRange overrides independent targeting: the target must also be
-				// within the parent weapon's range, so use the smaller of the two ranges.
-				if (pParentExt->ExtraFire_CheckParentRange[i])
-					range = Math::min(range, parentRange);
-
-				// Determine target.
-				AbstractClass* pTarget = nullptr;
-
-				if (pParentExt->ExtraFire_OwnTarget[i])
+				if (!TechnoExt::MultiWeaponCanFire(pThis, pOrdered, pExtra))
 				{
-					auto& cached = this->ExtraFireOwnTargets[index];
+					LogExtraFireOnce(pThis, index, "order target not fireable",
+						pThis->DistanceFrom(pOrdered), allowNonTechno ? 1 : 0);
+					return false;
+				}
 
+				pTarget = pOrdered;
+
+				LogExtraFireOnce(pThis, index, "order target adopted",
+					pThis->DistanceFrom(pOrdered), allowNonTechno ? 1 : 0);
+
+				return true;
+			};
+
+			if (!tryOrderTarget(pThis->Target, true))
+				tryOrderTarget(pThis->ArchiveTarget, false);
+
+			if (ownTarget)
+			{
+				auto& cached = this->ExtraFireOwnTargets[index];
+
+				if (!pTarget)
+				{
 					if (auto const pCachedTechno = abstract_cast<TechnoClass*>(cached))
 					{
 						if (!pCachedTechno->IsAlive || pCachedTechno->InLimbo
@@ -1530,122 +1749,271 @@ void TechnoExt::ExtData::UpdateExtraFire()
 						cached = nullptr;
 					}
 
-					if (!cached && allowScan)
-					{
-						int bestDist = INT_MAX;
-
-						for (int n = 0; n < TechnoClass::Array.Count; ++n)
-						{
-							auto const pCand = TechnoClass::Array.GetItem(n);
-
-							if (!pCand || pCand == pThis || !pCand->IsAlive || pCand->InLimbo
-								|| pOwner->IsAlliedWith(pCand->Owner))
-							{
-								continue;
-							}
-
-							const int dist = pThis->DistanceFrom(pCand);
-
-							if (dist > range || dist >= bestDist)
-								continue;
-
-							if (!TechnoExt::MultiWeaponCanFire(pThis, pCand, pExtra))
-								continue;
-
-							cached = pCand;
-							bestDist = dist;
-						}
-					}
-
 					pTarget = cached;
 				}
-				else
-				{
-					pTarget = pThis->Target;
-				}
-
-				if (!pTarget || pThis->DistanceFrom(pTarget) > range)
-					continue;
-
-				if (!TechnoExt::MultiWeaponCanFire(pThis, pTarget, pExtra))
-					continue;
-
-				const bool useAmmo = pParentExt->ExtraFire_UseAmmo[i];
-
-				if (useAmmo && pType->Ammo > 0 && pThis->Ammo <= 0)
-					continue;
-
-				// Facing gate: the turret (or body for turretless units) must actually be
-				// pointing at this target before firing. Takes precedence over OwnTarget.
-				if (pParentExt->ExtraFire_CheckFacing[i])
-				{
-					const DirStruct facing = pThis->HasTurret() ? pThis->TurretFacing() : pThis->GetRealFacing();
-					const DirStruct targetDir = pThis->GetTargetDirection(pTarget);
-
-					int diff = static_cast<int>(static_cast<short>(targetDir.Raw - facing.Raw));
-
-					if (diff < 0)
-						diff = -diff;
-
-					if (diff > ExtraFireFacingTolerance)
-						continue;
-				}
-
-				// Firing coordinates.
-				const auto flh = pParentExt->ExtraFire_FLHs[i].isset()
-					? pParentExt->ExtraFire_FLHs[i].Get()
-					: parentStruct.FLH;
-				const CoordStruct coords = TechnoExt::GetFLHAbsoluteCoords(pThis, flh, pParentExt->ExtraFire_OnTurret[i]);
-
-				int damage = pExtra->Damage;
-
-				if (damage > 0)
-					damage = static_cast<int>(damage * TechnoExt::GetCurrentFirepowerMultiplier(pThis));
-
-				if (auto const pBullet = pExtra->Projectile->CreateBullet(pTarget, pThis, damage, pExtra->Warhead, pExtra->Speed, pExtra->Bright))
-				{
-					BulletExt::SimulatedFiringUnlimbo(pBullet, pOwner, pExtra, coords, false);
-					BulletExt::SimulatedFiringEffects(pBullet, pOwner, nullptr, true, true);
-				}
-
-				// Reload / burst handling. Burst shots are spaced by Burst.Delays; the full
-				// ROF cooldown only starts after the last shot of the burst.
-				auto const pExtraExt = WeaponTypeExt::ExtMap.Find(pExtra);
-				int& burstIndex = this->ExtraFireBurstIndex[index];
-				burstIndex++;
-
-				if (pExtra->Burst > 1 && burstIndex < pExtra->Burst)
-				{
-					int delay = pExtraExt->GetBurstDelay(burstIndex);
-
-					if (delay < 0)
-						delay = ScenarioClass::Instance->Random.RandomRanged(3, 5);
-
-					if (delay < 1)
-						delay = 1;
-
-					this->ExtraFireCooldowns[index].Start(delay);
-				}
-				else
-				{
-					burstIndex = 0;
-
-					const auto rangeDelay = pExtraExt->ROF_RandomDelay.Get(RulesExt::Global()->ROF_RandomDelay);
-					int rof = static_cast<int>(pExtra->ROF * this->AE.ROFMultiplier)
-						+ GeneralUtils::GetRangedRandomOrSingleValue(rangeDelay);
-
-					if (rof < 1)
-						rof = 1;
-
-					this->ExtraFireCooldowns[index].Start(rof);
-				}
-
-				if (useAmmo && pType->Ammo > 0 && pThis->Ammo > 0)
-					pThis->Ammo--;
 			}
-		}
+			else if (!pTarget)
+			{
+				pTarget = pThis->Target;
+			}
 
-		flat += count;
+			// OwnTarget=no with AutoTarget=yes falls back to acquisition when the firer has
+			// no target of its own. OwnTarget=yes keeps the acquired target as its cache.
+			if (!pTarget && scanReady
+				&& (ownTarget || pParentExt->ExtraFire_AutoTarget[i]))
+			{
+				int bestDist = INT_MAX;
+
+				for (auto const pCand : this->ExtraFireScanBuffer)
+				{
+					const int dist = pThis->DistanceFrom(pCand);
+
+					if (dist > range || dist >= bestDist)
+						continue;
+
+					if (!TechnoExt::MultiWeaponCanFire(pThis, pCand, pExtra))
+						continue;
+
+					pTarget = pCand;
+					bestDist = dist;
+				}
+
+				if (ownTarget)
+					this->ExtraFireOwnTargets[index] = pTarget;
+			}
+
+			if (!pTarget || pThis->DistanceFrom(pTarget) > range)
+			{
+				// a: distance to the chosen target (-1 = none)
+				// b: bit 1 = the unit has a Target, bit 2 = it has an ArchiveTarget
+				LogExtraFireOnce(pThis, index, "no target / out of targetRange",
+					pTarget ? pThis->DistanceFrom(pTarget) : -1,
+					(pThis->Target != nullptr ? 1 : 0) | (pThis->ArchiveTarget != nullptr ? 2 : 0));
+				continue;
+			}
+
+			if (!TechnoExt::MultiWeaponCanFire(pThis, pTarget, pExtra))
+			{
+				LogExtraFireOnce(pThis, index, "MultiWeaponCanFire failed");
+				continue;
+			}
+
+			// The mount only keeps its own facing when Turret=yes; OwnTarget alone just picks
+			// the target and leaves the firing direction to the parent.
+			const bool hasMount = pParentExt->ExtraFire_Turrets[i];
+
+			if (hasMount)
+			{
+				// ExtraFireN.Turret.ROT uses the same units as the game's own ROT, i.e. a
+				// DirType step of 1/256 of a circle per frame, and defaults to the firer
+				// type's ROT. Both paths must therefore be scaled by 256.
+				int rotSetting = pParentExt->ExtraFire_TurretROTs[i] > 0
+					? pParentExt->ExtraFire_TurretROTs[i]
+					: static_cast<int>(pType->ROT);
+
+				if (rotSetting > 127)
+					rotSetting = 127;
+
+				const int rot = rotSetting * 256;
+
+				int& mountFacing = this->ExtraFireMountFacing[index];
+				const int diff = static_cast<short>(static_cast<unsigned short>(pThis->GetTargetDirection(pTarget).Raw)
+					- static_cast<unsigned short>(mountFacing));
+
+				if (diff != 0 && rot > 0)
+				{
+					const int remaining = diff > 0 ? diff : -diff;
+					const int step = rot < remaining ? rot : remaining;
+
+					mountFacing = (mountFacing + (diff > 0 ? step : -step)) & 0xFFFF;
+				}
+			}
+
+			// Point the visual mount child's turret. Voxel models are rendered by the engine as
+			// attachment children (see EnsureExtraFireMounts); SHP models have nothing to point.
+			if (!pParentExt->ExtraFire_ImageIDs[i].empty())
+			{
+				if (auto const pMountChild = TechnoExt::GetExtraFireMountChild(this, slot, i))
+				{
+					const DirStruct childTurretFacing = hasMount
+						? DirStruct { this->ExtraFireMountFacing[index] }
+						: pThis->TurretFacing();
+
+					pMountChild->SecondaryFacing.SetCurrent(childTurretFacing);
+				}
+			}
+
+			// Everything from here on only gates the shot itself, never the aiming above, so an
+			// independent mount keeps tracking its target while its weapon is reloading.
+			if (this->ExtraFireCooldowns[index].InProgress())
+			{
+				LogExtraFireOnce(pThis, index, "cooldown", this->ExtraFireCooldowns[index].GetTimeLeft());
+				continue;
+			}
+
+			// OnlyWhenParentFires: wait until the parent slot has fired. The parent fires
+			// later in the frame than this update runs, so the previous frame also counts.
+			// 0 means the slot has never fired yet.
+			if (pParentExt->ExtraFire_OnlyWhenParentFires[i])
+			{
+				const int parentFireFrame = this->ExtraFireParentFireFrame[slot];
+
+				if (parentFireFrame == 0 || currentFrame - parentFireFrame > 1)
+					continue;
+			}
+
+			const bool useAmmo = pParentExt->ExtraFire_UseAmmo[i];
+			const bool useAmmo2 = pParentExt->ExtraFire_UseAmmo2[i];
+
+			// Ammo gates. A type with Ammo=0 has unlimited ammo and ignores UseAmmo.
+			if (useAmmo && pType->Ammo > 0 && pThis->Ammo <= 0)
+				continue;
+
+			if (useAmmo2 && TechnoExt::HasSecondaryAmmo(pThis) && this->AmmoSecondary <= 0)
+				continue;
+
+			// Facing gate: the turret (or body for turretless units) must actually be
+			// pointing at this target before firing. Takes precedence over OwnTarget.
+			// The facing gate applies to ordered targets just as much as to self-acquired ones:
+			// without Turret=yes the entry is a coaxial weapon and may only fire while the parent
+			// turret actually points at the target, which is exactly what keeps it from firing
+			// omnidirectionally.
+			if (pParentExt->ExtraFire_CheckFacing[i])
+			{
+				// An independent mount aims with its own facing; otherwise the parent's turret
+				// (or the body, for turretless units) is what has to point at the target.
+				const DirStruct facing = hasMount
+					? DirStruct { this->ExtraFireMountFacing[index] }
+					: (pThis->HasTurret() ? pThis->TurretFacing() : pThis->GetRealFacing());
+				const DirStruct targetDir = pThis->GetTargetDirection(pTarget);
+
+				int diff = static_cast<int>(static_cast<short>(targetDir.Raw - facing.Raw));
+
+				if (diff < 0)
+					diff = -diff;
+
+				if (diff > Math::max(0, pParentExt->ExtraFire_FacingTolerances[i]))
+				{
+					// Nudge the parent turret towards the target while waiting, but only when
+					// the mount does not steer itself. The unit's own turret logic runs later
+					// in the frame and may still override this.
+					if (!hasMount && pParentExt->ExtraFire_TurnToTarget[i] && pThis->HasTurret())
+						pThis->SecondaryFacing.SetDesired(targetDir);
+
+					LogExtraFireOnce(pThis, index, "facing gate", diff, pParentExt->ExtraFire_FacingTolerances[i]);
+					continue;
+				}
+			}
+
+			// Chance gate: a failed roll does not consume the cooldown, so the next attempt
+			// happens as soon as the other gates allow it again.
+			const double chance = pParentExt->ExtraFire_Chances[i];
+
+			if (chance < 1.0 && ScenarioClass::Instance->Random.RandomDouble() >= chance)
+				continue;
+
+			// Firing coordinates.
+			auto flh = pParentExt->ExtraFire_FLHs[i].isset()
+				? pParentExt->ExtraFire_FLHs[i].Get()
+				: parentStruct.FLH;
+
+			// Image.Muzzle: fire from the attached model's own barrel instead of the parent's
+			// muzzle, so the shot and its muzzle flash come out of the visible gun. A voxel
+			// mount is an actual child unit, so the engine is asked for its muzzle; an SHP
+			// mount has no child and the offset is derived from the model's own art.
+			CoordStruct coords;
+
+			if (pParentExt->ExtraFire_Image_Muzzles[i] && !pParentExt->ExtraFire_ImageIDs[i].empty())
+			{
+				auto const pMountChild = TechnoExt::GetExtraFireMountChild(this, slot, i);
+
+				if (pMountChild && !pMountChild->InLimbo)
+				{
+					coords = pMountChild->GetFLH(0, CoordStruct::Empty);
+				}
+				else
+				{
+					// The muzzle has to be measured from wherever the model itself is drawn,
+					// i.e. the model anchor (Image.FLH -> ExtraFireN.FLH -> art FLH) plus the
+					// model type's own muzzle offset. Using the firing FLH here instead made
+					// the shot drift away from the model by exactly the Image.FLH amount.
+					CoordStruct anchor = pParentExt->ExtraFire_Image_FLHs[i].isset()
+						? pParentExt->ExtraFire_Image_FLHs[i].Get()
+						: flh;
+
+					anchor = anchor + GetExtraFireModelMuzzle(pParentExt, i, isElite);
+
+					const bool modelOnTurret = pParentExt->ExtraFire_Image_OnTurrets[i].isset()
+						? pParentExt->ExtraFire_Image_OnTurrets[i].Get()
+						: pParentExt->ExtraFire_OnTurret[i];
+
+					coords = hasMount
+						? TechnoExt::GetMountAbsoluteCoords(pThis, anchor, DirStruct { this->ExtraFireMountFacing[index] })
+						: TechnoExt::GetFLHAbsoluteCoords(pThis, anchor, modelOnTurret);
+				}
+			}
+			else
+			{
+				coords = hasMount
+					? TechnoExt::GetMountAbsoluteCoords(pThis, flh, DirStruct { this->ExtraFireMountFacing[index] })
+					: TechnoExt::GetFLHAbsoluteCoords(pThis, flh, pParentExt->ExtraFire_OnTurret[i]);
+			}
+
+			int damage = pExtra->Damage;
+
+			if (damage > 0)
+			{
+				damage = static_cast<int>(damage
+					* TechnoExt::GetCurrentFirepowerMultiplier(pThis)
+					* pParentExt->ExtraFire_DamageMultipliers[i]);
+			}
+
+			LogExtraFireOnce(pThis, index, "fired", damage, static_cast<int>(hasMount));
+
+			if (auto const pBullet = pExtra->Projectile->CreateBullet(pTarget, pThis, damage, pExtra->Warhead, pExtra->Speed, pExtra->Bright))
+			{
+				BulletExt::SimulatedFiringUnlimbo(pBullet, pOwner, pExtra, coords, false);
+				BulletExt::SimulatedFiringEffects(pBullet, pOwner, nullptr, true, true);
+			}
+
+			// Reload / burst handling. Burst shots are spaced by Burst.Delays; the full
+			// ROF cooldown only starts after the last shot of the burst.
+			auto const pExtraExt = WeaponTypeExt::ExtMap.Find(pExtra);
+			int& burstIndex = this->ExtraFireBurstIndex[index];
+			burstIndex++;
+
+			if (pExtra->Burst > 1 && burstIndex < pExtra->Burst)
+			{
+				int delay = pExtraExt->GetBurstDelay(burstIndex);
+
+				if (delay < 0)
+					delay = ScenarioClass::Instance->Random.RandomRanged(3, 5);
+
+				if (delay < 1)
+					delay = 1;
+
+				this->ExtraFireCooldowns[index].Start(delay);
+			}
+			else
+			{
+				burstIndex = 0;
+
+				const auto rangeDelay = pExtraExt->ROF_RandomDelay.Get(RulesExt::Global()->ROF_RandomDelay);
+				int rof = static_cast<int>(pExtra->ROF * this->AE.ROFMultiplier)
+					+ GeneralUtils::GetRangedRandomOrSingleValue(rangeDelay);
+
+				if (rof < 1)
+					rof = 1;
+
+				this->ExtraFireCooldowns[index].Start(rof);
+			}
+
+			if (useAmmo && pType->Ammo > 0 && pThis->Ammo > 0)
+				pThis->Ammo--;
+
+			if (useAmmo2 && TechnoExt::HasSecondaryAmmo(pThis))
+				TechnoExt::DecreaseSecondaryAmmo(pThis);
+		}
 	}
 }
 

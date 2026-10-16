@@ -39,7 +39,7 @@ DEFINE_HOOK(0x692300, DisplayClass_ProcessClickCoords_TranslateCoordinates, 0x7)
 	if (pPoint)
 	{
 		static Point2D translatedPoint;
-		translatedPoint = ZoomManager::ScreenToTactical(*pPoint);
+		translatedPoint = ZoomManager::ScreenToTacticalClamped(*pPoint);
 		R->Stack<Point2D*>(0x4, &translatedPoint);
 	}
 
@@ -57,7 +57,8 @@ DEFINE_HOOK(0x4AC310, DisplayClass_MouseLeftPress_TranslateCoordinates, 0x6)
 	if (pPoint)
 	{
 		static Point2D pressPoint;
-		pressPoint = ZoomManager::ScreenToTactical(*pPoint);
+		pressPoint = ZoomManager::ScreenToTacticalClamped(*pPoint);
+		ZoomManager::LogBandDiag("anchor", *pPoint, pressPoint);
 		R->Stack<Point2D*>(0x4, &pressPoint);
 	}
 
@@ -75,8 +76,44 @@ DEFINE_HOOK(0x4AC380, DisplayClass_UpdateDragBand_TranslateCoordinates, 0x6)
 	if (pPoint)
 	{
 		static Point2D dragPoint;
-		dragPoint = ZoomManager::ScreenToTactical(*pPoint);
+		dragPoint = ZoomManager::ScreenToTacticalClamped(*pPoint);
+		ZoomManager::LogBandDiag("drag", *pPoint, dragPoint);
 		R->Stack<Point2D*>(0x4, &dragPoint);
+	}
+
+	return 0;
+}
+
+// The selection band (0x6D5030) reads the live mouse position from WWMouseClass vtable +0x34
+// and compares it against ViewBounds as though it were already a viewport coordinate. The
+// hooks above only translate the band's anchor, so the live corner and the anchor lived in
+// different spaces and the band stopped being drawn once the drag crossed a certain range.
+// Translate the point the band just read, in place. (Translating the vtable source itself
+// crashed on other call sites, so this is deliberately kept to the one consumer we need.)
+DEFINE_HOOK(0x6D506B, TacticalClass_DrawSelectionBand_TranslateMouse, 0x6)
+{
+	if (ZoomManager::IsZoomed())
+	{
+		GET(Point2D*, pPoint, EAX);
+
+		if (pPoint)
+		{
+			// The C call clobbers the caller-saved registers; the engine's code right after
+			// this point consumes EAX (the point) and EDX (loaded by the instruction we are
+			// chaining), so put them back.
+			const DWORD eax = R->EAX();
+			const DWORD ecx = R->ECX();
+			const DWORD edx = R->EDX();
+
+			const Point2D translated = ZoomManager::ScreenToTacticalDuringRender(*pPoint);
+			const Point2D raw = *pPoint;
+			*pPoint = translated;
+			ZoomManager::LogBandDiag("live", raw, translated);
+
+			R->EAX(eax);
+			R->ECX(ecx);
+			R->EDX(edx);
+		}
 	}
 
 	return 0;
@@ -98,6 +135,9 @@ DEFINE_HOOK(0x4F4480, GScreenClass_Render_ZoomUpdate, 0x9)
 {
 	ZoomManager::ApplySurfacePatches();
 	ZoomManager::Update();
+	// Keep the offscreen surfaces / buffers and the engine's viewport cache in step
+	// with the current zoom level (no-op unless zoom-out is active).
+	ZoomManager::PrepareZoomOut();
 
 	return 0;
 }
@@ -105,12 +145,29 @@ DEFINE_HOOK(0x4F4480, GScreenClass_Render_ZoomUpdate, 0x9)
 // Render tactical terrain and units onto Alternate surface, apply scaled blit to Composite, and preserve unscaled UI
 DEFINE_HOOK(0x4F44CB, GScreenClass_Render_TacticalAndCommandBar, 0x5)
 {
-	if (!ZoomManager::IsZoomed() || !TacticalClass::Instance || !DSurface::Alternate || !DSurface::Composite)
+	if (!TacticalClass::Instance || !DSurface::Composite)
 		return 0;
 
 	GET(GScreenClass*, pGScreen, ESI);
 	GET_STACK(bool, flag, 0x08);
 	GET_STACK(bool, bDraw, 0x0C);
+
+	// Zoom-out: the engine draws R (bigger than the window) into offscreen surfaces,
+	// which are then downsampled into the window composite.
+	if (ZoomManager::IsZoomingOut())
+	{
+		if (ZoomManager::RenderZoomOutScene(flag))
+		{
+			pGScreen->Draw(bDraw ? 1 : 0);
+			return 0x4F451B;
+		}
+
+		// Pipeline unavailable -> let the engine draw normally this frame.
+		return 0;
+	}
+
+	if (!ZoomManager::IsMagnifying() || !DSurface::Alternate)
+		return 0;
 
 	TacticalClass::Instance->Render(DSurface::Composite, flag, 0);
 
@@ -130,10 +187,29 @@ DEFINE_HOOK(0x4F44CB, GScreenClass_Render_TacticalAndCommandBar, 0x5)
 	return 0x4F451B;
 }
 
+// The on-screen timers are drawn by 0x6D4B50, which Phobos already hooks twice with size 6
+// (Hooks.Timers.cpp / Phobos.cpp) - chain onto it the same way. Returning a tiny `ret 0x10`
+// gadget suppresses the draw with the original's own stack cleanup (four stack arguments);
+// ZoomManager::NoteTimerDraw stashes the arguments for the 1:1 replay at the end of the frame.
+static void __declspec(naked) ReturnArg16Gadget()
+{
+	__asm { ret 0x10 }
+}
+
+DEFINE_HOOK(0x6D4B50, ZoomOut_TimerDraw_Suppress, 0x6)
+{
+	if (ZoomManager::NoteTimerDraw(R))
+		return reinterpret_cast<uintptr_t>(&ReturnArg16Gadget);
+
+	return 0;
+}
+
 // Blit zoomed tactical map before on-screen timers (superweapon countdowns, mission timer) are rendered
 DEFINE_HOOK(0x6D4941, TacticalClass_Render_Pass2_WorldEnd, 0x6)
 {
-	if (ZoomManager::IsZoomed())
+	// Magnify only. For zoom-out the map is presented at the end of the frame: switching the
+	// viewport / render surfaces from inside the pass corrupted engine state (crashed).
+	if (ZoomManager::IsMagnifying())
 		ZoomManager::ApplyTacticalBlit();
 
 	return 0;

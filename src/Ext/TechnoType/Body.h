@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include <TechnoTypeClass.h>
 
+#include <optional>
+
 #include <Helpers/Macro.h>
 #include <Utilities/Container.h>
 #include <Utilities/TemplateDef.h>
@@ -508,6 +510,14 @@ public:
 		ValueableVector<bool> MultiWeapon_IsSecondary;
 		Valueable<int> MultiWeapon_SelectCount;
 		bool ReadMultiWeapon;
+
+		// ExtraFire: cached answer to "does any weapon slot (normal or elite) of this type
+		// declare an ExtraFire?". Computed lazily on first query and reused afterwards -
+		// a TechnoType's weapon slots never change after INI load. Transient, not
+		// serialized, so no stream layout change.
+		mutable std::optional<bool> HasExtraFireCached;
+
+		bool HasExtraFire() const;
 
 		ValueableIdx<VocClass> VoiceIFVRepair;
 		ValueableVector<int> VoiceWeaponAttacks;

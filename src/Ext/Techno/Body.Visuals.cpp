@@ -5,7 +5,12 @@
 #include <SpawnManagerClass.h>
 #include <FactoryClass.h>
 #include <SuperClass.h>
+#include <algorithm>
+#include <UnitTypeClass.h>
+#include <AircraftClass.h>
+#include <AircraftTypeClass.h>
 #include <Ext/SWType/Body.h>
+#include <Ext/WeaponType/Body.h>
 #include <Ext/House/Body.h>
 #include <Utilities/EnumFunctions.h>
 
@@ -258,6 +263,258 @@ void TechnoExt::DrawInsignia(TechnoClass* pThis, Point2D* pLocation, RectangleSt
 	}
 
 	return;
+}
+
+// The engine's aircraft draw unconditionally computes `something % Type->MainVoxel.HVA->FrameCount`
+// (0x4145BD, `idiv dword ptr [ecx+8]`) before it can bail out of the voxel path. An aircraft
+// whose art has no voxel therefore has a null HVA and crashes there. Borrowing any real HVA is
+// safe: the voxel path is abandoned immediately afterwards, so nothing but that modulo ever
+// reads it.
+// One-shot diagnostic per aircraft type so a misconfigured SHP aircraft can be identified from
+// debug.log without spamming one line per frame.
+void TechnoExt::LogAircraftSHPOnce(AircraftClass* pThis, AircraftTypeClass* pType)
+{
+	static std::vector<AircraftTypeClass*> logged;
+
+	if (std::find(logged.begin(), logged.end(), pType) != logged.end())
+		return;
+
+	logged.push_back(pType);
+
+	auto const pImage = pType->Image;
+
+	Point2D shadowPt { 0, 0 };
+
+	if (auto const pFoot = abstract_cast<FootClass*>(pThis))
+	{
+		if (auto const pLoco = pFoot->Locomotor)
+			shadowPt = pLoco->Shadow_Point();
+	}
+
+	Debug::Log("[ExtraFire] AircraftSHP %s: Image=%p Frames=%d Voxel=%d VXL=%p HVA=%p Visible=%d InLimbo=%d Drawer=%p MaxDim=%d WH=%dx%d ShadowPt=%d,%d Alt=%d",
+		pType->ID, static_cast<void*>(pImage), pImage ? static_cast<int>(pImage->Frames) : -1,
+		static_cast<int>(pType->Voxel), static_cast<void*>(pType->MainVoxel.VXL),
+		static_cast<void*>(pType->MainVoxel.HVA),
+		static_cast<int>(pThis->IsClearlyVisibleTo(HouseClass::CurrentPlayer)),
+		static_cast<int>(pThis->InLimbo), static_cast<void*>(pThis->GetDrawer()),
+		pType->MaxDimension, pImage ? static_cast<int>(pImage->Width) : -1, pImage ? static_cast<int>(pImage->Height) : -1,
+		shadowPt.X, shadowPt.Y, pThis->GetHeight());
+}
+
+void TechnoExt::EnsureAircraftHVA(TechnoTypeClass* pType)
+{
+	if (pType->MainVoxel.HVA && pType->MainVoxel.HVA->FrameCount > 0)
+		return;
+
+	for (auto const pOther : TechnoTypeClass::Array)
+	{
+		if (pOther && pOther->MainVoxel.HVA && pOther->MainVoxel.HVA->FrameCount > 0)
+		{
+			pType->MainVoxel.HVA = pOther->MainVoxel.HVA;
+			return;
+		}
+	}
+
+	Debug::Log("[ExtraFire] %s has no voxel and no HVA could be borrowed; the engine may crash drawing it.", pType->ID);
+}
+
+// Vanilla AircraftClass::Draw only has a voxel path - it returns immediately when the type
+// has no Voxel flag or no loaded VXL - so an aircraft that uses an SHP image is never drawn
+// by the engine. Draw it here instead: the shadow first, then the body.
+void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
+{
+	auto const pImage = pType->Image;
+
+	if (!pImage || pImage->Frames <= 0)
+		return;
+
+	if (pThis->InLimbo)
+		return;
+
+	if (pThis->CloakState == CloakState::Cloaked || pThis->CloakState == CloakState::Cloaking)
+		return;
+
+	if (!pThis->IsClearlyVisibleTo(HouseClass::CurrentPlayer))
+		return;
+
+	ConvertClass* pDrawer = pThis->GetDrawer();
+
+	if (!pDrawer)
+		return;
+
+	// 32 facings with the same 45 degree offset the existing SHP body draws use.
+	const int facing = Math::clamp(
+		static_cast<int>(pThis->PrimaryFacing.Current().GetFacing<32>(4)),
+		0, static_cast<int>(pImage->Frames) - 1);
+
+	// DSurface::Temp draws in tactical client space, so the object has to be projected with
+	// CoordsToClient (CoordsToScreen - TacticalPos). Using the plain screen projection places
+	// the shape at a TacticalPos offset, i.e. off the viewport.
+	const CoordStruct renderCoords = pThis->GetRenderCoords();
+	const Point2D screenPoint = TacticalClass::CoordsToScreen(renderCoords);
+	const Point2D drawPoint = screenPoint - TacticalClass::Instance->TacticalPos;
+	const int zAdjust = pThis->GetZAdjustment() - 2;
+
+	// The engine only registers an object as clickable from inside the voxel path it bails out
+	// of for a voxel-less type, so the SHP aircraft has to be registered here or it cannot be
+	// selected. AddSelectable expects *client* coordinates - it adds TacticalPos itself and
+	// silently drops anything outside the screen bounds.
+	TacticalClass::Instance->AddSelectable(pThis, drawPoint.X, drawPoint.Y);
+
+	// Shadow: the engine's own shadow offset when the locomotor supplies one, otherwise the
+	// screen drop caused by the object's altitude. FlyLocomotionClass does not override
+	// Shadow_Point (only Jumpjet does, via a vtable patch), so a flying aircraft gets {0,0} and
+	// its shadow would sit exactly under the body and be covered - i.e. invisible. Projecting
+	// the position onto Z=0 gives the fallback drop.
+	Point2D shadowOffset { 0, 0 };
+
+	if (auto const pFoot = abstract_cast<FootClass*>(pThis))
+	{
+		if (auto const pLoco = pFoot->Locomotor)
+			shadowOffset = pLoco->Shadow_Point();
+	}
+
+	if (shadowOffset.X == 0 && shadowOffset.Y == 0)
+	{
+		const Point2D groundPoint = TacticalClass::CoordsToScreen(CoordStruct { renderCoords.X, renderCoords.Y, 0 });
+		shadowOffset = groundPoint - screenPoint;
+	}
+
+	if (shadowOffset.X != 0 || shadowOffset.Y != 0)
+	{
+		Point2D shadowPos = drawPoint + shadowOffset;
+
+		DSurface::Temp->DrawSHP(pDrawer, pImage, facing, &shadowPos, &DSurface::ViewBounds,
+			BlitterFlags::bf_400 | BlitterFlags::Darken | BlitterFlags::Centered,
+			0, zAdjust - 1, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
+	}
+
+	Point2D bodyPos = drawPoint;
+
+	DSurface::Temp->DrawSHP(pDrawer, pImage, facing, &bodyPos, &DSurface::ViewBounds,
+		BlitterFlags::Flat | BlitterFlags::Alpha | BlitterFlags::Centered,
+		0, zAdjust, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
+}
+
+// ExtraFire mounts: draw the model declared by ExtraFireN.Image at that entry's own firing
+// position. Everything about the frame comes from the referenced UnitType's own art config
+// (Facings / StandingFrames / StartStandFrame), exactly like a normal SHP vehicle body, which
+// is why the ExtraFire side deliberately has no frame keys.
+void TechnoExt::DrawExtraFireMounts(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds)
+{
+	auto const pType = pThis->GetTechnoType();
+
+	if (!pType)
+		return;
+
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	auto const pTypeExt = pExt->TypeExtData;
+
+	if (!pTypeExt || !pTypeExt->HasExtraFire())
+		return;
+
+	const bool isElite = pThis->Veterancy.IsElite();
+	const Point2D baseScreen = TacticalClass::CoordsToScreen(pThis->GetRenderCoords());
+
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+	{
+		auto const pParentWeapon = TechnoTypeExt::GetWeaponType(pType, slot, isElite);
+
+		if (!pParentWeapon)
+			continue;
+
+		auto const pParentExt = WeaponTypeExt::ExtMap.Find(pParentWeapon);
+		const int count = static_cast<int>(pParentExt->ExtraFire_Weapons.size());
+
+		if (count <= 0)
+			continue;
+
+		// Default FLH for this slot, rank-aware (mirrors UpdateExtraFire).
+		auto const& parentStruct = (isElite && pType->GetWeapon(slot, true).WeaponType)
+			? pType->GetWeapon(slot, true)
+			: pType->GetWeapon(slot, false);
+
+		for (int i = 0; i < count; ++i)
+		{
+			auto const pUnitType = static_cast<UnitTypeClass*>(pParentExt->GetExtraFireImageType(i));
+
+			if (!pUnitType || !pUnitType->Image || pUnitType->Image->Frames <= 0)
+				continue;
+
+			const int index = slot * TechnoExt::ExtraFirePerSlot + i;
+
+			if (index >= static_cast<int>(pExt->ExtraFireMountFacing.size()))
+				continue;
+
+			const bool hasMount = pParentExt->ExtraFire_Turrets[i];
+			const DirStruct mountFacing { pExt->ExtraFireMountFacing[index] };
+
+			// Model position: ExtraFireN.Image.FLH / Image.IsOnTurret override the firing FLH
+			// and OnTurret, so a model can sit somewhere other than the muzzle. Both default
+			// to the firing values, which reproduces the firing-position behaviour exactly.
+			auto const& imageFLH = pParentExt->ExtraFire_Image_FLHs[i];
+			const auto flh = imageFLH.isset()
+				? imageFLH.Get()
+				: (pParentExt->ExtraFire_FLHs[i].isset() ? pParentExt->ExtraFire_FLHs[i].Get() : parentStruct.FLH);
+
+			const bool modelOnTurret = pParentExt->ExtraFire_Image_OnTurrets[i].isset()
+				? pParentExt->ExtraFire_Image_OnTurrets[i].Get()
+				: pParentExt->ExtraFire_OnTurret[i];
+
+			const CoordStruct coords = hasMount
+				? TechnoExt::GetMountAbsoluteCoords(pThis, flh, mountFacing)
+				: TechnoExt::GetFLHAbsoluteCoords(pThis, flh, modelOnTurret);
+
+			// Which way the drawn model points: its own facing for an independent mount,
+			// otherwise the parent turret/body that the FLH transform above also used.
+			const DirStruct drawFacing = hasMount
+				? mountFacing
+				: ((modelOnTurret && pThis->HasTurret()) ? pThis->TurretFacing() : pThis->GetRealFacing());
+
+			// AttachmentN.RotationAdjust equivalent: an angular offset applied to the art
+			// itself, in units of 1/256 of a circle. Overflow wraps, like the original.
+			const DirStruct frameFacing
+			{
+				static_cast<short>(drawFacing.Raw + pParentExt->ExtraFire_Image_RotationAdjusts[i] * 256)
+			};
+
+			auto const pShape = pUnitType->Image;
+			const int facings = pUnitType->Facings > 0 ? pUnitType->Facings : 32;
+			const int standFrames = Math::max(1, pUnitType->StandingFrames);
+
+			int facingIndex = 0;
+
+			if (facings > 1)
+			{
+				// YR SHP frames are offset by 45 degrees from the DirStruct convention, hence
+				// the GetFacing<32>(4) offset (see the existing SHP body draws).
+				const int facing32 = static_cast<int>(frameFacing.GetFacing<32>(4));
+				facingIndex = facing32 * facings / 32;
+			}
+
+			const int frame = Math::clamp(pUnitType->StartStandFrame + facingIndex * standFrames,
+				0, static_cast<int>(pShape->Frames) - 1);
+
+			Point2D drawPos = *pLocation + (TacticalClass::CoordsToScreen(coords) - baseScreen);
+			drawPos += pParentExt->ExtraFire_Image_Offsets[i];
+
+			// House colour is applied the way the engine does it: by substituting the object's
+			// light convert as the drawing palette. Passing a colour scheme index as the
+			// blitter's remap argument indexes the remap tables out of bounds and crashes.
+			ConvertClass* pDrawer = FileSystem::PALETTE_PAL;
+
+			if (pParentExt->ExtraFire_Image_HouseColors[i])
+			{
+				if (auto const pRemapColour = pThis->GetRemapColour())
+					pDrawer = pRemapColour;
+			}
+
+			DSurface::Temp->DrawSHP(
+				pDrawer, pShape, frame, &drawPos, pBounds,
+				BlitterFlags::Flat | BlitterFlags::Alpha | BlitterFlags::Centered,
+				0, -2, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
+		}
+	}
 }
 
 

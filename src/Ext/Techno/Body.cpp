@@ -1040,6 +1040,7 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 	Stm.Process(this->NextChainBurstRearm);
 	Stm.Process(this->ExtraFireCooldowns);
 	Stm.Process(this->ExtraFireBurstIndex);
+	Stm.Process(this->ExtraFireMountFacing);
 }
 
 void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)

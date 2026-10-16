@@ -150,6 +150,10 @@ DEFINE_HOOK(0x6F534E, TechnoClass_DrawExtras_Insignia, 0x5)
 
 	if (pThis->VisualCharacter(false, nullptr) != VisualType::Hidden)
 	{
+		// ExtraFire mounts share this drawing pass. They are drawn before the insignia-only
+		// gate below, which must not be allowed to skip them.
+		TechnoExt::DrawExtraFireMounts(pThis, pLocation, pBounds);
+
 		if (RulesExt::Global()->DrawInsignia_OnlyOnSelected.Get() && !pThis->IsSelected && !pThis->IsMouseHovering)
 			return SkipGameCode;
 		else

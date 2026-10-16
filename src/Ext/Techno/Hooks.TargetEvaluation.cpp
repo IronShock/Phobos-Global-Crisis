@@ -189,6 +189,11 @@ DEFINE_HOOK(0x6F7E47, TechnoClass_EvaluateObject_MapZone, 0x7)
 	GET(ObjectClass*, pObject, ESI);
 	GET(const int, zone, EBP);
 
+	// ExtraFire mounts are purely visual attachment children; ExtraFire itself does the
+	// firing, so a mount must never acquire a target of its own.
+	if (TechnoExt::IsExtraFireMount(pThis))
+		return DisallowedObject;
+
 	// UrbanCombat infantry do not auto-acquire garrisoned enemy buildings. Check
 	// the candidate type first: this hook runs for every candidate object during
 	// target evaluation, so the UC type lookup is only paid for buildings.
