@@ -1,0 +1,3 @@
+[submodule "phobos"]
+	path = deps/Phobos
+	url = https://github.com/Phobos-developers/Phobos.git
