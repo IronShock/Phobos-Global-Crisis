@@ -160,6 +160,11 @@ public:
 		// seconds per map load. Turn on only when re-hunting that class of bug.
 		static bool DebugGCDiagnostics;
 
+		// [GC] Frame-time probes and CSV perf log (Debug.PerfProbe / Debug.PerfLog).
+		static bool DebugPerfProbe;
+		static bool DebugPerfLog;
+
+
 		// MO_ExperienceEnhancements port (src/MOEE/). Read from
 		// RA2MD.ini -> [Phobos] with the "MOEE." prefix.
 		static bool MOEE_MegaListCap;

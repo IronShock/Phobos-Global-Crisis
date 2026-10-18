@@ -90,18 +90,6 @@ void TechnoExt::ExtData::ApplyInterceptor()
 	if (this->IsBurrowed || !count)
 		return;
 
-	// [General]BetterPerformance: throttle the O(bullets) scan so the interceptor
-	// only re-checks every few frames. Slightly delays lock-on acquisition.
-	if (RulesExt::Global()->BetterPerformance)
-	{
-		const int currentFrame = Unsorted::CurrentFrame;
-
-		if (currentFrame < this->InterceptorScanFrame)
-			return;
-
-		this->InterceptorScanFrame = currentFrame + 4;
-	}
-
 	BulletClass* pTargetBullet = nullptr;
 	const double guardRange = pInterceptorType->GuardRange.Get(pThis);
 	const double guardRangeSq = guardRange * guardRange;

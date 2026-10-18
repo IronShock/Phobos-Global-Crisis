@@ -275,9 +275,30 @@ RightClickCommands.Debug=false
 ### Cinema mode
 Hotkey that hides the message list, superweapon timers and custom sidebar widgets.
 
-### FPS counter
-Hotkey toggles an FPS readout above the target-filter buttons. `ShowFPS` is
-force-disabled in code.
+### FPS counter / frame-time monitor
+Hotkey ("New FPS Counter", Options -> Keyboard -> Interface) cycles through
+`Off -> Simple -> Detailed -> Off`.
+
+- Simple: FPS and current frame time.
+- Detailed: 1% low / max frame time, Logic vs Render split, building
+  draw/AI time, object counts, zoom, and a 60-frame bar graph.
+
+`ShowFPS=yes` starts the overlay in Simple mode; the hotkey still cycles it.
+The overlay is client-side only (no simulation or sync impact).
+
+```ini
+[Phobos]                     ; RA2MD.INI
+ShowFPS=yes
+
+; Frame-time probes and CSV log for profiling (default off).
+Debug.PerfProbe=no
+Debug.PerfLog=no
+```
+
+`Debug.PerfProbe` enables the QPC probes on `BuildingClass::Draw`,
+`BuildingClass::AI` and `TacticalClass::Render`. `Debug.PerfLog` writes
+`debug\perf.csv` every 300 frames (FPS, frame/logic/render ms, building draw
+and AI time, object counts, zoom, camera position).
 
 ### Game timer
 Hotkey toggles the "Operation Time Elapsed" display.
@@ -507,14 +528,6 @@ cell.
 ```ini
 [General]
 MissileSpawnAttackCell=no
-```
-
-### BetterPerformance
-Throttles interceptor/shield scans and reuses pip buffers.
-
-```ini
-[General]
-BetterPerformance=no
 ```
 
 ---
@@ -757,9 +770,8 @@ crashes. Debug-log only.
 
 - **Quicksave hotkey command** was removed; campaign persistence on exit is now
   handled by *Continue game on exit*.
-- **FPS config `ShowFPS`** and **`SaveGameOnScenarioStart`** are read but
-  hard-forced off in code (the FPS overlay is hotkey-driven; the scenario-start
-  autosave caused a multi-second freeze).
+- **`SaveGameOnScenarioStart`** is read but hard-forced off in code (the
+  scenario-start autosave caused a multi-second freeze).
 
 ---
 
@@ -950,7 +962,7 @@ out the original project.
 `AIDirectionalArmor`, `AIDirectionalArmor.Chance`, `AIDirectionalArmor.Delay`,
 `AttachmentTopLayerMinHeight`, `AttachmentUndergroundLayerMaxHeight`,
 `BattlePoints`, `BattlePoints.DefaultValue`, `BattlePoints.DefaultFriendlyValue`,
-`BetterPerformance`, `CanBeBuiltOnOverlay.Remove`,
+`CanBeBuiltOnOverlay.Remove`,
 `DisableLoadGame.Difficulty`, `DisableSaveGame.Difficulty`,
 `ExtendedAircraftMissions`, `LockGameSpeed.Difficulty`,
 `MissileSpawnAttackCell`, `MovePositionIndicator.ShowEnemy`,

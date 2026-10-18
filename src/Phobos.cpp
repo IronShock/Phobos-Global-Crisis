@@ -19,7 +19,7 @@
 #include <RadBeam.h>
 #include <New/Entity/FilterButtonClass.h>
 #include <New/Entity/AttachmentClass.h>
-#include <FPSCounter.h>
+#include <Misc/PerfOverlay.h>
 #include <GameStrings.h>
 
 #ifndef IS_RELEASE_VER
@@ -274,6 +274,8 @@ DEFINE_HOOK(0x683E7F, ScenarioClass_Start_Optimizations, 0x7)
 {
 	Debug::Log("[Phobos] MissionResult: scenario started\n");
 
+	PerfOverlay::Reset();
+
 	Phobos::ApplyOptimizations();
 	RulesExt::ApplyRemoveShroudGlobally();
 
@@ -284,7 +286,6 @@ DEFINE_HOOK(0x683E7F, ScenarioClass_Start_Optimizations, 0x7)
 // FPS overlay & Game Timer commands - self-contained in Phobos.cpp
 // ============================================================================
 
-static bool s_FPSEnabled = false;       // toggled by "New FPS Counter" hotkey
 static bool s_GameTimerEnabled = true;   // toggled by "Toggle Game Timer" hotkey
 
 // Target frame rate for each GameOptionsClass::GameSpeed value (0 = fastest .. 6 = slowest).
@@ -320,7 +321,7 @@ public:
 
 	virtual void Execute(WWKey eInput) const override
 	{
-		s_FPSEnabled = !s_FPSEnabled;
+		PerfOverlay::Toggle();
 	}
 };
 
@@ -429,6 +430,9 @@ DEFINE_HOOK(0x6D4B50, TacticalClass_DrawTimer_CinemaMode, 0x6)
 // ----------------------------------------------------------------------------
 DEFINE_HOOK(0x4F4583, GScreenClass_DrawText, 0x6)
 {
+	// Frame monitor must tick even in cinema mode; drawing is handled below.
+	PerfOverlay::OnFrame();
+
 	if (Phobos::UI::CinemaMode)
 		return 0;
 
@@ -539,48 +543,8 @@ DEFINE_HOOK(0x4F4583, GScreenClass_DrawText, 0x6)
 	// Draw the semi-transparent background box behind filter buttons.
 	FilterButtonClass::DrawBackground();
 
-	// Draw FPS counter above the background box when enabled.
-	// Left-aligned: current FPS on the left, average FPS ("Avg.") on the right.
-	if (s_FPSEnabled)
-	{
-		wchar_t fpsBuffer[0x40] {};
-		const unsigned int currentFPS = FPSCounter::CurrentFrameRate;
-		const double averageFPS = FPSCounter::GetAverageFrameRate();
-		swprintf(fpsBuffer, std::size(fpsBuffer), L"FPS: %d   Avg: %.1f",
-			static_cast<int>(currentFPS), averageFPS);
-
-		const auto pSurface = DSurface::Composite;
-		auto bounds = pSurface->GetRect();
-		auto textSize = Drawing::GetTextDimensions(fpsBuffer, { 0, 0 }, 0, 2, 0);
-
-		// Geometry matches FilterButtonClass::InitButtons / DrawBackground
-		constexpr int startX = 5;
-		constexpr int padding = 4;
-		const int bgX = startX - padding;
-		const int bgY = pSurface->GetHeight() - 65 - padding;
-
-		// Left-aligned position above background box
-		const int fpsX = bgX + 3;  // 3px left padding
-		const int fpsY = bgY - textSize.Height - 2;
-
-		// Semi-transparent background for FPS text
-		ColorStruct fpsBlack { 0x0, 0x0, 0x0 };
-		RectangleStruct fpsRect = {
-			fpsX - 3,
-			fpsY - 1,
-			textSize.Width + 6,
-			textSize.Height + 2
-		};
-		pSurface->FillRectTrans(&fpsRect, &fpsBlack, 40);
-
-		// Draw FPS text left-aligned (no Center flag)
-		Point2D fpsPos { fpsX, fpsY };
-		const COLORREF textColor = Drawing::RGB_To_Int(ColorStruct(255, 255, 255));
-		constexpr TextPrintType printType =
-			TextPrintType::FullShadow | TextPrintType::Point8 |
-			TextPrintType::Background;
-		pSurface->DrawTextA(fpsBuffer, &bounds, &fpsPos, textColor, 0, printType);
-	}
+	// FPS / frame-time monitor (hotkey: New FPS Counter).
+	PerfOverlay::Draw();
 
 	return 0;
 }

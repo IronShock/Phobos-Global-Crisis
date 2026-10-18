@@ -301,16 +301,6 @@ FormationSpacing=512         ; integer (leptons) - spacing between vehicles
 FormationSpacingInfantry=    ; integer (leptons), default FormationSpacing / 2 (min 64)
 ```
 
-### BetterPerformance
-
-- A conservative in-game performance mode that throttles the interceptor scan, reuses a static pip-drawing buffer instead of allocating a vector per visible unit per frame, and throttles shield scans. It slightly delays lock-on/acquisition responsiveness in exchange for a lower per-frame CPU cost.
-
-In `rulesmd.ini`:
-```ini
-[General]
-BetterPerformance=no  ; boolean - enable safe performance throttles
-```
-
 ### CnCNet mission result file
 
 - On mission win/lose the engine writes `Client\MissionResult.ini` next to the game executable so the CnCNet client can award victory badges and unlock achievements. On a victory it records `Won=yes` and a `[Globals]` list of every set local/global variable with a non-zero value; on a loss it records `Won=no` only.

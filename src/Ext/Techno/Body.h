@@ -202,11 +202,6 @@ public:
 		// NOT serialized.
 		int CurrentFireBurstIndex;
 
-		// Transient - next game frame the interceptor is allowed to scan for
-		// bullets. Only used when [General]BetterPerformance=yes to throttle the
-		// O(bullets) scan. NOT serialized.
-		int InterceptorScanFrame;
-
 		// Per-weapon independent ROF cooldowns for the [WeaponType]Next= fallback chain.
 		// One entry per weapon slot; a weapon is ready when its timer is not in progress.
 		// This is what allows multiple weapons to compute/track their ROF concurrently,
@@ -312,7 +307,6 @@ public:
 
 			, CurrentFireWeaponIndex { -1 }
 			, CurrentFireBurstIndex { -1 }
-			, InterceptorScanFrame { 0 }
 			, NextChosenWeaponIndex { -1 }
 			, NextChainBurstRearm { false }
 			, ExtraFireScanFrame { 0 }

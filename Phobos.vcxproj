@@ -262,6 +262,9 @@
     <ClCompile Include="src\Misc\SyncLogging.cpp" />
     <ClCompile Include="src\Misc\ZoomManager.cpp" />
     <ClCompile Include="src\Misc\ZoomManager.Hooks.cpp" />
+    <ClCompile Include="src\Misc\PerfProbe.cpp" />
+    <ClCompile Include="src\Misc\PerfOverlay.cpp" />
+    <ClCompile Include="src\Misc\LogicAILoopGuard.cpp" />
     <ClCompile Include="src\Misc\TextScale.cpp" />
     <ClCompile Include="YRpp\StaticInits.cpp" />
   </ItemGroup>
@@ -326,6 +329,8 @@
     <ClInclude Include="src\Misc\PhobosToolTip.h" />
     <ClInclude Include="src\Misc\SyncLogging.h" />
     <ClInclude Include="src\Misc\ZoomManager.h" />
+    <ClInclude Include="src\Misc\PerfProbe.h" />
+    <ClInclude Include="src\Misc\PerfOverlay.h" />
     <ClInclude Include="src\Misc\TextScale.h" />
 
     <ClInclude Include="src\New\Entity\BannerClass.h" />

@@ -330,7 +330,6 @@ void RulesExt::ExtData::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 	this->AttackMove_UpdateTarget.Read(exINI, GameStrings::General, "AttackMove.UpdateTarget");
 	this->SmoothMove.Read(exINI, GameStrings::General, "SmoothMove");
 	this->TA_VirtualUnit.Read(exINI, GameStrings::General, "TA.VirtualUnit");
-	this->BetterPerformance.Read(exINI, GameStrings::General, "BetterPerformance");
 	this->Tiberium_CanBeBuiltOn.Read(exINI, GameStrings::General, "Tiberium.CanBeBuiltOn");
 	this->Wall_CanBeBuiltOn.Read(exINI, GameStrings::General, "Wall.CanBeBuiltOn");
 	this->Rock_CanBeBuiltOn.Read(exINI, GameStrings::General, "Rock.CanBeBuiltOn");
@@ -751,8 +750,17 @@ void RulesExt::ExtData::Serialize(T& Stm)
 		.Process(this->AttackMove_IgnoreWeaponCheck)
 		.Process(this->AttackMove_StopWhenTargetAcquired)
 		.Process(this->SmoothMove)
-		.Process(this->TA_VirtualUnit)
-		.Process(this->BetterPerformance)
+		.Process(this->TA_VirtualUnit);
+
+	// Save-stream layout placeholder for the removed BetterPerformance flag.
+	// Keeping one bool here preserves the serialized layout of existing saves;
+	// it is never read from INI and has no effect on gameplay.
+	{
+		bool removedBetterPerformance = false;
+		Stm.Process(removedBetterPerformance);
+	}
+
+	Stm
 		.Process(this->Tiberium_CanBeBuiltOn)
 		.Process(this->Wall_CanBeBuiltOn)
 		.Process(this->Rock_CanBeBuiltOn)

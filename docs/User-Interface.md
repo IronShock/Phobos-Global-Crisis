@@ -997,7 +997,7 @@ RightClickCommands.Debug=false ; boolean - log suppressed left-click actions
 
 ### FPS counter
 
-- A hotkey that toggles an FPS readout above the bottom-left target-filter buttons, showing current and average frame rate. The old `ShowFPS` config is force-disabled in code, so the counter is controlled solely by the hotkey.
+- A hotkey that cycles an FPS / frame-time monitor above the bottom-left target-filter buttons: Off -> Simple (FPS + frame time) -> Detailed (1% low, max, Logic/Render split, building draw/AI time, object counts, 60-frame graph). `ShowFPS=yes` selects the initial Simple mode; the hotkey cycles it. `Debug.PerfProbe` / `Debug.PerfLog` enable the QPC probes and the `debug\perf.csv` log.
 
 ### Game timer
 

@@ -15,6 +15,8 @@
 
 #include "Misc/BlittersFix.h"
 #include "Misc/ZoomManager.h"
+#include "Misc/PerfProbe.h"
+#include "Misc/PerfOverlay.h"
 
 #include <algorithm>
 
@@ -99,6 +101,8 @@ int Phobos::Config::TacticalZoom_ZoomOutRepaint = 1;
 bool Phobos::Config::TacticalZoom_ZoomOutKeepText = true;
 bool Phobos::Config::TacticalZoom_ZoomOutBandFix = false;
 bool Phobos::Config::DebugGCDiagnostics = false;
+bool Phobos::Config::DebugPerfProbe = false;
+bool Phobos::Config::DebugPerfLog = false;
 double Phobos::Config::TacticalZoom_Step = 0.2;
 bool Phobos::Config::TacticalZoom_Smooth = true;
 bool Phobos::Config::ShowFPS = false;
@@ -269,6 +273,9 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 
 	Phobos::Config::ToolTipDescriptions = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ToolTipDescriptions", true);
 	Phobos::Config::DebugGCDiagnostics = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.GCDiagnostics", false);
+	Phobos::Config::DebugPerfProbe = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.PerfProbe", false);
+	Phobos::Config::DebugPerfLog = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.PerfLog", false);
+	PerfProbe::Enabled = Phobos::Config::DebugPerfProbe;
 	Phobos::Config::ToolTipBlur = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ToolTipBlur", false);
 	Phobos::Config::PrioritySelectionFiltering = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "PrioritySelectionFiltering", true);
 	Phobos::Config::ShowPlacementPreview = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowPlacementPreview", true);
@@ -294,10 +301,10 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 	Phobos::Config::SuperWeaponSidebar_RequiredSignificance = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "SuperWeaponSidebar.RequiredSignificance", 0);
 	Phobos::Config::ShowGameTime = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowGameTime", true);
 	Phobos::Config::ShowGameTime_BoardOpacity = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "ShowGameTime.BoardOpacity", 40);
-	// [DISABLED] FPS counter 功能已禁用：不再从 Phobos.cfg 读取 ShowFPS，强制关闭。
-	// 这样 FilterButtonClass::DrawFPSOverlay() 与 Phobos.cpp 中的 FPS 绘制块均不会执行，
-	// 且玩家无法通过在配置文件中设置 ShowFPS=yes 重新开启。
-	Phobos::Config::ShowFPS = false;
+	// FPS / frame-time monitor. The hotkey ("New FPS Counter") cycles
+	// Off -> Simple -> Detailed -> Off; ShowFPS selects the initial state.
+	Phobos::Config::ShowFPS = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ShowFPS", false);
+	PerfOverlay::InitFromConfig(Phobos::Config::ShowFPS);
 
 	// In-game text scale. Allowed values: 1.0, 1.25, 1.5, 1.75, 2.0
 	// (step 0.25, min 1.0, max 2.0). 1.0 keeps the original size.

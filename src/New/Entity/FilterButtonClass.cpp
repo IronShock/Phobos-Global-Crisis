@@ -22,8 +22,6 @@
 
 #include <Utilities/GeneralUtils.h>
 
-#include <FPSCounter.h>
-#include <Phobos.h>
 #include <algorithm>
 #include <cmath>
 
@@ -140,11 +138,6 @@ bool FilterButtonClass::Draw(bool forced)
 
 		pSurface->DrawTextA(labels[idx], &bounds, &textPos, textColor, 0, printType);
 	}
-
-	// Draw FPS overlay after button content (ensures FPS is on top of all buttons).
-	// Uses a frame counter so it only draws once per frame regardless of how many
-	// buttons call this method.
-	DrawFPSOverlay();
 
 	return true;
 }
@@ -281,11 +274,8 @@ bool FilterButtonClass::IsFilterActiveOnSelection() const
 }
 
 // ============================================================================
-// Background + FPS display
+// Background
 // ============================================================================
-
-// Static frame counter to ensure FPS is drawn only once per frame.
-static int s_LastFPSDrawFrame = 0;
 
 void FilterButtonClass::DrawBackground()
 {
@@ -319,66 +309,6 @@ void FilterButtonClass::DrawBackground()
 	// Draw a thin border around the background
 	const COLORREF borderColor = Drawing::RGB_To_Int(ColorStruct(100, 100, 100));
 	pSurface->DrawRect(&bgRect, borderColor);
-}
-
-void FilterButtonClass::DrawFPSOverlay()
-{
-	if (!Phobos::Config::ShowFPS)
-		return;
-
-	// Only draw once per frame (buttons call Draw() in sequence)
-	const int currentFrame = Unsorted::CurrentFrame;
-	if (s_LastFPSDrawFrame == currentFrame)
-		return;
-	s_LastFPSDrawFrame = currentFrame;
-
-	const auto pSurface = DSurface::Composite;
-
-	// Geometry must match InitButtons() and DrawBackground():
-	constexpr int buttonSize = 28;
-	constexpr int gap = 3;
-	constexpr int startX = 5;
-	constexpr int padding = 4;
-
-	const int screenHeight = pSurface->GetHeight();
-	const int startY = screenHeight - 65;
-	const int buttonsWidth = ButtonCount * buttonSize + (ButtonCount - 1) * gap;
-
-	// Background rect (same as DrawBackground)
-	const int bgX = startX - padding;
-	const int bgY = startY - padding;
-	const int bgW = buttonsWidth + padding * 2;
-
-	// Format FPS text
-	wchar_t fpsBuffer[0x20] {};
-	const unsigned int fps = FPSCounter::CurrentFrameRate;
-	swprintf(fpsBuffer, std::size(fpsBuffer), L"FPS: %d", static_cast<int>(fps));
-
-	auto bounds = pSurface->GetRect();
-	auto textSize = Drawing::GetTextDimensions(fpsBuffer, { 0, 0 }, 0, 2, 0);
-
-	// Position FPS text centered above the background box.
-	// Using Center flag so X is the center point of the text.
-	const int fpsX = bgX + bgW / 2;
-	const int fpsY = bgY - textSize.Height - 2;
-
-	// Semi-transparent background for FPS text
-	ColorStruct black { 0x0, 0x0, 0x0 };
-	RectangleStruct fpsRect = {
-		fpsX - textSize.Width / 2 - 3,
-		fpsY - 1,
-		textSize.Width + 6,
-		textSize.Height + 2
-	};
-	pSurface->FillRectTrans(&fpsRect, &black, 40);
-
-	// Draw FPS text using the same rendering method as button labels
-	Point2D fpsPos { fpsX, fpsY };
-	const COLORREF textColor = Drawing::RGB_To_Int(ColorStruct(255, 255, 255));
-	constexpr TextPrintType printType =
-		TextPrintType::FullShadow | TextPrintType::Point8 |
-		TextPrintType::Background | TextPrintType::Center;
-	pSurface->DrawTextA(fpsBuffer, &bounds, &fpsPos, textColor, 0, printType);
 }
 
 // ============================================================================

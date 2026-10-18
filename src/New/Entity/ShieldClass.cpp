@@ -19,7 +19,6 @@ ShieldClass::ShieldClass()
 	, HP { 0 }
 	, Timers { }
 	, AreAnimsHidden { false }
-	, EnabledByCheckFrame { 0 }
 {
 	ShieldClass::Array.emplace_back(this);
 }
@@ -37,7 +36,6 @@ ShieldClass::ShieldClass(TechnoClass* pTechno, bool isAttached)
 	, SelfHealing_Rate_Warhead { -1 }
 	, Respawn_Rate_Warhead { -1 }
 	, IsSelfHealingEnabled { true }
-	, EnabledByCheckFrame { 0 }
 {
 	this->UpdateType();
 	this->SetHP(this->Type->InitialStrength.Get(this->Type->Strength));
@@ -508,18 +506,6 @@ void ShieldClass::EnabledByCheck()
 
 	if (enabledBy.empty())
 		return;
-
-	// [General]BetterPerformance: only re-scan the owner's buildings every few
-	// frames instead of every frame. Slightly delays self-healing toggling.
-	if (RulesExt::Global()->BetterPerformance)
-	{
-		const int currentFrame = Unsorted::CurrentFrame;
-
-		if (currentFrame < this->EnabledByCheckFrame)
-			return;
-
-		this->EnabledByCheckFrame = currentFrame + 15;
-	}
 
 	this->IsSelfHealingEnabled = false;
 

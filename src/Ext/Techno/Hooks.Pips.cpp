@@ -344,25 +344,8 @@ DEFINE_HOOK(0x70A1F6, TechnoClass_DrawPips_Tiberium, 0x6)
 	Point2D position = { offset->X, offset->Y };
 	const int totalStorage = pThis->GetTechnoType()->Storage;
 
-	// [General]BetterPerformance: reuse a static buffer instead of allocating a
-	// new vector every render frame for every visible unit. When the flag is off
-	// a fresh vector is used, preserving the original allocation behavior.
-	static std::vector<int> pipsToDraw;
-	std::vector<int> pipsToDrawLocal;
-
-	std::vector<int>* pPipsToDraw = nullptr;
-
-	if (RulesExt::Global()->BetterPerformance)
-	{
-		pipsToDraw.clear();
-		pPipsToDraw = &pipsToDraw;
-	}
-	else
-	{
-		pPipsToDraw = &pipsToDrawLocal;
-	}
-
-	auto& pipsToDrawRef = *pPipsToDraw;
+	std::vector<int> pipsToDraw;
+	auto& pipsToDrawRef = pipsToDraw;
 	pipsToDrawRef.reserve(maxPips);
 
 	bool isWeeder = false;

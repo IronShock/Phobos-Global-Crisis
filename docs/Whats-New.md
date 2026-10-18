@@ -356,7 +356,7 @@ New:
 - [Tactical time stop](User-Interface.md#tactical-time-stop), [target filter buttons](User-Interface.md#target-filter-buttons) and [center message column](User-Interface.md#center-message-column)
 - [Reverse move and toggle auto-reverse](User-Interface.md#reverse-move-and-toggle-auto-reverse), [right-click commands](User-Interface.md#right-click-commands) and [cinema mode](User-Interface.md#cinema-mode)
 - [FPS counter](User-Interface.md#fps-counter), [game timer](User-Interface.md#game-timer) and [continue game on exit](User-Interface.md#continue-game-on-exit)
-- [Formation system](Miscellanous.md#formation-system), [BetterPerformance](Miscellanous.md#betterperformance) and [CnCNet mission result file](Miscellanous.md#cncnet-mission-result-file)
+- [Formation system](Miscellanous.md#formation-system) and [CnCNet mission result file](Miscellanous.md#cncnet-mission-result-file)
 
 Vanilla fixes:
 - [Pathfinding failure throttle](Fixed-or-Improved-Logics.md#pathfinding-failure-throttle)

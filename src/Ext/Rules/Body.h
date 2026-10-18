@@ -276,11 +276,6 @@ public:
 		// virtual (unselectable, unattackable, no pathfinding).
 		Valueable<bool> TA_VirtualUnit;
 
-		// BetterPerformance: enables a set of safe performance optimizations that
-		// reduce per-frame work at the cost of slightly reduced responsiveness
-		// (e.g. throttled interceptor/shield scans).
-		Valueable<bool> BetterPerformance;
-
 		// Buildable-upon OverlayTypes (see Ext/OverlayType/Body.cpp)
 		Valueable<bool> Tiberium_CanBeBuiltOn;
 		Valueable<bool> Wall_CanBeBuiltOn;
@@ -566,7 +561,6 @@ public:
 			, AttackMove_StopWhenTargetAcquired { }
 			, SmoothMove { false }
 			, TA_VirtualUnit { false }
-			, BetterPerformance { false }
 			, Tiberium_CanBeBuiltOn { false }
 			, Wall_CanBeBuiltOn { false }
 			, Rock_CanBeBuiltOn { false }

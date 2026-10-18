@@ -55,10 +55,6 @@ public:
 	// Called from GScreenClass_DrawText (before buttons are drawn).
 	static void DrawBackground();
 
-	// Draw the FPS counter above the background box.
-	// Called from FilterButtonClass::Draw (after buttons are drawn, so FPS is on top).
-	static void DrawFPSOverlay();
-
 	// Toggle a filter via hotkey (same as clicking the button).
 	static void ToggleFilterByHotkey(int buttonIndex);
 

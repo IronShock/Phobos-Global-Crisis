@@ -132,10 +132,6 @@ private:
 	int LastBreakFrame;
 	double LastTechnoHealthRatio;
 
-	// Transient - next frame EnabledByCheck() may re-scan the owner's buildings.
-	// Only used when [General]BetterPerformance=yes. NOT serialized.
-	int EnabledByCheckFrame;
-
 	ShieldTypeClass* Type;
 
 	struct Timers
