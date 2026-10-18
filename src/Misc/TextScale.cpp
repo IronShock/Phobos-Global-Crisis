@@ -267,7 +267,11 @@ namespace
 		scaled->FontWidth = static_cast<int>(std::lround(original->FontWidth * scale));
 		scaled->BytesPerRow = newBytesPerRow;
 		scaled->Rows = newRows;
-		scaled->LineHeight = static_cast<int>(std::lround(original->LineHeight * scale));
+		// LineHeight drives text-box / message-background heights and line spacing.
+		// Scaling the original ratio (11 * 1.5 = 17) leaves it far below the glyph
+		// cell (Rows = 26), so the message background renders shorter than the text.
+		// Use the actual scaled cell height instead.
+		scaled->LineHeight = newRows;
 		scaled->GlyphCount = original->GlyphCount;
 		scaled->GlyphStride = newStride;
 		scaled->SymbolTable = symbolTable;
@@ -314,9 +318,12 @@ namespace
 		if (Unsorted::WSDialogCount != 0 || Unsorted::SpecialDialog != 0)
 			return false;
 
-		if (!DSurface::Temp || DSurface::Temp == DSurface::Sidebar)
-			return false;
-
+		// No DSurface::Temp check: it is stale during message-label measurement
+		// (TextLabelClass::Draw reads BitFont+0x1C for the background box before
+		// DrawBitFontStrings runs), so measurement and glyph drawing ended up on
+		// different font variants. The sidebar is excluded by the explicit
+		// SidebarClass::Draw push/pop hooks and by BeginSurface() on the simple
+		// text funnel, which are reliable.
 		return true;
 	}
 }
@@ -425,43 +432,17 @@ void TextScale::PopExclusion()
 }
 
 // Text entry points: refresh the active font variant before each measure/draw.
-
-DEFINE_HOOK(0x433CF0, BitFont_GetTextDimension_TextScale, 0x6)
-{
-	TextScale::Update();
-	return 0;
-}
-
-DEFINE_HOOK(0x434120, BitFont_Blit_TextScale, 0x6)
-{
-	TextScale::Update();
-	return 0;
-}
+//
+// 0x433CF0 (GetTextDimension), 0x434120 (Blit), 0x434B90 (Print), 0x434CD0
+// (DrawText) and 0x4A5EB0 (Simple_Text_Print_Wide) are owned by MOEE::VecText;
+// Syringe applies only the last hook at an address, and VecText was linked later.
+// Its handlers call TextScale::Update() (and BeginSurface/EndSurface) so scaling
+// keeps working; registering the same addresses here again would be dead entries
+// and make behaviour depend on link order.
 
 DEFINE_HOOK(0x434500, BitFont_DrawString_TextScale, 0x7)
 {
 	TextScale::Update();
-	return 0;
-}
-
-DEFINE_HOOK(0x434B90, BitText_Print_TextScale, 0x5)
-{
-	TextScale::Update();
-	return 0;
-}
-
-DEFINE_HOOK(0x434CD0, BitText_DrawText_TextScale, 0x5)
-{
-	TextScale::Update();
-	return 0;
-}
-
-// Simple_Text_Print_Wide is the funnel every DSurface::DrawText goes through.
-// The first stack argument is the target surface.
-DEFINE_HOOK(0x4A5EB0, Simple_Text_Print_Wide_TextScale, 0x7)
-{
-	GET_STACK(const Surface*, pSurface, 0x4);
-	TextScale::BeginSurface(pSurface);
 	return 0;
 }
 
@@ -502,12 +483,28 @@ DEFINE_HOOK(0x6A70C5, SidebarClass_Draw_TextScale_End, 0x5)
 DEFINE_HOOK(0x5D3A60, MessageListClass_Init_TextScale, 0x5)
 {
 	GET_STACK(int, baseHeight, 0x14);
-	g_messageListBaseHeight = baseHeight;
+	// MessageListClass::Init ignores this argument and writes Height = 0x13 (19)
+	// itself; using the passed 14 here made the row pitch 21 instead of 29 and
+	// the per-message background too short for the scaled glyphs.
+	g_messageListBaseHeight = 19;
 
 	const double factor = TextScale::GetScaleFactor();
 
 	if (factor != 1.0)
+	{
 		R->Stack<int>(0x14, static_cast<int>(std::lround(baseHeight * factor)));
+	}
 
+	return 0;
+}
+
+// TextLabelClass::Draw reads BitFont+0x1C (the line height) to size a message's
+// background box BEFORE DrawBitFontStrings triggers TextScale::Update. If the
+// previous text draw left the unscaled font active, the box is measured at 19px
+// and the glyphs are then drawn scaled (24px), so the text spills out of the box.
+// Refresh the font variant at the very start of the label draw.
+DEFINE_HOOK(0x72A4A0, TextLabelClass_Draw_TextScale, 0x5)
+{
+	TextScale::Update();
 	return 0;
 }

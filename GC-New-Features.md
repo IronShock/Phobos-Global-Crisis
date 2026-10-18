@@ -90,6 +90,38 @@ AttachmentTopLayerMinHeight=500
 AttachmentUndergroundLayerMaxHeight=-256
 ```
 
+### Enhanced drive acceleration
+Time-based acceleration/deceleration for `Drive` and `AdvancedDrive`, with easing curves, calculated braking distance, minimum speed and dynamic terrain/turn/slope/load/health factors. `Acceleration.Mode=enhanced` must be set explicitly (requires `Accelerates=yes`, inherited values count).
+
+- `Acceleration.Curve` / `Deceleration.Curve` are string enums (`linear`, `ease-in`, `ease-out`, `smoothstep`), defaulting to `linear`.
+- A missing `Acceleration.Time` / `Deceleration.Time` defaults to 60 / 30 frames in enhanced mode; the legacy `AccelerationFactor` / `DeaccelerationFactor` values are not used.
+- A stationary unit starting to move always ramps from 0%, even if `SpeedPercentage` still carries a stale value. Small target changes do not restart the ramp.
+- `InitialSpeed` is the speed fraction used when a stationary unit starts moving (default 0); `MinimumSpeed` is the braking floor, not the starting speed. `BrakeDistance=-1` calculates the needed braking distance from current speed and deceleration; `>0` overrides it in leptons; `0` disables early braking. `StopDistance` is the final approach window (target becomes `MinimumSpeed`; the vanilla locomotor stops the unit) and `MinimumSpeed` replaces the vanilla 0.3 floor.
+- `TerrainSpeed.*` and `SlopeSpeedFactor` are additional multipliers on top of the vanilla `GroundType` cost. `LoadSpeedFactor`, `HealthSpeedFactor` / `HealthSpeedThreshold`, `TurnSpeedFactor`, crushing and sinking are applied before the ramp.
+- The first 120 frames of each ramp are logged unconditionally (start line plus every 10 frames), including `before`, `after`, `target` and `start`; `Debug.GCDiagnostics=true` keeps logging after that. The INI load line shows the effective times. Starting a new move order resets the ramp to 0%.
+- Only `Drive` and `AdvancedDrive` are supported. The ramp state is serialized, so older savegames are incompatible.
+
+```ini
+[SOMEVEHICLE]
+Acceleration.Mode=enhanced
+Acceleration.Time=60
+Deceleration.Time=30
+Acceleration.Curve=ease-in      ; string enum: linear | ease-in | ease-out | smoothstep
+Deceleration.Curve=ease-out     ; string enum: linear | ease-in | ease-out | smoothstep
+InitialSpeed=0.0
+MinimumSpeed=0.05
+BrakeDistance=-1
+BrakeDistance.Multiplier=1.0
+StopDistance=16
+TurnSpeedFactor=1.0
+SlopeSpeedFactor=1.0
+LoadSpeedFactor=1.0
+HealthSpeedFactor=1.0
+HealthSpeedThreshold=0.5
+TerrainSpeed.Road=1.0
+TerrainSpeed.Rough=1.0
+```
+
 ### SmoothMove
 Post-processes A* paths with greedy Bresenham string-pulling so units move as
 directly as possible instead of zig-zagging. Global with per-TechnoType override.
@@ -332,25 +364,28 @@ AIDirectionalArmor.Chance=1.0
 AIDirectionalArmor.Delay=0
 ```
 
-### Secondary ammo pool
-Independent ammo pool used by the secondary weapon.
+### Per-weapon ammo pools
+Every weapon slot can have its own ammo pool instead of draining the unit's `Ammo`. `Ammo=0` is unlimited, an unset weapon `Ammo` falls back to the unit `Ammo`, and per-slot overrides (`Weapon0.Ammo.*`, `Weapon1.Ammo.*`, ...) take priority. Elite weapons share their slot pool. Pools reload independently, and `Ammo.Cost` / `Ammo.PerBurst` control how a charge is paid for. Aircraft follow the same per-shot/per-burst rules, return when every slot is dry, and rearm at airfields.
 
 ```ini
-[SOMETECHNO]
-Ammo.Secondary=0
-Ammo.Secondary.InitialAmmo=-1
-Ammo.Secondary.Reload=-1
-Ammo.Secondary.EmptyReload=-1
-Ammo.Secondary.ReloadIncrement=1
-Ammo.Secondary.AddOnDeploy=0
-Ammo.Secondary.AutoDeployMinimumAmount=-1
-Ammo.Secondary.AutoDeployMaximumAmount=-1
-Ammo.Secondary.DeployUnlockMinimumAmount=-1
-Ammo.Secondary.DeployUnlockMaximumAmount=-1
-Ammo.Secondary.Shared=false
-Ammo.Secondary.Shared.Group=-1
-Ammo.Secondary.Offset=0,0
-```
+[SOMEWEAPON]                         ; WeaponType
+Ammo=6
+Ammo.Initial=6
+Ammo.Reload=120
+Ammo.Reload.Empty=600
+Ammo.Reload.Amount=1
+Ammo.Cost=1
+Ammo.PerBurst=no
+
+[SOMETECHNO]                         ; per-slot override
+Weapon0.Ammo=8
+Weapon0.Ammo.Initial=4
+Weapon0.Ammo.Reload=90
+Weapon0.Ammo.Reload.Empty=180
+Weapon0.Ammo.Reload.Amount=1
+Weapon0.Ammo.Cost=1
+Weapon0.Ammo.PerBurst=no
+Weapon0.```
 
 ### Secondary pip scale
 Second pip row; `PipScale` accepts a comma list (primary,secondary).
@@ -358,7 +393,7 @@ Second pip row; `PipScale` accepts a comma list (primary,secondary).
 ```ini
 [SOMETECHNO]
 PipScale=Ammo,Passengers
-PipScale2=            ; None | Ammo | Tiberium | Passengers | Power | MindControl | Ammo2
+PipScale2=            ; None | Ammo | Tiberium | Passengers | Power | MindControl
 PassengersPipSize=
 PassengersPipOffset=10,0
 ```
@@ -589,8 +624,8 @@ A weapon can declare additional weapons (`ExtraFire0`, `ExtraFire1`, ...) that t
 fires autonomously, each on its own `ROF`, alongside the weapon that declared them. Each
 extra weapon can override its firing position (`FLH`), pick its own target
 (`OwnTarget`/`AutoTarget`, with explicit attack orders always taking priority and
-neutrals never auto-acquired), use its own range, optionally consume ammo (primary or
-`Ammo.Secondary`), apply its own damage multiplier and firing chance, and optionally
+neutrals never auto-acquired), use its own range, consume ammo from its own per-weapon pool or the unit `Ammo`
+(following the normal `Ammo` fallback rules), apply its own damage multiplier and firing chance, and optionally
 require the target to be within the parent weapon's range (`CheckParentRange`).
 `Burst`/`Burst.Delays` are supported. Reload timers are frozen while the firer is
 paralysed or under EMP, and are unaffected by veterancy changes.
@@ -618,8 +653,7 @@ ExtraFire0.OnTurret=yes            ; FLH rotates with turret (default yes)
 ExtraFire0.OwnTarget=no            ; pick nearest valid enemy independently
 ExtraFire0.AutoTarget=no           ; OwnTarget=no only: acquire a target when the firer has none
 ExtraFire0.Range=                  ; acquisition range in cells (default: weapon Range)
-ExtraFire0.UseAmmo=no              ; each shot consumes 1 unit Ammo
-ExtraFire0.UseAmmo2=no             ; each shot consumes 1 unit Ammo.Secondary instead
+ExtraFire0.UseAmmo=no              ; explicit unlimited (omit to follow unit Ammo; ignored if the extra weapon has Ammo)
 ExtraFire0.CheckParentRange=no     ; target must be within parent weapon range (beats OwnTarget)
 ExtraFire0.CheckFacing=yes         ; turret/body must actually face the target (beats OwnTarget)
 ExtraFire0.FacingTolerance=512     ; CheckFacing tolerance in raw direction units (~2.8 degrees)
@@ -935,7 +969,7 @@ out the original project.
 `MovePositionIndicator`, `MovePositionIndicatorColor`
 
 ### `rulesmd.ini` → TechnoType sections
-`Ammo.Secondary*`, `Attachment<n>.*`, `AdvancedDrive*`, `AIDirectionalArmor*`,
+`Weapon<n>.Ammo*`, `Attachment<n>.*`, `AdvancedDrive*`, `AIDirectionalArmor*`,
 `Armor.*Multiplier`, `AttackMove*`, `BattlePoints`, `Image.Empty`,
 `PassengersPipOffset`, `PassengersPipSize`, `PenetratesTransport*`, `PipScale`,
 `PipScale2`, `ShowMovePositionIndicator`, `SmoothMove`, `UrbanCombat`,

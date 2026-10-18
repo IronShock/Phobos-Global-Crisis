@@ -211,8 +211,11 @@ int TechnoTypeExt::ExtData::SelectMultiWeapon(TechnoClass* const pThis, Abstract
 
 			if (secondaryPriority)
 			{
-				if (TechnoExt::MultiWeaponCanFire(pThis, pTargetTechno, pWeapon))
+				if (TechnoExt::MultiWeaponCanFire(pThis, pTargetTechno, pWeapon)
+					&& TechnoExt::CanFireWeaponSlot(pThis, weaponIndex, true))
+				{
 					return true;
+				}
 
 				secondaryCanTargets[weaponIndex] = true;
 				return false;
@@ -253,8 +256,11 @@ int TechnoTypeExt::ExtData::SelectMultiWeapon(TechnoClass* const pThis, Abstract
 		if (secondaryCanTargets[index])
 			continue;
 
-		if (TechnoExt::MultiWeaponCanFire(pThis, pTarget, TechnoTypeExt::GetWeaponType(pType, index, isElite)))
+		if (TechnoExt::MultiWeaponCanFire(pThis, pTarget, TechnoTypeExt::GetWeaponType(pType, index, isElite))
+			&& TechnoExt::CanFireWeaponSlot(pThis, index, true))
+		{
 			return index;
+		}
 	}
 
 	return 0;
@@ -627,8 +633,6 @@ PipScale TechnoTypeExt::ParsePipScaleString(const char* str)
         return PipScale::Power;
     if (_stricmp(str, "MindControl") == 0)
         return PipScale::MindControl;
-    if (_stricmp(str, "Ammo2") == 0)
-        return PipScale::Ammo2;
 
     return PipScale::None;
 }
@@ -686,19 +690,6 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->Ammo_DeployUnlockMinimumAmount.Read(exINI, pSection, "Ammo.DeployUnlockMinimumAmount");
 	this->Ammo_DeployUnlockMaximumAmount.Read(exINI, pSection, "Ammo.DeployUnlockMaximumAmount");
 
-	this->Ammo_Secondary.Read(exINI, pSection, "Ammo.Secondary");
-	this->Ammo_Secondary_InitialAmmo.Read(exINI, pSection, "Ammo.Secondary.InitialAmmo");
-	this->Ammo_Secondary_Reload.Read(exINI, pSection, "Ammo.Secondary.Reload");
-	this->Ammo_Secondary_EmptyReload.Read(exINI, pSection, "Ammo.Secondary.EmptyReload");
-	this->Ammo_Secondary_ReloadIncrement.Read(exINI, pSection, "Ammo.Secondary.ReloadIncrement");
-	this->Ammo_Secondary_AddOnDeploy.Read(exINI, pSection, "Ammo.Secondary.AddOnDeploy");
-	this->Ammo_Secondary_AutoDeployMinimumAmount.Read(exINI, pSection, "Ammo.Secondary.AutoDeployMinimumAmount");
-	this->Ammo_Secondary_AutoDeployMaximumAmount.Read(exINI, pSection, "Ammo.Secondary.AutoDeployMaximumAmount");
-	this->Ammo_Secondary_DeployUnlockMinimumAmount.Read(exINI, pSection, "Ammo.Secondary.DeployUnlockMinimumAmount");
-	this->Ammo_Secondary_DeployUnlockMaximumAmount.Read(exINI, pSection, "Ammo.Secondary.DeployUnlockMaximumAmount");
-	this->Ammo_Secondary_Shared.Read(exINI, pSection, "Ammo.Secondary.Shared");
-	this->Ammo_Secondary_Shared_Group.Read(exINI, pSection, "Ammo.Secondary.Shared.Group");
-	this->Ammo_Secondary_Offset.Read(exINI, pSection, "Ammo.Secondary.Offset");
 
 	this->AutoDeath_Behavior.Read(exINI, pSection, "AutoDeath.Behavior");
 	this->AutoDeath_VanishAnimation.Read(exINI, pSection, "AutoDeath.VanishAnimation");
@@ -888,6 +879,105 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 
 	this->Ammo_Shared.Read(exINI, pSection, "Ammo.Shared");
 	this->Ammo_Shared_Group.Read(exINI, pSection, "Ammo.Shared.Group");
+
+	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
+	{
+		char key[0x40];
+		auto& ammo = this->WeaponAmmo[i];
+
+		_snprintf_s(key, _TRUNCATE, "Weapon%d.Ammo", i);
+		ammo.Ammo.Read(exINI, pSection, key);
+		_snprintf_s(key, _TRUNCATE, "Weapon%d.Ammo.Initial", i);
+		ammo.Initial.Read(exINI, pSection, key);
+		_snprintf_s(key, _TRUNCATE, "Weapon%d.Ammo.Reload", i);
+		ammo.Reload.Read(exINI, pSection, key);
+		_snprintf_s(key, _TRUNCATE, "Weapon%d.Ammo.Reload.Empty", i);
+		ammo.EmptyReload.Read(exINI, pSection, key);
+		_snprintf_s(key, _TRUNCATE, "Weapon%d.Ammo.Reload.Amount", i);
+		ammo.ReloadAmount.Read(exINI, pSection, key);
+		_snprintf_s(key, _TRUNCATE, "Weapon%d.Ammo.Cost", i);
+		ammo.Cost.Read(exINI, pSection, key);
+		_snprintf_s(key, _TRUNCATE, "Weapon%d.Ammo.PerBurst", i);
+		ammo.PerBurst.Read(exINI, pSection, key);
+
+		if (ammo.Ammo.isset() || ammo.Initial.isset() || ammo.Reload.isset()
+			|| ammo.EmptyReload.isset() || ammo.ReloadAmount.isset()
+			|| ammo.Cost.isset() || ammo.PerBurst.isset())
+		{
+			Debug::Log("[WeaponAmmo] [%s] Weapon%d override: Ammo=%d Initial=%d Reload=%d Empty=%d Amount=%d Cost=%d PerBurst=%d\n",
+				pThis->ID, i,
+				ammo.Ammo.isset() ? ammo.Ammo.Get() : -999,
+				ammo.Initial.isset() ? ammo.Initial.Get() : -999,
+				ammo.Reload.isset() ? ammo.Reload.Get() : -999,
+				ammo.EmptyReload.isset() ? ammo.EmptyReload.Get() : -999,
+				ammo.ReloadAmount.isset() ? ammo.ReloadAmount.Get() : -999,
+				ammo.Cost.isset() ? ammo.Cost.Get() : -999,
+				ammo.PerBurst.isset() ? (ammo.PerBurst.Get() ? 1 : 0) : -1);
+		}
+	}
+
+	if (exINI.ReadString(pSection, "Acceleration.Mode"))
+		this->Acceleration_Mode = _stricmp(exINI.value(), "enhanced") == 0 ? 1 : 0;
+
+	// Do not force Accelerates here: changing the type-level flag can alter the
+	// engine's path/event branches before the enhanced controller is reached.
+	if (this->Acceleration_Mode.Get() == 1)
+	{
+		Debug::Log("[Accel] [%s] mode=enhanced accelTime=%d decelTime=%d initialSpeed=%.3f minSpeed=%.3f brake=%d stop=%d\n",
+			pThis->ID,
+			this->Acceleration_Time.isset() ? this->Acceleration_Time.Get() : 60,
+			this->Deceleration_Time.isset() ? this->Deceleration_Time.Get() : 30,
+			this->InitialSpeed.Get(), this->MinimumSpeed.Get(), this->BrakeDistance.Get(), this->StopDistance.Get());
+	}
+
+	const auto parseAccelerationCurve = [](const char* value) -> int
+	{
+		if (!value || !value[0])
+			return 0;
+
+		if (_stricmp(value, "easein") == 0 || _stricmp(value, "ease-in") == 0)
+			return 1;
+
+		if (_stricmp(value, "easeout") == 0 || _stricmp(value, "ease-out") == 0)
+			return 2;
+
+		if (_stricmp(value, "smoothstep") == 0)
+			return 3;
+
+		return 0;
+	};
+
+	if (exINI.ReadString(pSection, "Acceleration.Curve"))
+		this->Acceleration_Curve = parseAccelerationCurve(exINI.value());
+
+	if (exINI.ReadString(pSection, "Deceleration.Curve"))
+		this->Deceleration_Curve = parseAccelerationCurve(exINI.value());
+
+	this->Acceleration_Time.Read(exINI, pSection, "Acceleration.Time");
+	this->Deceleration_Time.Read(exINI, pSection, "Deceleration.Time");
+	this->InitialSpeed.Read(exINI, pSection, "InitialSpeed");
+	this->MinimumSpeed.Read(exINI, pSection, "MinimumSpeed");
+	this->BrakeDistance.Read(exINI, pSection, "BrakeDistance");
+	this->BrakeDistance_Multiplier.Read(exINI, pSection, "BrakeDistance.Multiplier");
+	this->StopDistance.Read(exINI, pSection, "StopDistance");
+	this->TurnSpeedFactor.Read(exINI, pSection, "TurnSpeedFactor");
+	this->SlopeSpeedFactor.Read(exINI, pSection, "SlopeSpeedFactor");
+	this->LoadSpeedFactor.Read(exINI, pSection, "LoadSpeedFactor");
+	this->HealthSpeedFactor.Read(exINI, pSection, "HealthSpeedFactor");
+	this->HealthSpeedThreshold.Read(exINI, pSection, "HealthSpeedThreshold");
+	this->TerrainSpeed_Clear.Read(exINI, pSection, "TerrainSpeed.Clear");
+	this->TerrainSpeed_Road.Read(exINI, pSection, "TerrainSpeed.Road");
+	this->TerrainSpeed_Water.Read(exINI, pSection, "TerrainSpeed.Water");
+	this->TerrainSpeed_Rock.Read(exINI, pSection, "TerrainSpeed.Rock");
+	this->TerrainSpeed_Wall.Read(exINI, pSection, "TerrainSpeed.Wall");
+	this->TerrainSpeed_Tiberium.Read(exINI, pSection, "TerrainSpeed.Tiberium");
+	this->TerrainSpeed_Beach.Read(exINI, pSection, "TerrainSpeed.Beach");
+	this->TerrainSpeed_Rough.Read(exINI, pSection, "TerrainSpeed.Rough");
+	this->TerrainSpeed_Ice.Read(exINI, pSection, "TerrainSpeed.Ice");
+	this->TerrainSpeed_Railroad.Read(exINI, pSection, "TerrainSpeed.Railroad");
+	this->TerrainSpeed_Tunnel.Read(exINI, pSection, "TerrainSpeed.Tunnel");
+	this->TerrainSpeed_Weeds.Read(exINI, pSection, "TerrainSpeed.Weeds");
+
 	this->SelfHealGainType.Read(exINI, pSection, "SelfHealGainType");
 	this->Passengers_SyncOwner.Read(exINI, pSection, "Passengers.SyncOwner");
 	this->Passengers_SyncOwner_RevertOnExit.Read(exINI, pSection, "Passengers.SyncOwner.RevertOnExit");
@@ -1468,19 +1558,6 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->Ammo_DeployUnlockMinimumAmount)
 		.Process(this->Ammo_DeployUnlockMaximumAmount)
 
-		.Process(this->Ammo_Secondary)
-		.Process(this->Ammo_Secondary_InitialAmmo)
-		.Process(this->Ammo_Secondary_Reload)
-		.Process(this->Ammo_Secondary_EmptyReload)
-		.Process(this->Ammo_Secondary_ReloadIncrement)
-		.Process(this->Ammo_Secondary_AddOnDeploy)
-		.Process(this->Ammo_Secondary_AutoDeployMinimumAmount)
-		.Process(this->Ammo_Secondary_AutoDeployMaximumAmount)
-		.Process(this->Ammo_Secondary_DeployUnlockMinimumAmount)
-		.Process(this->Ammo_Secondary_DeployUnlockMaximumAmount)
-		.Process(this->Ammo_Secondary_Shared)
-		.Process(this->Ammo_Secondary_Shared_Group)
-		.Process(this->Ammo_Secondary_Offset)
 
 		.Process(this->AutoDeath_Behavior)
 		.Process(this->AutoDeath_VanishAnimation)
@@ -1863,6 +1940,46 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->AdvancedDrive_Hover_Dampen)
 		.Process(this->AdvancedDrive_Hover_Bob)
 		;
+
+	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
+	{
+		auto& ammo = this->WeaponAmmo[i];
+		Stm.Process(ammo.Ammo)
+			.Process(ammo.Initial)
+			.Process(ammo.Reload)
+			.Process(ammo.EmptyReload)
+			.Process(ammo.ReloadAmount)
+			.Process(ammo.Cost)
+			.Process(ammo.PerBurst);
+	}
+
+	Stm.Process(this->Acceleration_Mode)
+		.Process(this->Acceleration_Time)
+		.Process(this->Deceleration_Time)
+		.Process(this->Acceleration_Curve)
+		.Process(this->Deceleration_Curve)
+		.Process(this->InitialSpeed)
+		.Process(this->MinimumSpeed)
+		.Process(this->BrakeDistance)
+		.Process(this->BrakeDistance_Multiplier)
+		.Process(this->StopDistance)
+		.Process(this->TurnSpeedFactor)
+		.Process(this->SlopeSpeedFactor)
+		.Process(this->LoadSpeedFactor)
+		.Process(this->HealthSpeedFactor)
+		.Process(this->HealthSpeedThreshold)
+		.Process(this->TerrainSpeed_Clear)
+		.Process(this->TerrainSpeed_Road)
+		.Process(this->TerrainSpeed_Water)
+		.Process(this->TerrainSpeed_Rock)
+		.Process(this->TerrainSpeed_Wall)
+		.Process(this->TerrainSpeed_Tiberium)
+		.Process(this->TerrainSpeed_Beach)
+		.Process(this->TerrainSpeed_Rough)
+		.Process(this->TerrainSpeed_Ice)
+		.Process(this->TerrainSpeed_Railroad)
+		.Process(this->TerrainSpeed_Tunnel)
+		.Process(this->TerrainSpeed_Weeds);
 }
 void TechnoTypeExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
 {

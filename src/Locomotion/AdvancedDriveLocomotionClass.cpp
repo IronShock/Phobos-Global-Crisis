@@ -176,6 +176,10 @@ bool AdvancedDriveLocomotionClass::Process()
 void AdvancedDriveLocomotionClass::Move_To(CoordStruct to)
 {
 	const auto pLinked = this->LinkedTo;
+
+	if (!pLinked)
+		return;
+
 	ReverseMoveCommandClass::LockedUnits.erase(pLinked);
 
 	// Latch the reverse lock the moment the move order is issued while the
@@ -234,6 +238,16 @@ void AdvancedDriveLocomotionClass::Stop_Moving()
 	{
 		if (pLinked->Location.DistanceFromSquared(this->HeadToCoord) < 16384)
 		{
+			const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pLinked->GetTechnoType());
+
+			if (pTypeExt->Acceleration_Mode.Get() == 1)
+			{
+				// The enhanced controller handles the final braking curve; do not
+				// clamp the target to the vanilla 0.5 floor.
+				this->TargetCoord = this->HeadToCoord;
+				return;
+			}
+
 			if (this->MovementSpeed >= 0.5)
 				this->MovementSpeed = 0.5;
 
@@ -421,25 +435,53 @@ bool AdvancedDriveLocomotionClass::MovingProcess(bool fix)
 		&& (pLinked->WhatAmI() != AbstractType::Unit
 			|| !static_cast<UnitTypeClass*>(pType)->Passive))
 	{
-		do
+		auto coords = this->TargetCoord;
+		coords.Z = MapClass::Instance.GetCellFloorHeight(coords);
+
+		if (MapClass::Instance.GetCellAt(coords)->ContainsBridge())
+			coords.Z += CellClass::BridgeHeight;
+
+		const int distance = Game::F2I((pLinked->Location - coords).Magnitude());
+
+		if (pTypeExt->Acceleration_Mode.Get() == 1)
 		{
-			auto coords = this->TargetCoord;
-			coords.Z = MapClass::Instance.GetCellFloorHeight(coords);
-
-			if (MapClass::Instance.GetCellAt(coords)->ContainsBridge())
-				coords.Z += CellClass::BridgeHeight;
-
-			const auto defaultSpeed = pLinked->GetDefaultSpeed();
-			auto speed = pLinked->SpeedPercentage;
-
-			if (Game::F2I((pLinked->Location - coords).Magnitude()) < pType->SlowdownDistance)
+			// The stock AdvancedDrive branch caps at MovementSpeed (terrain/unit
+			// dependent: 0.599..1.000 on this map). Using 1.0 made enhanced units
+			// faster than stock on the same ground, so use the engine value.
+			const double speed = TechnoExt::UpdateEnhancedAcceleration(pLinked, this->MovementSpeed, distance);
+			pLinked->SetSpeedPercentage(speed);
+		}
+		else
+		{
+			do
 			{
-				speed -= defaultSpeed * pType->DecelerationFactor;
+				const auto defaultSpeed = pLinked->GetDefaultSpeed();
+				auto speed = pLinked->SpeedPercentage;
 
-				if (speed < 0.3)
-					speed = 0.3;
+				if (distance < pType->SlowdownDistance)
+				{
+					speed -= defaultSpeed * pType->DecelerationFactor;
 
-				if (pLinked->IsCrushingSomething)
+					if (speed < 0.3)
+						speed = 0.3;
+
+					if (pLinked->IsCrushingSomething)
+					{
+						// Customized crush slow down speed
+						if (!pTypeExt->SkipCrushSlowdown && this->MovementSpeed > pTypeExt->CrushSlowdownMultiplier)
+							this->MovementSpeed = pTypeExt->CrushSlowdownMultiplier;
+
+						speed = this->MovementSpeed;
+					}
+				}
+				else if (pLinked->IsSinking)
+				{
+					speed -= defaultSpeed * 0.0015;
+
+					if (speed < 0.1)
+						speed = 0.1;
+				}
+				else if (pLinked->IsCrushingSomething)
 				{
 					// Customized crush slow down speed
 					if (!pTypeExt->SkipCrushSlowdown && this->MovementSpeed > pTypeExt->CrushSlowdownMultiplier)
@@ -447,44 +489,29 @@ bool AdvancedDriveLocomotionClass::MovingProcess(bool fix)
 
 					speed = this->MovementSpeed;
 				}
-			}
-			else if (pLinked->IsSinking)
-			{
-				speed -= defaultSpeed * 0.0015;
+				else if (pLinked->SpeedPercentage < this->MovementSpeed)
+				{
+					speed = pType->AccelerationFactor + pLinked->SpeedPercentage;
 
-				if (speed < 0.1)
-					speed = 0.1;
-			}
-			else if (pLinked->IsCrushingSomething)
-			{
-				// Customized crush slow down speed
-				if (!pTypeExt->SkipCrushSlowdown && this->MovementSpeed > pTypeExt->CrushSlowdownMultiplier)
-					this->MovementSpeed = pTypeExt->CrushSlowdownMultiplier;
+					if (this->MovementSpeed < speed)
+						speed = this->MovementSpeed;
+				}
+				else if (pLinked->SpeedPercentage > this->MovementSpeed)
+				{
+					speed = pLinked->SpeedPercentage - defaultSpeed * pType->DecelerationFactor;
 
-				speed = this->MovementSpeed;
-			}
-			else if (pLinked->SpeedPercentage < this->MovementSpeed)
-			{
-				speed = pType->AccelerationFactor + pLinked->SpeedPercentage;
+					if (this->MovementSpeed > speed)
+						speed = this->MovementSpeed;
+				}
+				else
+				{
+					break;
+				}
 
-				if (this->MovementSpeed < speed)
-					speed = this->MovementSpeed;
+				pLinked->SetSpeedPercentage(speed);
 			}
-			else if (pLinked->SpeedPercentage > this->MovementSpeed)
-			{
-				speed = pLinked->SpeedPercentage - defaultSpeed * pType->DecelerationFactor;
-
-				if (this->MovementSpeed > speed)
-					speed = this->MovementSpeed;
-			}
-			else
-			{
-				break;
-			}
-
-			pLinked->SetSpeedPercentage(speed);
+			while (false);
 		}
-		while (false);
 
 		if (pLinked->WhatAmI() == AbstractType::Unit)
 		{
@@ -1216,9 +1243,25 @@ bool AdvancedDriveLocomotionClass::PassableCheck(bool* pStop, bool force, bool c
 		speedFactor *= pTypeExt->DamagedSpeed.Get(RulesExt::Global()->DamagedSpeed);
 
 	if (this->TrackNumber >= 64)
-		pLinked->SetSpeedPercentage(speedFactor);
+	{
+		if (pTypeExt->Acceleration_Mode.Get() == 1)
+		{
+			const int distance = this->TargetCoord != CoordStruct::Empty
+				? Game::F2I((pLinked->Location - this->TargetCoord).Magnitude())
+				: -1;
+			// Same as the stock branch: speedFactor is the engine's per-cell value.
+			const double speed = TechnoExt::UpdateEnhancedAcceleration(pLinked, speedFactor, distance);
+			pLinked->SetSpeedPercentage(speed);
+		}
+		else
+		{
+			pLinked->SetSpeedPercentage(speedFactor);
+		}
+	}
 	else
+	{
 		this->MovementSpeed = speedFactor;
+	}
 
 	pLinked->TryCrushCell(nextCell, true);
 	auto nextDir = pLinked->PathDirections[1];

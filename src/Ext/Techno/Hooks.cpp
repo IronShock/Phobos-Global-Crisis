@@ -218,16 +218,8 @@ DEFINE_HOOK(0x6F42F7, TechnoClass_Init, 0x2)
 	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
 	pExt->TypeExtData = pTypeExt;
 
-	// Initialize the secondary ammo pool from Ammo.Secondary.InitialAmmo (default full).
-	if (pTypeExt->Ammo_Secondary > 0)
-	{
-		int initialAmmo = pTypeExt->Ammo_Secondary_InitialAmmo;
-
-		if (initialAmmo < 0)
-			initialAmmo = pTypeExt->Ammo_Secondary.Get();
-
-		pExt->AmmoSecondary = std::clamp(initialAmmo, 0, pTypeExt->Ammo_Secondary.Get());
-	}
+	// Initialize the per-weapon ammo pools (Ammo.Initial defaults to full).
+	TechnoExt::RefreshAllWeaponAmmo(pThis);
 
 	pExt->CurrentShieldType = pTypeExt->ShieldType;
 	pExt->InitializeAttachEffects();

@@ -890,8 +890,15 @@ void TechnoExt::GetValuesForDisplay(TechnoClass* pThis, DisplayInfoType infoType
 	}
 	case DisplayInfoType::Ammo:
 	{
-		value = pThis->Ammo;
-		maxValue = pType->Ammo;
+		const int slot = TechnoExt::GetCurrentDisplayWeaponSlot(pThis);
+		const int maxAmmo = TechnoExt::GetWeaponAmmoMax(pThis, slot);
+		int ammo = TechnoExt::GetWeaponAmmoRemaining(pThis, slot);
+
+		if (maxAmmo <= 0)
+			return;
+
+		value = Math::clamp(ammo, 0, maxAmmo);
+		maxValue = maxAmmo;
 		break;
 	}
 	case DisplayInfoType::MindControl:
@@ -979,6 +986,23 @@ void TechnoExt::GetValuesForDisplay(TechnoClass* pThis, DisplayInfoType infoType
 	}
 	case DisplayInfoType::Reload:
 	{
+		const int slot = TechnoExt::GetCurrentDisplayWeaponSlot(pThis);
+		const auto pExt = TechnoExt::ExtMap.Find(pThis);
+		TechnoExt::RefreshWeaponAmmoSlot(pThis, slot);
+		const auto& runtime = pExt->WeaponAmmo[slot];
+
+		if (runtime.HasPool)
+		{
+			if (pExt->WeaponAmmoCount[slot] >= runtime.Max)
+				return;
+
+			const auto& poolTimer = pExt->WeaponAmmoReloadTimer[slot];
+			value = poolTimer.GetTimeLeft();
+			const int delay = pExt->WeaponAmmoCount[slot] <= 0 ? runtime.EmptyReload : runtime.Reload;
+			maxValue = poolTimer.TimeLeft ? poolTimer.TimeLeft : Math::max(1, delay);
+			return;
+		}
+
 		if (pType->Ammo <= 0)
 			return;
 
@@ -1239,10 +1263,7 @@ void TechnoExt::DrawSecondaryPips(TechnoClass* pThis, Point2D* pPosition, Rectan
 
     // pPosition already points to where secondary pips should start drawing
     // (calculated by the calling Hook). Just apply the user-defined offset.
-    // When the secondary pip scale is Ammo2, Ammo.Secondary.Offset adjusts the position.
-    Point2D offset = pipScale2 == PipScale::Ammo2
-        ? pTypeExt->Ammo_Secondary_Offset.Get()
-        : pTypeExt->PassengersPipOffset.Get();
+    Point2D offset = pTypeExt->PassengersPipOffset.Get();
     Point2D position = { pPosition->X + offset.X, pPosition->Y + offset.Y };
 
     switch (pipScale2)
@@ -1305,45 +1326,12 @@ void TechnoExt::DrawSecondaryPips(TechnoClass* pThis, Point2D* pPosition, Rectan
     }
     case PipScale::Ammo:
     {
-        const int maxAmmo = pType->Ammo;
+        const int slot = TechnoExt::GetCurrentDisplayWeaponSlot(pThis);
+        const int maxAmmo = TechnoExt::GetWeaponAmmoMax(pThis, slot);
         if (maxAmmo <= 0)
             break;
 
-        const int currentAmmo = pThis->Ammo;
-
-        Point2D size = isBuilding
-            ? pTypeExt->PassengersPipSize.Get(RulesExt::Global()->Pips_Ammo_Buildings_Size)
-            : pTypeExt->PassengersPipSize.Get(RulesExt::Global()->Pips_Ammo_Size);
-
-        // Use the type's own AmmoPipFrame / EmptyAmmoPipFrame (game built-in values)
-        const int ammoFrame = pTypeExt->AmmoPipFrame;
-        const int emptyFrame = pTypeExt->EmptyAmmoPipFrame;
-
-        for (int i = 0; i < maxAmmo; i++)
-        {
-            if (i >= currentAmmo && emptyFrame < 0)
-                break;
-
-            const int frame = i >= currentAmmo ? emptyFrame : ammoFrame;
-
-            DSurface::Temp->DrawSHP(FileSystem::PALETTE_PAL, FileSystem::PIPS2_SHP,
-                frame, &position, pBounds, BlitterFlags(0x600), 0, 0,
-                ZGradient::Ground, 1000, 0, 0, 0, 0, 0);
-
-            position.X += size.X;
-            position.Y += size.Y;
-        }
-        break;
-    }
-    // Secondary ammo pool (Ammo.Secondary)
-    case PipScale::Ammo2:
-    {
-        const int maxAmmo = pTypeExt->Ammo_Secondary.Get();
-        if (maxAmmo <= 0)
-            break;
-
-        const auto pExt = TechnoExt::ExtMap.Find(pThis);
-        const int currentAmmo = pExt->AmmoSecondary;
+        const int currentAmmo = Math::clamp(TechnoExt::GetWeaponAmmoRemaining(pThis, slot), 0, maxAmmo);
 
         Point2D size = isBuilding
             ? pTypeExt->PassengersPipSize.Get(RulesExt::Global()->Pips_Ammo_Buildings_Size)

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <BulletClass.h>
 #include <WeaponTypeClass.h>
 #include <DiskLaserClass.h>
@@ -58,6 +58,16 @@ public:
 		Valueable<bool> Laser_IsSingleColor;
 		Valueable<bool> VisualScatter;
 
+		// Per-weapon ammo pool. Ammo > 0 creates a pool, Ammo = 0 means unlimited and
+		// no pool is created.
+		Nullable<int> Ammo;
+		Nullable<int> Ammo_Initial;
+		Nullable<int> Ammo_Reload;
+		Nullable<int> Ammo_Reload_Empty;
+		Valueable<int> Ammo_Reload_Amount;
+		Valueable<int> Ammo_Cost;
+		Valueable<bool> Ammo_PerBurst;
+
 		// ExtraFire: additional weapon(s) that fire autonomously alongside this weapon,
 		// each with its own independent ROF. Parallel vectors indexed by ExtraFire number.
 		ValueableVector<WeaponTypeClass*> ExtraFire_Weapons;
@@ -65,7 +75,7 @@ public:
 		std::vector<Nullable<Leptons>> ExtraFire_Ranges;
 		ValueableVector<bool> ExtraFire_OwnTarget;
 		ValueableVector<bool> ExtraFire_OnTurret;
-		ValueableVector<bool> ExtraFire_UseAmmo;
+		std::vector<Nullable<bool>> ExtraFire_UseAmmo;
 		ValueableVector<bool> ExtraFire_CheckParentRange;
 		ValueableVector<bool> ExtraFire_CheckFacing;
 
@@ -74,7 +84,6 @@ public:
 		// keep the same length and can be indexed by the same ExtraFire number.
 		ValueableVector<bool> ExtraFire_OnlyWhenParentFires; // only fire in the window in which the parent slot fired
 		ValueableVector<bool> ExtraFire_AutoTarget;          // OwnTarget=no only: acquire a target when the firer has none
-		ValueableVector<bool> ExtraFire_UseAmmo2;            // consume from the Ammo.Secondary pool
 		ValueableVector<bool> ExtraFire_TurnToTarget;        // rotate the turret towards the target while facing is not yet valid
 		ValueableVector<int> ExtraFire_FacingTolerances;     // CheckFacing tolerance in raw DirStruct units
 		ValueableVector<double> ExtraFire_DamageMultipliers; // damage multiplier applied on top of the firer's firepower
@@ -175,6 +184,13 @@ public:
 			, Next {}
 			, Laser_IsSingleColor { false }
 			, VisualScatter { false }
+			, Ammo {}
+			, Ammo_Initial {}
+			, Ammo_Reload {}
+			, Ammo_Reload_Empty {}
+			, Ammo_Reload_Amount { 1 }
+			, Ammo_Cost { 1 }
+			, Ammo_PerBurst { false }
 			, ROF_RandomDelay {}
 			, ChargeTurret_Delays {}
 			, OmniFire_TurnToTarget { false }

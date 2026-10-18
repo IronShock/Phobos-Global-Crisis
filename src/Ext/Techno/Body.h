@@ -21,6 +21,37 @@ class WeaponTypeClass;
 class AircraftClass;
 class AircraftTypeClass;
 
+// Resolved per-slot ammo settings. Populated from the unit override, the firing
+// weapon's own Ammo.* keys, and the vanilla unit Ammo fallback.
+struct WeaponAmmoConfig
+{
+	bool HasPool = false;
+	bool Infinite = false;
+	int Max = 0;
+	int Initial = -1;
+	int Reload = -1;
+	int EmptyReload = -1;
+	int ReloadAmount = 1;
+	int Cost = 1;
+	bool PerBurst = false;
+	WeaponTypeClass* Weapon = nullptr;
+};
+
+// Runtime state cached per slot so firing does not repeatedly walk the INI maps.
+struct WeaponAmmoRuntime
+{
+	bool Initialized = false;
+	bool HasPool = false;
+	bool Infinite = false;
+	int Max = 0;
+	int Reload = -1;
+	int EmptyReload = -1;
+	int ReloadAmount = 1;
+	int Cost = 1;
+	bool PerBurst = false;
+	WeaponTypeClass* Weapon = nullptr;
+};
+
 class TechnoExt
 {
 public:
@@ -128,14 +159,48 @@ public:
 	    ObjectClass* PendingAttackTarget;
 	    DWORD PendingAttackFrame;  // Frame when PendingAttackTarget was set (for expiration)
 
-		// Secondary ammo pool (Ammo.Secondary). Only meaningful when the type has Ammo.Secondary > 0.
-		int AmmoSecondary;
-		CDTimerClass SecondaryReloadTimer;
+		// Per-weapon ammo pools. One entry per weapon slot; elite weapons share the slot.
+		WeaponAmmoRuntime WeaponAmmo[TechnoTypeClass::MaxWeapons];
+		int WeaponAmmoCount[TechnoTypeClass::MaxWeapons] = {};
+		CDTimerClass WeaponAmmoReloadTimer[TechnoTypeClass::MaxWeapons];
+		bool WeaponAmmoInitialized = false;
+		bool WeaponAmmoElite = false;
+		bool WeaponAmmoLoadedFromSave = false;
+
+		// ExtraFire ammo pools, indexed by slot * ExtraFirePerSlot + entry.
+		std::vector<int> ExtraFireAmmoCount;
+		std::vector<CDTimerClass> ExtraFireAmmoReloadTimer;
+		std::vector<int> ExtraFireAmmoMax;
+		std::vector<int> ExtraFireAmmoReload;
+		std::vector<int> ExtraFireAmmoEmptyReload;
+		std::vector<int> ExtraFireAmmoReloadAmount;
+		std::vector<int> ExtraFireAmmoCost;
+		std::vector<char> ExtraFireAmmoHasPool;
+		std::vector<char> ExtraFireAmmoInfinite;
+		std::vector<char> ExtraFireAmmoUsesUnit;
+		std::vector<char> ExtraFireAmmoPerBurst;
+		std::vector<WeaponTypeClass*> ExtraFireAmmoWeapon; // cache only, not serialized
+		bool ExtraFireAmmoLoadedFromSave = false;
+
+		// Enhanced drive acceleration ramp. Serialized so a savegame resumes with the
+		// same current speed curve instead of snapping to full speed.
+		double AccelStartSpeed = 0.0;
+		double AccelTargetSpeed = 0.0;
+		int AccelStartFrame = 0;
+		bool AccelActive = false;
+		bool AccelWasMoving = false;
+
+		// Transient - last weapon slot that actually fired, used by the pip display.
+		int LastFiredWeaponSlot = -1;
 
 		// Transient - weapon index currently being fired (set by TechnoClass::Fire hook).
-		// Used to split ammo consumption between Ammo (primary) and AmmoSecondary.
+		// Used to identify the firing slot for per-weapon ammo and UI display.
 		// NOT serialized.
 		int CurrentFireWeaponIndex;
+
+		// Transient - burst index at the moment Fire was entered, used by PerBurst.
+		// NOT serialized.
+		int CurrentFireBurstIndex;
 
 		// Transient - next game frame the interceptor is allowed to scan for
 		// bullets. Only used when [General]BetterPerformance=yes to throttle the
@@ -245,9 +310,8 @@ public:
 			
 			, LastHurtFrame { 0 }
 
-			, AmmoSecondary { 0 }
-			, SecondaryReloadTimer {}
 			, CurrentFireWeaponIndex { -1 }
+			, CurrentFireBurstIndex { -1 }
 			, InterceptorScanFrame { 0 }
 			, NextChosenWeaponIndex { -1 }
 			, NextChainBurstRearm { false }
@@ -382,11 +446,36 @@ public:
 	static void Kill(TechnoClass* pThis, TechnoClass* pAttacker);
 	static void ObjectKilledBy(TechnoClass* pVictim, TechnoClass* pKiller = nullptr, HouseClass* pHouseKiller = nullptr);
 	static void UpdateSharedAmmo(TechnoClass* pThis);
-	static int GetSecondaryAmmoMax(TechnoClass* pThis);
-	static bool HasSecondaryAmmo(TechnoClass* pThis);
-	static void UpdateSecondaryReload(TechnoClass* pThis);
-	static bool IsSecondaryWeapon(TechnoClass* pThis, WeaponTypeClass* pWeapon);
-	static void DecreaseSecondaryAmmo(TechnoClass* pThis);
+
+	// Per-weapon ammo pools.
+	static void ResolveWeaponAmmoConfig(TechnoClass* pThis, int slot, WeaponAmmoConfig& out, WeaponTypeClass* pWeapon = nullptr);
+	static void RefreshWeaponAmmoSlot(TechnoClass* pThis, int slot);
+	static void RefreshAllWeaponAmmo(TechnoClass* pThis);
+	static bool CanFireWeaponSlot(TechnoClass* pThis, int slot, bool allowMidBurst = false, int costOverride = -1);
+	static bool ConsumeWeaponAmmo(TechnoClass* pThis, int slot, int amount = -1);
+	static void StartWeaponAmmoReload(TechnoClass* pThis, int slot);
+	static void UpdateWeaponAmmoReload(TechnoClass* pThis);
+	static int GetWeaponAmmoRemaining(TechnoClass* pThis, int slot);
+	static int GetWeaponAmmoMax(TechnoClass* pThis, int slot);
+	static int GetCurrentDisplayWeaponSlot(TechnoClass* pThis);
+	static bool HasAnyWeaponAmmo(TechnoClass* pThis);
+	static bool HasLegacyWeaponAmmo(TechnoClass* pThis);
+	static bool HasOwnWeaponAmmoPool(TechnoClass* pThis);
+	static void UpdateAircraftAmmoCompat(TechnoClass* pThis);
+	static bool IsAtAirfield(TechnoClass* pThis);
+
+	// Enhanced drive acceleration (Drive + AdvancedDrive only).
+	static double UpdateEnhancedAcceleration(FootClass* pThis, double targetSpeed, int distanceToTarget);
+	static void ResetAccelerationState(FootClass* pThis);
+	static double ApplyAccelerationCurve(double progress, int curve);
+	static double GetTerrainSpeedFactor(TechnoTypeExt::ExtData* pTypeExt, LandType landType);
+
+	// ExtraFire ammo pools.
+	static void RefreshExtraFireAmmoEntry(TechnoClass* pThis, int slot, int entry);
+	static bool CanFireExtraFire(TechnoClass* pThis, int index);
+	static bool ConsumeExtraFireAmmo(TechnoClass* pThis, int index);
+	static void UpdateExtraFireAmmoReload(TechnoClass* pThis);
+
 	static double GetCurrentSpeedMultiplier(FootClass* pThis);
 	static double GetCurrentFirepowerMultiplier(TechnoClass* pThis);
 	static void DrawSelfHealPips(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);

@@ -34,8 +34,12 @@ namespace MOEE::WaypointCap
 		constexpr unsigned int ADDR_WP_WARN_GO = 0x006383BAu;   // je target: set UI "at cap" state
 		constexpr unsigned int ADDR_WP_WARN_NO = 0x006383C4u;   // jne target: continue
 
-		constexpr unsigned int ADDR_WP_ORDER_IMM = 0x006391A8u; // imm32 of `cmp ebp,0x80`
 		constexpr unsigned int ADDR_WP_ORDER_CMP = 0x006391A7u; // `81 FD` opcode
+		// `81 FD imm32`: the imm32 starts after the 0xFD ModRM byte (CMP + 2),
+		// NOT at CMP + 1. Patching at +1 clobbers the ModRM and turns the compare
+		// into a bogus `add [eax], imm32`, which skips the pop ebp/pop ebx and
+		// falls into the "planner maximum" message box path.
+		constexpr unsigned int ADDR_WP_ORDER_IMM = ADDR_WP_ORDER_CMP + 2u; // 0x006391A9
 
 		constexpr unsigned int WP_VANILLA = 16u;
 		constexpr unsigned int WP_INF = 0x7FFFFFFFu;
@@ -45,6 +49,7 @@ namespace MOEE::WaypointCap
 		unsigned int WarnAt = WP_VANILLA - 1;
 		unsigned int OrderCap = 0x80u;       // planning cap in effect (per frame)
 		bool Patched = false;
+		bool SiteValid = false;
 		bool MpLogged = false;
 
 		unsigned int Cfg()
@@ -75,7 +80,13 @@ namespace MOEE::WaypointCap
 				}
 
 				Patched = true;
+				SiteValid = true;
 			}
+
+			// Never write after a failed site check: Patched is set in that path
+			// too, so the check above is skipped on later frames.
+			if (!SiteValid)
+				return false;
 
 			auto imm = reinterpret_cast<unsigned int*>(ADDR_WP_ORDER_IMM);
 
@@ -90,6 +101,13 @@ namespace MOEE::WaypointCap
 			*imm = value;
 			VirtualProtect(imm, 4, old, &old);
 			FlushInstructionCache(GetCurrentProcess(), imm, 4);
+
+			if (*imm != value)
+			{
+				Log("waypointcap", "order imm write failed (want=%u got=%u)", value, *imm);
+				return false;
+			}
+
 			return true;
 		}
 	}

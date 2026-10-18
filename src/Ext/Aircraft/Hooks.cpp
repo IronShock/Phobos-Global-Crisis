@@ -1,4 +1,4 @@
-#include <AircraftClass.h>
+﻿#include <AircraftClass.h>
 #include <EventClass.h>
 #include <FlyLocomotionClass.h>
 #include <Unsorted.h>
@@ -214,21 +214,9 @@ DEFINE_HOOK(0x418403, AircraftClass_Mission_Attack_FireAtTarget_BurstFix, 0x8)
 {
 	GET(AircraftClass*, pThis, ESI);
 
-	const auto pExt = TechnoExt::ExtMap.Find(pThis);
-
-	// Ammo.Secondary: when the secondary weapon is about to fire and a secondary
-	// ammo pool is configured, consume AmmoSecondary directly and clear
-	// ShouldLoseAmmo so the vanilla state machine (which drains Ammo at
-	// 0x418042/0x4180AD/0x418BFE/0x415071) never touches the primary pool.
-	if (TechnoExt::HasSecondaryAmmo(pThis) && pExt->CurrentAircraftWeaponIndex == 1)
-	{
-		TechnoExt::DecreaseSecondaryAmmo(pThis);
-		pThis->ShouldLoseAmmo = false;
-	}
-	else
-	{
-		pThis->ShouldLoseAmmo = true;
-	}
+	// The vanilla state machine drains Ammo at 0x418042/0x4180AD/0x418BFE/0x415071;
+	// those sites are redirected to the per-weapon pool below.
+	pThis->ShouldLoseAmmo = true;
 
 	AircraftExt::FireWeapon(pThis, pThis->Target);
 
@@ -320,7 +308,7 @@ static int GetDelay(AircraftClass* pThis, bool isLastShot)
 	auto const pWeaponExt = WeaponTypeExt::ExtMap.Find(pWeapon);
 	int delay = pWeapon->ROF;
 
-	if (isLastShot || pExt->Strafe_BombsDroppedThisRound == pWeaponExt->Strafing_Shots.Get(5) || (pWeaponExt->Strafing_UseAmmoPerShot && !pThis->Ammo))
+	if (isLastShot || pExt->Strafe_BombsDroppedThisRound == pWeaponExt->Strafing_Shots.Get(5) || (pWeaponExt->Strafing_UseAmmoPerShot && TechnoExt::GetWeaponAmmoRemaining(pThis, pExt->CurrentAircraftWeaponIndex) == 0))
 	{
 		pExt->Strafe_TargetCell = nullptr;
 		pThis->MissionStatus = (int)AirAttackStatus::FlyToPosition;
@@ -351,7 +339,7 @@ DEFINE_HOOK(0x418506, AircraftClass_Mission_Attack_Delay1B, 0x6)
 	GET(AircraftClass*, pThis, ESI);
 
 	pThis->IsLocked = true;
-	pThis->MissionStatus = pThis->Ammo > 0 ? (int)AirAttackStatus::PickAttackLocation : (int)AirAttackStatus::ReturnToBase;
+	pThis->MissionStatus = TechnoExt::HasAnyWeaponAmmo(pThis) ? (int)AirAttackStatus::PickAttackLocation : (int)AirAttackStatus::ReturnToBase;
 	R->EAX(GetDelay(pThis, false));
 
 	return 0x418539;
@@ -396,29 +384,107 @@ DEFINE_HOOK(0x418B8A, AircraftClass_Mission_Attack_Delay5, 0x6)
 	return 0x418BBA;
 }
 
-// Ammo.Secondary: aircraft do not go through TechnoClass::DecreaseAmmo (their
-// override at 0x41B900 is an empty stub). Instead they drain Ammo directly here at
-// the end of an attack run when ShouldLoseAmmo ([esi+0x6C8]) is set. Redirect that
-// drain so the secondary weapon consumes AmmoSecondary instead of Ammo.
-DEFINE_HOOK(0x418BFE, AircraftClass_LoseAmmo_Secondary, 0x6)
+// Aircraft do not go through TechnoClass::DecreaseAmmo (their override at 0x41B900
+// is an empty stub). They drain Ammo directly at the end of an attack run. The four
+// sites below are redirected to the per-weapon pool; legacy weapons keep the vanilla
+// unit Ammo drain.
+static int GetAircraftAmmoSlot(AircraftClass* pThis)
+{
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+
+	int slot = pExt->LastFiredWeaponSlot;
+
+	if (slot < 0)
+		slot = pExt->CurrentAircraftWeaponIndex;
+
+	if (slot < 0)
+		slot = pExt->CurrentFireWeaponIndex;
+
+	return slot;
+}
+
+static void AircraftLoseAmmo(AircraftClass* pThis)
+{
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	const int slot = GetAircraftAmmoSlot(pThis);
+
+	if (slot >= 0 && slot < TechnoTypeClass::MaxWeapons)
+	{
+		TechnoExt::RefreshWeaponAmmoSlot(pThis, slot);
+		auto const& runtime = pExt->WeaponAmmo[slot];
+
+		// Own-pool and explicit-infinite weapons are charged by the Fire hook (per
+		// shot or per burst). Only the legacy unit Ammo path still drains here.
+		if (runtime.HasPool || runtime.Infinite)
+			return;
+	}
+
+	// Legacy unit Ammo fallback (or an unknown slot): replicate the vanilla drain.
+	pThis->Ammo--;
+}
+
+DEFINE_HOOK(0x418042, AircraftClass_LoseAmmo_FireAtTarget, 0x6)
 {
 	GET(AircraftClass*, pThis, ESI);
 
-	if (TechnoExt::HasSecondaryAmmo(pThis))
+	AircraftLoseAmmo(pThis);
+	pThis->ShouldLoseAmmo = false;
+
+	return 0x418056;
+}
+
+DEFINE_HOOK(0x4180AD, AircraftClass_LoseAmmo_EndRun, 0x6)
+{
+	GET(AircraftClass*, pThis, ESI);
+
+	AircraftLoseAmmo(pThis);
+	pThis->ShouldLoseAmmo = false;
+
+	return 0x4180C0;
+}
+
+DEFINE_HOOK(0x415071, AircraftClass_LoseAmmo_AttackPath, 0x6)
+{
+	GET(AircraftClass*, pThis, ESI);
+
+	AircraftLoseAmmo(pThis);
+	pThis->ShouldLoseAmmo = false;
+
+	return 0x415085;
+}
+
+DEFINE_HOOK(0x418BFE, AircraftClass_LoseAmmo_Strafing, 0x6)
+{
+	GET(AircraftClass*, pThis, ESI);
+
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	const int slot = GetAircraftAmmoSlot(pThis);
+	bool hasPool = false;
+	bool infinite = false;
+
+	if (slot >= 0 && slot < TechnoTypeClass::MaxWeapons)
 	{
-		const auto pExt = TechnoExt::ExtMap.Find(pThis);
+		TechnoExt::RefreshWeaponAmmoSlot(pThis, slot);
+		hasPool = pExt->WeaponAmmo[slot].HasPool;
+		infinite = pExt->WeaponAmmo[slot].Infinite;
+	}
 
-		if (pExt->CurrentFireWeaponIndex == 1)
-		{
-			TechnoExt::DecreaseSecondaryAmmo(pThis);
+	if (hasPool)
+	{
+		AircraftLoseAmmo(pThis);
 
-			// EAX = 0 so the `cmp eax, ebx / jle` at 0x418C0A-0x418C0C skips the
-			// primary Ammo decrement. Continue at 0x418C04 so ShouldLoseAmmo
-			// ([esi+0x6C8]) still gets cleared.
-			R->EAX(0);
+		// EAX = 0 so the `cmp eax, ebx / jle` at 0x418C0A-0x418C0C skips the
+		// primary Ammo decrement. Continue at 0x418C04 so ShouldLoseAmmo
+		// ([esi+0x6C8]) still gets cleared.
+		R->EAX(0);
 
-			return 0;
-		}
+		return 0;
+	}
+
+	if (infinite)
+	{
+		R->EAX(0);
+		return 0;
 	}
 
 	// Replicate the overwritten `mov eax, dword ptr [esi + 0x2fc]`.
@@ -888,7 +954,7 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 			// Patrol target search: for team-controlled aircraft in Move mission,
 			// periodically search for nearby ground targets to attack along the patrol route.
 			// This makes patrol triggers work like attack-move for aircraft.
-			if (pThis->Team && pThis->IsInAir() && pThis->Ammo && pThis->IsArmed()
+			if (pThis->Team && pThis->IsInAir() && TechnoExt::HasAnyWeaponAmmo(pThis) && pThis->IsArmed()
 				&& !pThis->Target && !pThis->IsLocked
 				&& (pThis->GetCurrentMission() == Mission::Move || pThis->GetCurrentMission() == Mission::Patrol)
 				&& pThis->Destination)
@@ -939,7 +1005,7 @@ DEFINE_HOOK(0x41A5C7, AircraftClass_Mission_Guard_StartAreaGuard, 0x6)
 
 	const auto pArchive = pThis->ArchiveTarget;
 
-	if (!pArchive || !pThis->Ammo)
+	if (!pArchive || !TechnoExt::HasAnyWeaponAmmo(pThis))
 		return 0;
 
 	pThis->SetDestination(pArchive, true);
@@ -999,7 +1065,7 @@ DEFINE_HOOK(0x41A96C, AircraftClass_Mission_AreaGuard, 0x6)
 
 	if (const auto pArchive = pThis->ArchiveTarget)
 	{
-		if (pThis->Ammo)
+		if (TechnoExt::HasAnyWeaponAmmo(pThis))
 		{
 			auto coords = pArchive->GetCoords();
 
@@ -1072,7 +1138,7 @@ DEFINE_HOOK(0x6FA68B, TechnoClass_Update_AttackMovePaused, 0xA) // To make aircr
 
 	const bool skip = RulesExt::Global()->ExtendedAircraftMissions
 		&& pThis->WhatAmI() == AbstractType::Aircraft
-		&& (!pThis->Ammo || !pThis->IsInAir());
+		&& (!TechnoExt::HasAnyWeaponAmmo(pThis) || !pThis->IsInAir());
 
 	return skip ? SkipGameCode : 0;
 }
@@ -1159,7 +1225,7 @@ DEFINE_HOOK(0x414D4D, AircraftClass_Update_ClearTargetIfNoAmmo, 0x6)
 
 	GET(AircraftClass* const, pThis, ESI);
 
-	if (RulesExt::Global()->ExtendedAircraftMissions && !pThis->Ammo && !pThis->Airstrike && !pThis->Spawned)
+	if (RulesExt::Global()->ExtendedAircraftMissions && !TechnoExt::HasAnyWeaponAmmo(pThis) && !pThis->Airstrike && !pThis->Spawned)
 	{
 		if (!SessionClass::IsCampaign()) // To avoid AI's aircrafts team repeatedly attempting to attack the target when no ammo
 		{
@@ -1227,7 +1293,7 @@ AbstractClass* __fastcall AircraftClass_GreatestThreat(AircraftClass* pThis, voi
 {
 	// Always add weapon allowed threats so that aircraft (including team-controlled patrol aircraft)
 	// can find ground targets during GreatestThreat calls from any code path.
-	if (RulesExt::Global()->ExtendedAircraftMissions && pThis->Ammo && !pThis->Airstrike && !pThis->Spawned)
+	if (RulesExt::Global()->ExtendedAircraftMissions && TechnoExt::HasAnyWeaponAmmo(pThis) && !pThis->Airstrike && !pThis->Spawned)
 	{
 		if (const auto pPrimaryWeapon = pThis->GetWeapon(0)->WeaponType)
 			threatType |= pPrimaryWeapon->AllowedThreats();
@@ -1250,7 +1316,7 @@ DEFINE_HOOK(0x4C7403, EventClass_Execute_AircraftAreaGuard, 0x6)
 
 	if (pTechno->WhatAmI() == AbstractType::Aircraft
 		&& RulesExt::Global()->ExtendedAircraftMissions
-		&& !pTechno->Ammo)
+		&& !TechnoExt::HasAnyWeaponAmmo(pTechno))
 	{
 		// Skip assigning destination / target here.
 		R->ESI(&pThis->MegaMission.Target);
@@ -1271,7 +1337,7 @@ DEFINE_HOOK(0x4C72F2, EventClass_Execute_AircraftAreaGuard_Unlink, 0x6)
 	if (RulesExt::Global()->ExtendedAircraftMissions
 		&& pTechno->WhatAmI() == AbstractType::Aircraft
 		&& pThis->MegaMission.Mission == (char)Mission::Area_Guard
-		&& !pTechno->Ammo)
+		&& !TechnoExt::HasAnyWeaponAmmo(pTechno))
 	{
 		// If we're on dock reloading but have ammo, untether from dock and try to scan for targets.
 		return SkipGameCode;
@@ -1286,7 +1352,7 @@ DEFINE_HOOK(0x418CF3, AircraftClass_Mission_Attack_PlanningFix, 0x5)
 
 	GET(AircraftClass*, pThis, ESI);
 
-	return pThis->Ammo <= 0 || !pThis->TryNextPlanningTokenNode() ? 0 : SkipIdle;
+	return !TechnoExt::HasAnyWeaponAmmo(pThis) || !pThis->TryNextPlanningTokenNode() ? 0 : SkipIdle;
 }
 
 #pragma endregion

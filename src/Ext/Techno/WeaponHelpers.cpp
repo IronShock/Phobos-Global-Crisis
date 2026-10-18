@@ -1,4 +1,4 @@
-#include "Body.h"
+﻿#include "Body.h"
 
 #include <OverlayTypeClass.h>
 
@@ -21,6 +21,20 @@ int TechnoExt::PickWeaponIndex(TechnoClass* pThis, TechnoClass* pTargetTechno, A
 
 	auto const pWeaponTwo = pWeaponStructTwo->WeaponType;
 	auto const pSecondExt = WeaponTypeExt::ExtMap.Find(pWeaponTwo);
+
+	// Per-weapon ammo: if one slot is dry and the other still has ammo, prefer the
+	// loaded slot as long as its weapon can legally engage the target. This is what
+	// makes multi-weapon units switch instead of standing idle with a full magazine.
+	const bool oneHasAmmo = TechnoExt::CanFireWeaponSlot(pThis, weaponIndexOne, true);
+	const bool twoHasAmmo = TechnoExt::CanFireWeaponSlot(pThis, weaponIndexTwo, true);
+
+	if (pTarget && oneHasAmmo != twoHasAmmo)
+	{
+		const int candidate = oneHasAmmo ? weaponIndexOne : weaponIndexTwo;
+
+		if (TechnoExt::MultiWeaponCanFire(pThis, pTarget, pThis->GetWeapon(candidate)->WeaponType))
+			return candidate;
+	}
 
 	CellClass* pTargetCell = nullptr;
 
@@ -357,7 +371,7 @@ int TechnoExt::ExtData::ApplyForceWeaponInRange(AbstractClass* pTarget)
 
 bool TechnoExt::MultiWeaponCanFire(TechnoClass* const pThis, AbstractClass* const pTarget, WeaponTypeClass* const pWeaponType)
 {
-	if (!pWeaponType || pWeaponType->NeverUse
+	if (!pTarget || !pWeaponType || pWeaponType->NeverUse
 		|| (pThis->InOpenToppedTransport && !pWeaponType->FireInTransport))
 	{
 		return false;
@@ -592,7 +606,8 @@ int TechnoExt::GetChainedWeaponSlot(TechnoClass* pThis, AbstractClass* pTarget)
 		if (!pWeapon)
 			break;
 
-		const bool eligible = (!pTarget || MultiWeaponCanFire(pThis, pTarget, pWeapon));
+		const bool eligible = (!pTarget || MultiWeaponCanFire(pThis, pTarget, pWeapon))
+			&& CanFireWeaponSlot(pThis, slot, true);
 
 		if (eligible)
 		{

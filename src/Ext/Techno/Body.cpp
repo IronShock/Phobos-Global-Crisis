@@ -1,6 +1,9 @@
 ﻿#include "Body.h"
 
 #include <AircraftClass.h>
+#include <UnitClass.h>
+#include <Phobos.h>
+#include <BuildingClass.h>
 #include <HouseClass.h>
 #include <ScenarioClass.h>
 #include <JumpjetLocomotionClass.h>
@@ -387,15 +390,6 @@ bool TechnoExt::ConvertToType(FootClass* pThis, TechnoTypeClass* pToType)
 
 	// Adjust ammo
 	pThis->Ammo = Math::min(pThis->Ammo, pToType->Ammo);
-	// Adjust secondary ammo to the new type's pool
-	auto const pToTypeExt = TechnoTypeExt::ExtMap.Find(pToType);
-	if (auto const pExt = TechnoExt::ExtMap.TryFind(pThis))
-	{
-		if (pToTypeExt->Ammo_Secondary.Get() > 0)
-			pExt->AmmoSecondary = Math::min(pExt->AmmoSecondary, pToTypeExt->Ammo_Secondary.Get());
-		else
-			pExt->AmmoSecondary = 0;
-	}
 	// Ares ResetSpotlights -- skipped
 
 	// Adjust ROT
@@ -849,111 +843,825 @@ void TechnoExt::HandleOnDeployAmmoChange(TechnoClass* pThis, int maxAmmoOverride
 		}
 	}
 
-	// Mirror Ammo.AddOnDeploy for the secondary pool.
-	if (const auto pExt = TechnoExt::ExtMap.TryFind(pThis))
+}
+
+// =============================
+// per-weapon ammo
+
+void TechnoExt::ResolveWeaponAmmoConfig(TechnoClass* pThis, int slot, WeaponAmmoConfig& out, WeaponTypeClass* pWeapon)
+{
+	out = WeaponAmmoConfig {};
+
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
 	{
-		const int addSecondary = pTypeExt->Ammo_Secondary_AddOnDeploy;
+		out.Infinite = true;
+		return;
+	}
 
-		if (pTypeExt->Ammo_Secondary.Get() > 0 && addSecondary != 0)
+	auto const pType = pThis->GetTechnoType();
+
+	if (!pWeapon)
+		pWeapon = TechnoTypeExt::GetWeaponType(pType, slot, pThis->Veterancy.IsElite());
+
+	out.Weapon = pWeapon;
+
+	if (!pWeapon)
+	{
+		out.Infinite = true;
+		return;
+	}
+
+	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+	auto const pWeaponExt = WeaponTypeExt::ExtMap.Find(pWeapon);
+	auto const& override = pTypeExt->WeaponAmmo[slot];
+
+	// Resolve the maximum first: > 0 means a pool, 0 means explicit unlimited,
+	// unset/-1 falls back to the unit Ammo when the type has one.
+	int maxAmmo = -1;
+
+	if (override.Ammo.isset())
+		maxAmmo = override.Ammo.Get();
+	else if (pWeaponExt->Ammo.isset())
+		maxAmmo = pWeaponExt->Ammo.Get();
+
+	if (maxAmmo > 0)
+	{
+		out.HasPool = true;
+		out.Max = maxAmmo;
+	}
+	else if (maxAmmo == 0)
+	{
+		out.Infinite = true;
+		return;
+	}
+	else if (pType->Ammo > 0)
+	{
+		// No per-weapon pool: keep the vanilla unit Ammo behavior.
+		return;
+	}
+	else
+	{
+		out.Infinite = true;
+		return;
+	}
+
+	auto const pickInt = [](const Nullable<int>& overrideValue, const Nullable<int>& weaponValue, int fallback) -> int
+	{
+		if (overrideValue.isset())
+			return overrideValue.Get();
+
+		if (weaponValue.isset())
+			return weaponValue.Get();
+
+		return fallback;
+	};
+
+	out.Initial = pickInt(override.Initial, pWeaponExt->Ammo_Initial, -1);
+	out.Reload = pickInt(override.Reload, pWeaponExt->Ammo_Reload, -1);
+	out.EmptyReload = pickInt(override.EmptyReload, pWeaponExt->Ammo_Reload_Empty, -1);
+	out.ReloadAmount = override.ReloadAmount.isset()
+		? override.ReloadAmount.Get()
+		: pWeaponExt->Ammo_Reload_Amount.Get();
+	out.Cost = override.Cost.isset()
+		? override.Cost.Get()
+		: pWeaponExt->Ammo_Cost.Get();
+
+	if (out.ReloadAmount < 1)
+		out.ReloadAmount = 1;
+
+	if (out.Cost < 1)
+		out.Cost = 1;
+
+	// Vanilla unit ammo semantics: EmptyReload <= 0 means "use Reload when empty".
+	if (out.EmptyReload < 0)
+		out.EmptyReload = out.Reload;
+
+	if (override.PerBurst.isset())
+		out.PerBurst = override.PerBurst.Get();
+	else
+		out.PerBurst = pWeaponExt->Ammo_PerBurst.Get();
+
+}
+
+void TechnoExt::RefreshWeaponAmmoSlot(TechnoClass* pThis, int slot)
+{
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
+		return;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return;
+
+	auto& runtime = pExt->WeaponAmmo[slot];
+	WeaponAmmoConfig config;
+	ResolveWeaponAmmoConfig(pThis, slot, config);
+
+	const bool hadPool = runtime.HasPool;
+
+	runtime.HasPool = config.HasPool;
+	runtime.Infinite = config.Infinite;
+	runtime.Max = config.Max;
+	runtime.Reload = config.Reload;
+	runtime.EmptyReload = config.EmptyReload;
+	runtime.ReloadAmount = config.ReloadAmount;
+	runtime.Cost = config.Cost;
+	runtime.PerBurst = config.PerBurst;
+	runtime.Weapon = config.Weapon;
+
+	const bool wasInitialized = runtime.Initialized;
+	const bool preserveLoaded = pExt->WeaponAmmoLoadedFromSave && !runtime.Initialized;
+
+	if (preserveLoaded)
+	{
+		// Counts and timers came from a savegame; only clamp them to the resolved pool.
+		runtime.Initialized = true;
+
+		if (runtime.HasPool)
+			pExt->WeaponAmmoCount[slot] = Math::clamp(pExt->WeaponAmmoCount[slot], 0, runtime.Max);
+		else
+			pExt->WeaponAmmoCount[slot] = 0;
+	}
+	else if (!runtime.Initialized || (!hadPool && runtime.HasPool))
+	{
+		if (runtime.HasPool)
 		{
-			const int originalSecondary = pExt->AmmoSecondary;
-			pExt->AmmoSecondary = std::clamp(pExt->AmmoSecondary + addSecondary, 0, pTypeExt->Ammo_Secondary.Get());
-
-			if (originalSecondary != pExt->AmmoSecondary && !pExt->SecondaryReloadTimer.InProgress())
-			{
-				const int reloadDelay = (pExt->AmmoSecondary <= 0)
-					? pTypeExt->Ammo_Secondary_EmptyReload
-					: pTypeExt->Ammo_Secondary_Reload;
-
-				if (reloadDelay > 0)
-					pExt->SecondaryReloadTimer.Start(reloadDelay);
-
-				pThis->Mark(MarkType::Change);
-			}
+			const int initial = config.Initial < 0 ? runtime.Max : config.Initial;
+			pExt->WeaponAmmoCount[slot] = Math::clamp(initial, 0, runtime.Max);
 		}
+		else
+		{
+			pExt->WeaponAmmoCount[slot] = 0;
+		}
+
+		pExt->WeaponAmmoReloadTimer[slot].Stop();
+		runtime.Initialized = true;
+	}
+	else if (runtime.HasPool)
+	{
+		pExt->WeaponAmmoCount[slot] = Math::clamp(pExt->WeaponAmmoCount[slot], 0, runtime.Max);
+
+		if (pExt->WeaponAmmoCount[slot] >= runtime.Max)
+			pExt->WeaponAmmoReloadTimer[slot].Stop();
+	}
+	else
+	{
+		pExt->WeaponAmmoCount[slot] = 0;
+		pExt->WeaponAmmoReloadTimer[slot].Stop();
+	}
+
+	if (runtime.HasPool)
+		StartWeaponAmmoReload(pThis, slot);
+
+	// Only log slots that actually own a pool; empty slots would flood the log.
+	if (!wasInitialized && runtime.HasPool)
+	{
+		Debug::Log("[WeaponAmmo] [%s] slot=%d weapon=%s initialized=%d/%d preserve=%d\n",
+			pThis->GetTechnoType()->ID, slot,
+			runtime.Weapon ? runtime.Weapon->ID : "<none>",
+			pExt->WeaponAmmoCount[slot], runtime.Max,
+			preserveLoaded ? 1 : 0);
 	}
 }
 
-int TechnoExt::GetSecondaryAmmoMax(TechnoClass* pThis)
+void TechnoExt::RefreshAllWeaponAmmo(TechnoClass* pThis)
 {
-	return TechnoTypeExt::ExtMap.Find(pThis->GetTechnoType())->Ammo_Secondary.Get();
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return;
+
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+		RefreshWeaponAmmoSlot(pThis, slot);
+
+	// Resolve every ExtraFire pool while the "counts loaded" flag is still false on a
+	// fresh unit, so each entry starts at its configured initial amount.
+	const auto pType = pThis->GetTechnoType();
+	const bool isElite = pThis->Veterancy.IsElite();
+
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+	{
+		auto const pParentWeapon = TechnoTypeExt::GetWeaponType(pType, slot, isElite);
+
+		if (!pParentWeapon)
+			continue;
+
+		const auto pParentExt = WeaponTypeExt::ExtMap.Find(pParentWeapon);
+		const int count = static_cast<int>(pParentExt->ExtraFire_Weapons.size());
+
+		for (int entry = 0; entry < count; ++entry)
+			RefreshExtraFireAmmoEntry(pThis, slot, entry);
+	}
+
+	pExt->WeaponAmmoLoadedFromSave = false;
+	pExt->ExtraFireAmmoLoadedFromSave = false;
+	pExt->WeaponAmmoInitialized = true;
+	pExt->WeaponAmmoElite = isElite;
+	UpdateAircraftAmmoCompat(pThis);
 }
 
-bool TechnoExt::HasSecondaryAmmo(TechnoClass* pThis)
+bool TechnoExt::CanFireWeaponSlot(TechnoClass* pThis, int slot, bool allowMidBurst, int costOverride)
 {
-	return GetSecondaryAmmoMax(pThis) > 0;
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
+		return true;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return true;
+
+	RefreshWeaponAmmoSlot(pThis, slot);
+	auto const& runtime = pExt->WeaponAmmo[slot];
+
+	if (runtime.HasPool)
+	{
+		if (allowMidBurst && runtime.PerBurst && pThis->CurrentBurstIndex > 0)
+			return true;
+
+		const int cost = costOverride >= 0 ? costOverride : runtime.Cost;
+
+		return pExt->WeaponAmmoCount[slot] >= Math::max(1, cost);
+	}
+
+	if (runtime.Infinite)
+		return true;
+
+	// Vanilla unit Ammo fallback (weapon has no Ammo and the type has Ammo > 0).
+	auto const pType = pThis->GetTechnoType();
+
+	return pType->Ammo <= 0 || pThis->Ammo > 0;
 }
 
-// Returns true if the given weapon type is the secondary weapon (index 1) of the techno's type.
-bool TechnoExt::IsSecondaryWeapon(TechnoClass* pThis, WeaponTypeClass* pWeapon)
+bool TechnoExt::ConsumeWeaponAmmo(TechnoClass* pThis, int slot, int amount)
 {
-	if (!pWeapon)
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
+		return false;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return false;
+
+	RefreshWeaponAmmoSlot(pThis, slot);
+	auto const& runtime = pExt->WeaponAmmo[slot];
+
+	if (!runtime.HasPool)
+		return false;
+
+	const int cost = Math::max(1, amount >= 0 ? amount : runtime.Cost);
+	pExt->WeaponAmmoCount[slot] = Math::max(0, pExt->WeaponAmmoCount[slot] - cost);
+	StartWeaponAmmoReload(pThis, slot);
+	UpdateAircraftAmmoCompat(pThis);
+
+	if (pExt->WeaponAmmoCount[slot] == 0)
+	{
+		Debug::Log("[WeaponAmmo] [%s] slot=%d weapon=%s reached 0\n",
+			pThis->GetTechnoType()->ID, slot,
+			runtime.Weapon ? runtime.Weapon->ID : "<none>");
+	}
+
+	return true;
+}
+
+void TechnoExt::StartWeaponAmmoReload(TechnoClass* pThis, int slot)
+{
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
+		return;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return;
+
+	auto& runtime = pExt->WeaponAmmo[slot];
+	auto& timer = pExt->WeaponAmmoReloadTimer[slot];
+
+	if (!runtime.HasPool || pExt->WeaponAmmoCount[slot] >= runtime.Max)
+	{
+		timer.Stop();
+		return;
+	}
+
+	if (timer.InProgress())
+		return;
+
+	const int delay = pExt->WeaponAmmoCount[slot] <= 0 ? runtime.EmptyReload : runtime.Reload;
+
+	if (delay < 0)
+	{
+		timer.Stop();
+		return;
+	}
+
+	timer.Start(delay);
+}
+
+void TechnoExt::UpdateWeaponAmmoReload(TechnoClass* pThis)
+{
+	if (!pThis)
+		return;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return;
+
+	const bool atAirfield = IsAtAirfield(pThis);
+	const auto pType = pThis->GetTechnoType();
+
+	int padReload = -1;
+	int padEmptyReload = -1;
+	int padIncrement = 1;
+
+	if (atAirfield)
+	{
+		padReload = pType->Reload > 0
+			? pType->Reload
+			: Math::max(1, static_cast<int>(RulesClass::Instance->ReloadRate));
+		padEmptyReload = pType->EmptyReload > 0 ? pType->EmptyReload : padReload;
+		padIncrement = pType->ReloadIncrement > 0 ? pType->ReloadIncrement : 1;
+	}
+
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+	{
+		auto& runtime = pExt->WeaponAmmo[slot];
+
+		if (!runtime.HasPool)
+			continue;
+
+		auto& timer = pExt->WeaponAmmoReloadTimer[slot];
+		int& ammo = pExt->WeaponAmmoCount[slot];
+
+		if (ammo >= runtime.Max)
+		{
+			timer.Stop();
+			continue;
+		}
+
+		const int increment = atAirfield ? padIncrement : runtime.ReloadAmount;
+
+		if (increment <= 0)
+			continue;
+
+		if (timer.InProgress())
+			continue;
+
+		const int delay = atAirfield
+			? (ammo <= 0 ? padEmptyReload : padReload)
+			: (ammo <= 0 ? runtime.EmptyReload : runtime.Reload);
+
+		if (!timer.IsTicking())
+		{
+			if (delay >= 0)
+				timer.Start(delay);
+
+			continue;
+		}
+
+		// The timer has expired; restore one increment and start the next tick.
+		ammo = Math::min(runtime.Max, ammo + increment);
+
+		if (ammo >= runtime.Max)
+			timer.Stop();
+		else if (delay >= 0)
+			timer.Start(delay);
+		else
+			timer.Stop();
+	}
+
+	UpdateExtraFireAmmoReload(pThis);
+	UpdateAircraftAmmoCompat(pThis);
+}
+
+int TechnoExt::GetWeaponAmmoRemaining(TechnoClass* pThis, int slot)
+{
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
+		return 0;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return 0;
+
+	RefreshWeaponAmmoSlot(pThis, slot);
+	auto const& runtime = pExt->WeaponAmmo[slot];
+
+	if (runtime.HasPool)
+		return pExt->WeaponAmmoCount[slot];
+
+	if (runtime.Infinite)
+		return -1;
+
+	return pThis->Ammo;
+}
+
+int TechnoExt::GetWeaponAmmoMax(TechnoClass* pThis, int slot)
+{
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
+		return 0;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (!pExt)
+		return 0;
+
+	RefreshWeaponAmmoSlot(pThis, slot);
+	auto const& runtime = pExt->WeaponAmmo[slot];
+
+	if (runtime.HasPool)
+		return runtime.Max;
+
+	if (runtime.Infinite)
+		return -1;
+
+	return pThis->GetTechnoType()->Ammo;
+}
+
+int TechnoExt::GetCurrentDisplayWeaponSlot(TechnoClass* pThis)
+{
+	if (!pThis)
+		return 0;
+
+	auto const pExt = ExtMap.Find(pThis);
+
+	if (pExt && pExt->LastFiredWeaponSlot >= 0 && pExt->LastFiredWeaponSlot < TechnoTypeClass::MaxWeapons)
+		return pExt->LastFiredWeaponSlot;
+
+	const int selected = pThis->SelectWeapon(pThis->Target);
+
+	if (selected >= 0 && selected < TechnoTypeClass::MaxWeapons)
+		return selected;
+
+	return 0;
+}
+
+bool TechnoExt::HasAnyWeaponAmmo(TechnoClass* pThis)
+{
+	if (!pThis)
 		return false;
 
 	const auto pType = pThis->GetTechnoType();
 
-	if (pType->IsGattling)
-		return false;
-
-	const bool isElite = pThis->Veterancy.IsElite();
-
-	const auto pSecWeapon = TechnoTypeExt::GetWeaponType(pType, 1, isElite);
-	const auto pSecWeaponNormal = TechnoTypeExt::GetWeaponType(pType, 1, false);
-
-	return pWeapon == pSecWeapon || pWeapon == pSecWeaponNormal;
-}
-
-void TechnoExt::DecreaseSecondaryAmmo(TechnoClass* pThis)
-{
-	const auto pExt = TechnoExt::ExtMap.Find(pThis);
-
-	if (pExt->AmmoSecondary > 0)
-		pExt->AmmoSecondary--;
-
-	// Start the secondary reload timer if the pool dropped below max.
-	const int maxAmmo = GetSecondaryAmmoMax(pThis);
-	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pThis->GetTechnoType());
-
-	if (maxAmmo > 0 && pExt->AmmoSecondary < maxAmmo && !pExt->SecondaryReloadTimer.InProgress())
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
 	{
-		const int reloadDelay = (pExt->AmmoSecondary <= 0)
-			? pTypeExt->Ammo_Secondary_EmptyReload
-			: pTypeExt->Ammo_Secondary_Reload;
+		auto const pWeapon = TechnoTypeExt::GetWeaponType(pType, slot, pThis->Veterancy.IsElite());
 
-		if (reloadDelay > 0)
-			pExt->SecondaryReloadTimer.Start(reloadDelay);
-	}
-}
+		if (!pWeapon)
+			continue;
 
-void TechnoExt::UpdateSecondaryReload(TechnoClass* pThis)
-{
-	if (!HasSecondaryAmmo(pThis))
-		return;
+		auto const pExt = ExtMap.Find(pThis);
+		RefreshWeaponAmmoSlot(pThis, slot);
+		auto const& runtime = pExt->WeaponAmmo[slot];
 
-	const auto pExt = TechnoExt::ExtMap.Find(pThis);
-	auto& timer = pExt->SecondaryReloadTimer;
-
-	if (!timer.Completed())
-		return;
-
-	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pThis->GetTechnoType());
-	const int maxAmmo = GetSecondaryAmmoMax(pThis);
-
-	if (pExt->AmmoSecondary < maxAmmo)
-	{
-		pExt->AmmoSecondary = std::min(pExt->AmmoSecondary + pTypeExt->Ammo_Secondary_ReloadIncrement, maxAmmo);
-
-		if (pExt->AmmoSecondary < maxAmmo)
+		if (runtime.HasPool)
 		{
-			const int reloadDelay = (pExt->AmmoSecondary <= 0)
-				? pTypeExt->Ammo_Secondary_EmptyReload
-				: pTypeExt->Ammo_Secondary_Reload;
-
-			if (reloadDelay > 0)
-				timer.Start(reloadDelay);
+			if (pExt->WeaponAmmoCount[slot] > 0)
+				return true;
+		}
+		else if (runtime.Infinite)
+		{
+			return true;
+		}
+		else if (pType->Ammo <= 0 || pThis->Ammo > 0)
+		{
+			return true;
 		}
 	}
+
+	return false;
 }
+
+bool TechnoExt::HasLegacyWeaponAmmo(TechnoClass* pThis)
+{
+	if (!pThis)
+		return false;
+
+	const auto pType = pThis->GetTechnoType();
+
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+	{
+		auto const pWeapon = TechnoTypeExt::GetWeaponType(pType, slot, pThis->Veterancy.IsElite());
+
+		if (!pWeapon)
+			continue;
+
+		auto const pExt = ExtMap.Find(pThis);
+		RefreshWeaponAmmoSlot(pThis, slot);
+		auto const& runtime = pExt->WeaponAmmo[slot];
+
+		if (!runtime.HasPool && !runtime.Infinite)
+			return true;
+	}
+
+	return false;
+}
+
+bool TechnoExt::HasOwnWeaponAmmoPool(TechnoClass* pThis)
+{
+	if (!pThis)
+		return false;
+
+	const auto pType = pThis->GetTechnoType();
+
+	for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+	{
+		auto const pWeapon = TechnoTypeExt::GetWeaponType(pType, slot, pThis->Veterancy.IsElite());
+
+		if (!pWeapon)
+			continue;
+
+		auto const pExt = ExtMap.Find(pThis);
+		RefreshWeaponAmmoSlot(pThis, slot);
+
+		if (pExt->WeaponAmmo[slot].HasPool)
+			return true;
+	}
+
+	return false;
+}
+
+// Aircraft RTB / rearm checks in the executable read TechnoClass::Ammo directly.
+// For aircraft whose weapons all use their own pools, keep that field as a small
+// compatibility mirror (max > 0 while any weapon can fire, 0 when everything is dry).
+// The pool remains the source of truth; legacy weapons are never touched.
+void TechnoExt::UpdateAircraftAmmoCompat(TechnoClass* pThis)
+{
+	if (!pThis || pThis->WhatAmI() != AbstractType::Aircraft)
+		return;
+
+	if (!HasOwnWeaponAmmoPool(pThis) || HasLegacyWeaponAmmo(pThis))
+		return;
+
+	const auto pType = pThis->GetTechnoType();
+	pThis->Ammo = HasAnyWeaponAmmo(pThis) ? Math::max(1, pType->Ammo) : 0;
+}
+
+double TechnoExt::ApplyAccelerationCurve(double progress, int curve)
+{
+	switch (curve)
+	{
+	case 1: // ease-in
+		return progress * progress;
+
+	case 2: // ease-out
+		return 1.0 - (1.0 - progress) * (1.0 - progress);
+
+	case 3: // smoothstep
+		return progress * progress * (3.0 - 2.0 * progress);
+
+	default:
+		return progress;
+	}
+}
+
+double TechnoExt::GetTerrainSpeedFactor(TechnoTypeExt::ExtData* pTypeExt, LandType landType)
+{
+	switch (landType)
+	{
+	case LandType::Road:
+		return pTypeExt->TerrainSpeed_Road.Get();
+
+	case LandType::Water:
+		return pTypeExt->TerrainSpeed_Water.Get();
+
+	case LandType::Rock:
+		return pTypeExt->TerrainSpeed_Rock.Get();
+
+	case LandType::Wall:
+		return pTypeExt->TerrainSpeed_Wall.Get();
+
+	case LandType::Tiberium:
+		return pTypeExt->TerrainSpeed_Tiberium.Get();
+
+	case LandType::Beach:
+		return pTypeExt->TerrainSpeed_Beach.Get();
+
+	case LandType::Rough:
+		return pTypeExt->TerrainSpeed_Rough.Get();
+
+	case LandType::Ice:
+		return pTypeExt->TerrainSpeed_Ice.Get();
+
+	case LandType::Railroad:
+		return pTypeExt->TerrainSpeed_Railroad.Get();
+
+	case LandType::Tunnel:
+		return pTypeExt->TerrainSpeed_Tunnel.Get();
+
+	case LandType::Weeds:
+		return pTypeExt->TerrainSpeed_Weeds.Get();
+
+	case LandType::Clear:
+	default:
+		return pTypeExt->TerrainSpeed_Clear.Get();
+	}
+}
+
+void TechnoExt::ResetAccelerationState(FootClass* pThis)
+{
+	if (!pThis || !pThis->IsAlive || pThis->InLimbo)
+		return;
+
+	auto const pExt = TechnoExt::ExtMap.TryFind(pThis);
+
+	if (!pExt)
+		return;
+
+	pExt->AccelActive = false;
+	pExt->AccelWasMoving = false;
+	pExt->AccelStartSpeed = 0.0;
+	pExt->AccelTargetSpeed = 0.0;
+	pExt->AccelStartFrame = 0;
+}
+
+double TechnoExt::UpdateEnhancedAcceleration(FootClass* pThis, double targetSpeed, int distanceToTarget)
+{
+	if (!pThis || !pThis->IsAlive || pThis->InLimbo)
+		return targetSpeed;
+
+	auto const pType = pThis->GetTechnoType();
+
+	if (!pType)
+		return targetSpeed;
+
+	auto const pTypeExt = TechnoTypeExt::ExtMap.TryFind(pType);
+	auto const pExt = TechnoExt::ExtMap.TryFind(pThis);
+
+	if (!pTypeExt || !pExt
+		|| reinterpret_cast<uintptr_t>(pTypeExt) < 0x10000
+		|| reinterpret_cast<uintptr_t>(pExt) < 0x10000
+		|| pTypeExt->Acceleration_Mode.Get() != 1)
+	{
+		return targetSpeed;
+	}
+
+	targetSpeed = Math::clamp(targetSpeed, 0.0, 1.0);
+	const double beforeSpeed = pThis->SpeedPercentage;
+
+	auto const pCell = pThis->GetCell();
+	double factor = 1.0;
+
+	if (pCell)
+	{
+		const LandType landType = pThis->OnBridge ? LandType::Road : pCell->LandType;
+		factor *= GetTerrainSpeedFactor(pTypeExt, landType);
+
+		if (pCell->SlopeIndex != 0)
+			factor *= pTypeExt->SlopeSpeedFactor.Get();
+	}
+
+	if (pThis->PrimaryFacing.IsRotating())
+		factor *= pTypeExt->TurnSpeedFactor.Get();
+
+	if (pType->Passengers > 0)
+	{
+		const double load = Math::clamp(static_cast<double>(pThis->Passengers.NumPassengers) / pType->Passengers, 0.0, 1.0);
+		factor *= 1.0 - (1.0 - pTypeExt->LoadSpeedFactor.Get()) * load;
+	}
+
+	if (pType->Strength > 0)
+	{
+		const double health = Math::clamp(static_cast<double>(pThis->Health) / pType->Strength, 0.0, 1.0);
+		const double threshold = Math::clamp(pTypeExt->HealthSpeedThreshold.Get(), 0.0, 1.0);
+
+		if (health < threshold)
+			factor *= pTypeExt->HealthSpeedFactor.Get() + (1.0 - pTypeExt->HealthSpeedFactor.Get()) * (health / Math::max(0.001, threshold));
+	}
+
+	if (pThis->WhatAmI() == AbstractType::Unit && static_cast<UnitClass*>(pThis)->IsCrushingSomething
+		&& !pTypeExt->SkipCrushSlowdown)
+	{
+		factor = Math::min(factor, pTypeExt->CrushSlowdownMultiplier.Get());
+	}
+
+	if (pThis->IsSinking)
+		factor = Math::min(factor, 0.1);
+
+	targetSpeed = Math::clamp(targetSpeed * factor, 0.0, 1.0);
+
+	int accelerationTime = pTypeExt->Acceleration_Time.isset()
+		? pTypeExt->Acceleration_Time.Get()
+		: 60;
+	int decelerationTime = pTypeExt->Deceleration_Time.isset()
+		? pTypeExt->Deceleration_Time.Get()
+		: 30;
+
+	accelerationTime = Math::max(1, accelerationTime);
+	decelerationTime = Math::max(1, decelerationTime);
+
+	const int stopDistance = Math::max(0, pTypeExt->StopDistance.Get());
+
+	if (distanceToTarget >= 0)
+	{
+		const double defaultSpeed = Math::max(0, pThis->GetDefaultSpeed());
+		const double deceleration = defaultSpeed / static_cast<double>(decelerationTime);
+		const double currentSpeed = Math::max(0, pThis->GetCurrentSpeed());
+		const double autoBrake = deceleration > 0.0
+			? (currentSpeed * currentSpeed) / (2.0 * deceleration)
+			: 0.0;
+		const double brakeDistance = pTypeExt->BrakeDistance.Get() >= 0
+			? static_cast<double>(pTypeExt->BrakeDistance.Get())
+			: autoBrake * Math::max(0.0, pTypeExt->BrakeDistance_Multiplier.Get());
+
+		if (distanceToTarget <= brakeDistance || distanceToTarget <= stopDistance)
+			targetSpeed = Math::min(targetSpeed, Math::max(0.0001, pTypeExt->MinimumSpeed.Get()));
+	}
+
+	targetSpeed = Math::clamp(targetSpeed, 0.0, 1.0);
+
+	const bool moving = targetSpeed > 0.001;
+	const bool starting = moving && (!pExt->AccelWasMoving || (!pExt->AccelActive && pThis->SpeedPercentage <= 0.001));
+	const double startDelta = targetSpeed - pExt->AccelTargetSpeed;
+
+	if (starting)
+	{
+		// A stationary unit can still carry SpeedPercentage == 1.0 from an earlier
+		// move. Start a new ramp at the configured InitialSpeed instead.
+		pExt->AccelStartSpeed = Math::clamp(pTypeExt->InitialSpeed.Get(), 0.0, targetSpeed);
+		pExt->AccelTargetSpeed = targetSpeed;
+		pExt->AccelStartFrame = static_cast<int>(Unsorted::CurrentFrame);
+		pExt->AccelActive = true;
+	}
+	else if (!pExt->AccelActive || std::abs(startDelta) > 0.01)
+	{
+		pExt->AccelStartSpeed = pThis->SpeedPercentage;
+		pExt->AccelTargetSpeed = targetSpeed;
+		pExt->AccelStartFrame = static_cast<int>(Unsorted::CurrentFrame);
+		pExt->AccelActive = true;
+	}
+	else
+	{
+		pExt->AccelTargetSpeed = targetSpeed;
+	}
+
+	pExt->AccelWasMoving = moving;
+
+	const double delta = pExt->AccelTargetSpeed - pExt->AccelStartSpeed;
+
+	if (std::abs(delta) < 0.0001)
+	{
+		pExt->AccelActive = false;
+		return Math::clamp(pExt->AccelTargetSpeed, 0.0, 1.0);
+	}
+
+	const int baseTime = delta > 0.0 ? accelerationTime : decelerationTime;
+	const double duration = Math::max(1.0, static_cast<double>(baseTime) * std::abs(delta));
+	const double progress = Math::clamp(
+		static_cast<double>(static_cast<int>(Unsorted::CurrentFrame) - pExt->AccelStartFrame) / duration, 0.0, 1.0);
+	const int curve = delta > 0.0 ? pTypeExt->Acceleration_Curve.Get() : pTypeExt->Deceleration_Curve.Get();
+	const double speed = pExt->AccelStartSpeed + delta * ApplyAccelerationCurve(progress, curve);
+
+	if (progress >= 1.0)
+		pExt->AccelActive = false;
+
+	const int elapsed = static_cast<int>(Unsorted::CurrentFrame) - pExt->AccelStartFrame;
+
+	// Diagnostic for tuning: the first 120 frames of every ramp are logged even
+	// without Debug.GCDiagnostics, then the periodic log is opt-in.
+	if (starting || elapsed < 120)
+	{
+		if (starting || (elapsed % 10) == 0)
+		{
+			Debug::Log("[Accel] [%s] before=%.3f after=%.3f target=%.3f start=%.3f p=%.2f dist=%d time=%d wasMoving=%d\n",
+				pThis->GetTechnoType()->ID, beforeSpeed, speed,
+				pExt->AccelTargetSpeed, pExt->AccelStartSpeed, progress,
+				distanceToTarget, baseTime, pExt->AccelWasMoving ? 1 : 0);
+		}
+	}
+	else if (Phobos::Config::DebugGCDiagnostics && (Unsorted::CurrentFrame % 10) == 0)
+	{
+		Debug::Log("[Accel] [%s] speed=%.3f target=%.3f start=%.3f p=%.2f dist=%d time=%d\n",
+			pThis->GetTechnoType()->ID, speed, pExt->AccelTargetSpeed,
+			pExt->AccelStartSpeed, progress, distanceToTarget, baseTime);
+	}
+
+	return Math::clamp(speed, 0.0, 1.0);
+}
+
+bool TechnoExt::IsAtAirfield(TechnoClass* pThis)
+{
+	if (!pThis || pThis->WhatAmI() != AbstractType::Aircraft)
+		return false;
+
+	auto const pAircraft = static_cast<AircraftClass*>(pThis);
+
+	if (pAircraft->IsInAir())
+		return false;
+
+	auto const pCell = pAircraft->GetCell();
+
+	if (!pCell)
+		return false;
+
+	auto const pBuilding = pCell->GetBuilding();
+
+	if (!pBuilding)
+		return false;
+
+	return pBuilding->Type->UnitReload || pBuilding->Type->Helipad;
+}
+
+// ExtraFire pools are implemented in Body.Update.cpp next to the firing loop.
 
 // =============================
 // load / save
@@ -1026,8 +1734,6 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 		.Process(this->DormantAttachments)
 		.Process(this->AltOccupation)
 		.Process(this->LastHurtFrame)
-		.Process(this->AmmoSecondary)
-		.Process(this->SecondaryReloadTimer)
 		;
 	// Note: CurrentTargetFilter is NOT serialized - it is a transient UI state.
 	// On load it defaults to 0 (no filter) from the constructor initializer list.
@@ -1041,6 +1747,20 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 	Stm.Process(this->ExtraFireCooldowns);
 	Stm.Process(this->ExtraFireBurstIndex);
 	Stm.Process(this->ExtraFireMountFacing);
+
+	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
+	{
+		Stm.Process(this->WeaponAmmoCount[i]);
+		Stm.Process(this->WeaponAmmoReloadTimer[i]);
+	}
+
+	Stm.Process(this->ExtraFireAmmoCount);
+	Stm.Process(this->ExtraFireAmmoReloadTimer);
+	Stm.Process(this->AccelStartSpeed);
+	Stm.Process(this->AccelTargetSpeed);
+	Stm.Process(this->AccelStartFrame);
+	Stm.Process(this->AccelActive);
+	Stm.Process(this->AccelWasMoving);
 }
 
 void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)
@@ -1063,6 +1783,18 @@ void TechnoExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
 {
 	Extension<TechnoClass>::LoadFromStream(Stm);
 	this->Serialize(Stm);
+
+	// Counts and timers were just restored from the save. The next RefreshAll must
+	// keep them instead of resetting every pool to its Ammo.Initial value.
+	this->WeaponAmmoLoadedFromSave = true;
+	this->ExtraFireAmmoLoadedFromSave = true;
+
+	// A moving unit restored mid-ramp must not be treated as starting from rest.
+	if (auto const pFoot = abstract_cast<FootClass*>(this->OwnerObject()))
+	{
+		if (!this->AccelWasMoving && pFoot->SpeedPercentage > 0.01)
+			this->AccelWasMoving = true;
+	}
 }
 
 void TechnoExt::ExtData::SaveToStream(PhobosStreamWriter& Stm)

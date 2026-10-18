@@ -1,4 +1,4 @@
-#include "Body.h"
+﻿#include "Body.h"
 
 #include <OverlayTypeClass.h>
 #include <ScenarioClass.h>
@@ -1128,9 +1128,9 @@ DEFINE_HOOK(0x6FB086, TechnoClass_Reload_ReloadAmount, 0x8)
 	return 0;
 }
 
-// Ammo.Secondary: record which weapon is being fired. All Fire calls (Unit/Infantry/
-// Building/Aircraft) funnel through the base TechnoClass::Fire (0x6FDD50).
-DEFINE_HOOK(0x6FDD50, TechnoClass_Fire_SecondaryAmmoWeapon, 0x6)
+// Record which weapon is being fired. All Fire calls (Unit/Infantry/Building/Aircraft)
+// funnel through the base TechnoClass::Fire (0x6FDD50).
+DEFINE_HOOK(0x6FDD50, TechnoClass_Fire_WeaponAmmo, 0x6)
 {
 	GET(TechnoClass* const, pThis, ECX);
 	GET_STACK(int, nWeaponIndex, STACK_OFFSET(0x0, 0x8));
@@ -1139,27 +1139,73 @@ DEFINE_HOOK(0x6FDD50, TechnoClass_Fire_SecondaryAmmoWeapon, 0x6)
 	pExt->CurrentFireWeaponIndex = nWeaponIndex;
 
 	// ExtraFire.OnlyWhenParentFires: remember the frame on which each slot last fired.
-	if (nWeaponIndex >= 0 && nWeaponIndex < TechnoTypeClass::MaxWeapons)
-		pExt->ExtraFireParentFireFrame[nWeaponIndex] = static_cast<int>(Unsorted::CurrentFrame);
+	if (nWeaponIndex < 0 || nWeaponIndex >= TechnoTypeClass::MaxWeapons)
+		return 0;
 
+	pExt->LastFiredWeaponSlot = nWeaponIndex;
+	pExt->CurrentFireBurstIndex = pThis->CurrentBurstIndex;
+	pExt->ExtraFireParentFireFrame[nWeaponIndex] = static_cast<int>(Unsorted::CurrentFrame);
+
+	// The pool is charged after the executable actually creates the bullet (see the
+	// 0x6FE568 hook below). Charging here would drain ammo for Fire calls that return
+	// early, e.g. DelayedFire/Charges, without ever firing a shot.
 	return 0;
 }
 
-// Ammo.Secondary: redirect ammo consumption so the secondary weapon drains AmmoSecondary
-// instead of Ammo. Ares calls TechnoClass::DecreaseAmmo (0x70D670) in a loop for every
-// ammo unit consumed; intercept that and split by weapon.
-DEFINE_HOOK(0x70D670, TechnoClass_DecreaseAmmo_Secondary, 0x6)
+// Runs immediately after TechnoClass::FireAt's CreateBullet call, before the vanilla
+// null check. EAX is the created bullet; ESI is the firer. Only a successful bullet
+// creation consumes per-weapon ammo.
+DEFINE_HOOK(0x6FE568, TechnoClass_FireAt_AfterCreateBullet_Ammo, 0x6)
+{
+	enum { BulletCreated = 0x6FE56E, NoBullet = 0x6FF751 };
+
+	GET(TechnoClass* const, pThis, ESI);
+	GET(BulletClass* const, pBullet, EAX);
+
+	if (!pBullet)
+		return NoBullet;
+
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	int slot = pExt->CurrentFireWeaponIndex;
+
+	if (slot < 0)
+		slot = pExt->LastFiredWeaponSlot;
+
+	if (slot >= 0 && slot < TechnoTypeClass::MaxWeapons)
+	{
+		TechnoExt::RefreshWeaponAmmoSlot(pThis, slot);
+		auto const& runtime = pExt->WeaponAmmo[slot];
+
+		if (runtime.HasPool)
+		{
+			const bool charge = !runtime.PerBurst || pExt->CurrentFireBurstIndex == 0;
+
+			if (charge)
+				TechnoExt::ConsumeWeaponAmmo(pThis, slot);
+		}
+	}
+
+	return BulletCreated;
+}
+
+// Suppress the vanilla unit Ammo decrement for weapons that own a pool. Ares calls
+// TechnoClass::DecreaseAmmo (0x70D670) once (or in a loop) for the ammo it consumes;
+// the pool was already charged in the Fire hook above.
+DEFINE_HOOK(0x70D670, TechnoClass_DecreaseAmmo_WeaponAmmo, 0x6)
 {
 	enum { SkipDecrement = 0x70D681 };
 
 	GET(TechnoClass* const, pThis, ECX);
 
-	const auto pExt = TechnoExt::ExtMap.Find(pThis);
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	const int slot = pExt->CurrentFireWeaponIndex;
 
-	if (TechnoExt::HasSecondaryAmmo(pThis) && pExt->CurrentFireWeaponIndex == 1)
+	if (slot >= 0 && slot < TechnoTypeClass::MaxWeapons)
 	{
-		TechnoExt::DecreaseSecondaryAmmo(pThis);
-		return SkipDecrement;
+		TechnoExt::RefreshWeaponAmmoSlot(pThis, slot);
+
+		if (pExt->WeaponAmmo[slot].HasPool || pExt->WeaponAmmo[slot].Infinite)
+			return SkipDecrement;
 	}
 
 	// Replicate the overwritten `mov eax, dword ptr [ecx + 0x2fc]` then continue.

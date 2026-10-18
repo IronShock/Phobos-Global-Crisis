@@ -9,15 +9,34 @@
 #include <Unsorted.h>
 #include <algorithm>  // std::find
 
-// Ammo.Secondary: if the secondary weapon is empty, it cannot fire. Used by the
-// GetFireError wrappers below (Unit / Infantry / Building / Aircraft).
-inline FireError ApplySecondaryAmmoFireError(TechnoClass* pThis, int nWeaponIndex, FireError result)
+// Per-weapon ammo: a slot with its own pool cannot fire when the pool is empty,
+// and the vanilla Ammo check must not block it while the unit Ammo field is full
+// or belongs to another (legacy) weapon. Used by the four GetFireError wrappers.
+inline FireError ApplyWeaponAmmoFireError(TechnoClass* pThis, int nWeaponIndex, FireError result)
 {
-	if (TechnoExt::HasSecondaryAmmo(pThis) && nWeaponIndex == 1)
+	if (!pThis || nWeaponIndex < 0 || nWeaponIndex >= TechnoTypeClass::MaxWeapons)
+		return result;
+
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	TechnoExt::RefreshWeaponAmmoSlot(pThis, nWeaponIndex);
+	auto const& runtime = pExt->WeaponAmmo[nWeaponIndex];
+
+	if (!runtime.HasPool)
 	{
-		if (TechnoExt::ExtMap.Find(pThis)->AmmoSecondary <= 0)
-			return FireError::AMMO;
+		// An explicit Ammo=0 weapon is independent of the unit Ammo field; do not let
+		// vanilla report AMMO just because the unit pool belongs to another weapon.
+		if (runtime.Infinite && result == FireError::AMMO)
+			return FireError::OK;
+
+		return result;
 	}
+
+	if (!TechnoExt::CanFireWeaponSlot(pThis, nWeaponIndex, true))
+		return FireError::AMMO;
+
+	// The vanilla check saw the unit Ammo field, which is not this weapon's pool.
+	if (result == FireError::AMMO)
+		return FireError::OK;
 
 	return result;
 }
@@ -578,7 +597,7 @@ FireError __fastcall UnitClass__GetFireError_Wrapper(UnitClass* pThis, void* _, 
 	}
 	// === End Target Filter ===
 
-	return ApplySecondaryAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7F6030, UnitClass__GetFireError_Wrapper)
 
@@ -612,7 +631,7 @@ FireError __fastcall InfantryClass__GetFireError_Wrapper(InfantryClass* pThis, v
 	}
 	// === End Target Filter ===
 
-	return ApplySecondaryAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7EB418, InfantryClass__GetFireError_Wrapper)
 
@@ -764,7 +783,7 @@ FireError __fastcall BuildingClass__GetFireError_Wrapper(BuildingClass* pThis, v
 		}
 	}
 
-	return ApplySecondaryAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7E427C, BuildingClass__GetFireError_Wrapper)
 
@@ -814,7 +833,7 @@ FireError __fastcall AircraftClass__GetFireError_Wrapper(AircraftClass* pThis, v
 		}
 	}
 
-	return ApplySecondaryAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7E2664, AircraftClass__GetFireError_Wrapper)
 

@@ -365,10 +365,10 @@ DEFINE_HOOK(0x51BF10, InfantryClass_Update_FireOnTheMove, 0x6)
 		const int idx = pThis->SelectWeapon(pTarget);
 		auto const pWeapon = pThis->GetWeapon(idx)->WeaponType;
 
-		// Respect Ammo: a unit with an ammo pool cannot fire when it is empty.
-		// When out of ammo the WalkFire override is not armed either, so the normal
-		// Walk animation plays until the ammo pool is refilled.
-		if (pWeapon && pThis->Type->Ammo > 0 && pThis->Ammo <= 0)
+		// Respect ammo: per-weapon pools and the vanilla unit Ammo fallback both go
+		// through the shared helper. When out of ammo the WalkFire override is not
+		// armed either, so the normal Walk animation plays until the pool is refilled.
+		if (pWeapon && idx >= 0 && !TechnoExt::CanFireWeaponSlot(pThis, idx, true))
 			return 0;
 
 		if (walkFireSlot >= 0

@@ -1046,8 +1046,7 @@ enum class PipScale : unsigned int
 	Tiberium = 2,
 	Passengers = 3,
 	Power = 4,
-	MindControl = 5,
-	Ammo2 = 6
+	MindControl = 5
 };
 
 enum class Powerup : unsigned int

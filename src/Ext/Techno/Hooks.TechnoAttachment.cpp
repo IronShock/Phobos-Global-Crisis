@@ -1,4 +1,4 @@
-#include "Body.h"
+﻿#include "Body.h"
 
 #include <EventClass.h>
 #include <WarheadTypeClass.h>
@@ -784,9 +784,15 @@ Action __fastcall UnitClass_MouseOverCell_Wrapper(UnitClass* pThis, void*, CellS
 {
 	Action result = pThis->UnitClass::MouseOverCell(pCell, checkFog, ignoreForce);
 
-	auto const& pExt = TechnoExt::ExtMap.Find(pThis);
-	if (!pExt->ParentAttachment)
+	auto const pExt = TechnoExt::ExtMap.TryFind(pThis);
+
+	if (!pExt
+		|| reinterpret_cast<uintptr_t>(pExt) < 0x10000
+		|| !pExt->ParentAttachment
+		|| reinterpret_cast<uintptr_t>(pExt->ParentAttachment) < 0x10000)
+	{
 		return result;
+	}
 
 	switch (result)
 	{

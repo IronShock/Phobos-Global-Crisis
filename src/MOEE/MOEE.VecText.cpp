@@ -974,12 +974,14 @@ DEFINE_HOOK(0x434120, MOEE_VecText_Blit, 0x6)
 	if (!s_logged) { s_logged = true; MOEE::Log("vtext", "Blit hook live"); }
 
 	EnsureInit();
+
+	// This hook replaces TextScale's own 0x434120 hook, so keep its per-call
+	// bookkeeping (font swap + message-list row pitch) running even when the
+	// vector takeover itself is disabled.
+	TextScale::Update();
+
 	if (!g_Enabled)
 		return 0;
-
-	// Keep TextScale's per-call bookkeeping (font swap + message-list row pitch)
-	// running even though we short-circuit its own Blit hook below.
-	TextScale::Update();
 
 	void* t = (void*)R->ECX();
 	int wch = R->Stack<int>(0x4);
@@ -1019,7 +1021,15 @@ DEFINE_HOOK(0x434120, MOEE_VecText_Blit, 0x6)
 	x = NormC(x);
 	y = NormC(y);
 
-	int h = *(int*)((char*)t + BF_STEP);
+	// Take the line height from the font data that is active right now, not from
+	// the BitFont object's cached step: after TextScale swaps the scaled font in,
+	// the glyphs (and GetTextDimension) are already 1.5x while +0x1C can still
+	// hold the unscaled height, which would centre the glyph above the line and
+	// crop it.
+	void* vIdata = *(void**)((char*)t + BF_IDATA);
+	int h = (vIdata && IsPlausiblePtr(vIdata)) ? *(int*)((char*)vIdata + IDATA_LINE) : 0;
+	if (h < 8 || h > 64)
+		h = *(int*)((char*)t + BF_STEP);
 	if (h < 8 || h > 64)
 		h = px;
 
@@ -1125,6 +1135,13 @@ DEFINE_HOOK(0x434120, MOEE_VecText_Blit, 0x6)
 	unsigned char fr, fg, fb;
 	GtUnpack16((unsigned short)(eff & 0xFFFF), &fr, &fg, &fb);
 
+	// The engine's text box can have been measured before TextScale swapped the
+	// scaled font in (messages queued on the loading screen are a common case).
+	// Such a box is shorter than the vector glyph; clipping to it cuts the glyph
+	// in half, so grow the bottom bound enough for the glyph to fit.
+	if (B - Tp + 1 < e->outh)
+		B = Tp + e->outh - 1;
+
 	int dy = y + (topDigit ? g_CreditDY : 0) + (h - e->outh) / 2;
 	{
 		int lo = Tp, hi = B - e->outh + 1;
@@ -1195,12 +1212,13 @@ DEFINE_HOOK(0x433CF0, MOEE_VecText_GetDim, 0x6)
 	using namespace MOEE::VecText;
 
 	EnsureInit();
+
+	// This hook replaces TextScale's own 0x433CF0 hook, so keep its per-call
+	// bookkeeping running even when the vector takeover itself is disabled.
+	TextScale::Update();
+
 	if (!g_Enabled)
 		return 0;
-
-	// Keep TextScale's per-call bookkeeping (font swap + message-list row pitch)
-	// running even though we short-circuit its own GetDim hook below.
-	TextScale::Update();
 
 	void* t = (void*)R->ECX();
 	const wchar_t* s = R->Stack<const wchar_t*>(0x4);
@@ -1327,6 +1345,9 @@ DEFINE_HOOK(0x434B90, MOEE_VecText_Print, 0x5)
 	static bool s_logged = false;
 	if (!s_logged) { s_logged = true; MOEE::Log("vtext", "Print hook live"); }
 
+	// This hook replaces TextScale's own 0x434B90 hook; keep its update running.
+	TextScale::Update();
+
 	g_MenuActive = 0;   // a menu capture is only valid inside its own DrawText
 	g_DTBody = 0;       // likewise for the briefing body
 	return 0;
@@ -1340,11 +1361,10 @@ DEFINE_HOOK(0x434CD0, MOEE_VecText_DrawText, 0x5)
 	if (!s_logged) { s_logged = true; MOEE::Log("vtext", "DrawText hook live"); }
 
 	EnsureInit();
+	TextScale::Update();
 
 	if (g_Enabled)
 	{
-		TextScale::Update();
-
 		unsigned caller = (unsigned)R->Stack<DWORD>(0);
 		const wchar_t* str = R->Stack<const wchar_t*>(0xC);
 		int X = R->Stack<int>(0x10);
@@ -1404,5 +1424,13 @@ DEFINE_HOOK(0x4A5EB0, MOEE_VecText_Simple, 0x7)
 {
 	static bool s_logged = false;
 	if (!s_logged) { s_logged = true; MOEE::Log("vtext", "Simple hook live"); }
+
+	// This hook lives at TextScale's own 0x4A5EB0 address and replaces it (Syringe
+	// keeps only the last hook at an address). Reproduce TextScale's surface
+	// scoping here: measurement and drawing for one Simple_Text_Print_Wide call
+	// must use the same font variant, and the sidebar must stay unscaled.
+	GET_STACK(const Surface*, pSurface, 0x4);
+	TextScale::BeginSurface(pSurface);
+
 	return 0;
 }

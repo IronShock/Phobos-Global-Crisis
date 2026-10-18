@@ -1,4 +1,4 @@
-#include "Body.h"
+﻿#include "Body.h"
 #include <Ext/Bullet/Body.h>
 #include <Ext/Techno/Body.h>
 #include <SpawnManagerClass.h>
@@ -112,6 +112,35 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->Next.Read<true>(exINI, pSection, "Next");
 
 	// ExtraFire0, ExtraFire1, ... (ExtraFire is an alias for ExtraFire0). Read contiguous
+	// [WeaponType] can be parsed more than once (rules merge / inheritance). Clear the
+	// parallel ExtraFire arrays first, otherwise every reload appends a second copy and
+	// the unit ends up with duplicated extra weapons.
+	this->ExtraFire_Weapons.clear();
+	this->ExtraFire_FLHs.clear();
+	this->ExtraFire_Ranges.clear();
+	this->ExtraFire_OwnTarget.clear();
+	this->ExtraFire_OnTurret.clear();
+	this->ExtraFire_UseAmmo.clear();
+	this->ExtraFire_CheckParentRange.clear();
+	this->ExtraFire_CheckFacing.clear();
+	this->ExtraFire_OnlyWhenParentFires.clear();
+	this->ExtraFire_AutoTarget.clear();
+	this->ExtraFire_TurnToTarget.clear();
+	this->ExtraFire_FacingTolerances.clear();
+	this->ExtraFire_DamageMultipliers.clear();
+	this->ExtraFire_Chances.clear();
+	this->ExtraFire_Image_HouseColors.clear();
+	this->ExtraFire_Image_RotationAdjusts.clear();
+	this->ExtraFire_Image_Muzzles.clear();
+	this->ExtraFire_Image_FLHs.clear();
+	this->ExtraFire_Image_OnTurrets.clear();
+	this->ExtraFire_TurretROTs.clear();
+	this->ExtraFire_Turrets.clear();
+	this->ExtraFire_Image_Offsets.clear();
+	this->ExtraFire_ImageIDs.clear();
+	this->ExtraFire_ImageTypes.clear();
+	this->ExtraFire_ImageResolved.clear();
+
 	// entries until the first missing index (safety-capped at MaxExtraFire).
 	for (int i = 0; i < WeaponTypeExt::MaxExtraFire; ++i)
 	{
@@ -169,11 +198,11 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 		if (i == 0) onTurret.Read(exINI, pSection, "ExtraFire.OnTurret");
 		this->ExtraFire_OnTurret.push_back(onTurret.Get());
 
-		Valueable<bool> useAmmo { false };
+		Nullable<bool> useAmmo;
 		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.UseAmmo", i);
 		useAmmo.Read(exINI, pSection, tempBuffer);
 		if (i == 0) useAmmo.Read(exINI, pSection, "ExtraFire.UseAmmo");
-		this->ExtraFire_UseAmmo.push_back(useAmmo.Get());
+		this->ExtraFire_UseAmmo.push_back(useAmmo);
 
 		Valueable<bool> checkParentRange { false };
 		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.CheckParentRange", i);
@@ -198,12 +227,6 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 		autoTarget.Read(exINI, pSection, tempBuffer);
 		if (i == 0) autoTarget.Read(exINI, pSection, "ExtraFire.AutoTarget");
 		this->ExtraFire_AutoTarget.push_back(autoTarget.Get());
-
-		Valueable<bool> useAmmo2 { false };
-		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.UseAmmo2", i);
-		useAmmo2.Read(exINI, pSection, tempBuffer);
-		if (i == 0) useAmmo2.Read(exINI, pSection, "ExtraFire.UseAmmo2");
-		this->ExtraFire_UseAmmo2.push_back(useAmmo2.Get());
 
 		Valueable<bool> turnToTarget { false };
 		_snprintf_s(tempBuffer, _TRUNCATE, "ExtraFire%d.TurnToTarget", i);
@@ -291,6 +314,26 @@ void WeaponTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	}
 	this->Laser_IsSingleColor.Read(exINI, pSection, "IsSingleColor");
 	this->VisualScatter.Read(exINI, pSection, "VisualScatter");
+	this->Ammo.Read(exINI, pSection, "Ammo");
+	this->Ammo_Initial.Read(exINI, pSection, "Ammo.Initial");
+	this->Ammo_Reload.Read(exINI, pSection, "Ammo.Reload");
+	this->Ammo_Reload_Empty.Read(exINI, pSection, "Ammo.Reload.Empty");
+	this->Ammo_Reload_Amount.Read(exINI, pSection, "Ammo.Reload.Amount");
+	this->Ammo_Cost.Read(exINI, pSection, "Ammo.Cost");
+	this->Ammo_PerBurst.Read(exINI, pSection, "Ammo.PerBurst");
+
+	if (this->Ammo.isset() || this->Ammo_PerBurst.Get())
+	{
+		Debug::Log("[WeaponAmmo] [%s] Ammo=%d Initial=%d Reload=%d Empty=%d Amount=%d Cost=%d PerBurst=%d\n",
+			pThis->ID,
+			this->Ammo.isset() ? this->Ammo.Get() : -999,
+			this->Ammo_Initial.isset() ? this->Ammo_Initial.Get() : -999,
+			this->Ammo_Reload.isset() ? this->Ammo_Reload.Get() : -999,
+			this->Ammo_Reload_Empty.isset() ? this->Ammo_Reload_Empty.Get() : -999,
+			this->Ammo_Reload_Amount.Get(),
+			this->Ammo_Cost.Get(),
+			this->Ammo_PerBurst.Get() ? 1 : 0);
+	}
 	this->ROF_RandomDelay.Read(exINI, pSection, "ROF.RandomDelay");
 	this->ChargeTurret_Delays.Read(exINI, pSection, "ChargeTurret.Delays");
 	this->OmniFire_TurnToTarget.Read(exINI, pSection, "OmniFire.TurnToTarget");
@@ -431,7 +474,6 @@ void WeaponTypeExt::ExtData::Serialize(T& Stm)
 		// anywhere but the end invalidates every pre-existing savegame.
 		.Process(this->ExtraFire_OnlyWhenParentFires)
 		.Process(this->ExtraFire_AutoTarget)
-		.Process(this->ExtraFire_UseAmmo2)
 		.Process(this->ExtraFire_TurnToTarget)
 		.Process(this->ExtraFire_FacingTolerances)
 		.Process(this->ExtraFire_DamageMultipliers)
@@ -445,6 +487,13 @@ void WeaponTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->ExtraFire_Image_OnTurrets)
 		.Process(this->ExtraFire_Image_RotationAdjusts)
 		.Process(this->ExtraFire_Image_Muzzles)
+		.Process(this->Ammo)
+		.Process(this->Ammo_Initial)
+		.Process(this->Ammo_Reload)
+		.Process(this->Ammo_Reload_Empty)
+		.Process(this->Ammo_Reload_Amount)
+		.Process(this->Ammo_Cost)
+		.Process(this->Ammo_PerBurst)
 		;
 };
 

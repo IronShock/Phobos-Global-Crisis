@@ -243,18 +243,29 @@ DEFINE_HOOK(0x70A36E, TechnoClass_DrawPips_Ammo, 0x6)
 	LEA_STACK(RectangleStruct*, offset, STACK_OFFSET(0x74, -0x24));
 	GET_STACK(RectangleStruct*, rect, STACK_OFFSET(0x74, 0xC));
 	GET(const int, pipWrap, EBX);
-	GET_STACK(const int, pipCount, STACK_OFFSET(0x74, -0x54));
-	GET_STACK(const int, maxPips, STACK_OFFSET(0x74, -0x60));
 	GET(const int, yOffset, ESI);
 
 	auto const pTypeExt = TechnoExt::ExtMap.Find(pThis)->TypeExtData;
 	auto const pipOffset = pTypeExt->AmmoPipOffset.Get();
+
+	// Show the pool of the most recently fired weapon slot (falling back to the
+	// selected/primary weapon). Legacy unit Ammo and its maximum are returned by the
+	// same helpers, so the vanilla display keeps working unchanged.
+	const int slot = TechnoExt::GetCurrentDisplayWeaponSlot(pThis);
+	const int maxPips = TechnoExt::GetWeaponAmmoMax(pThis, slot);
+	int pipCount = TechnoExt::GetWeaponAmmoRemaining(pThis, slot);
+
+	if (maxPips <= 0)
+		return SkipGameDrawing;
+
+	pipCount = Math::clamp(pipCount, 0, maxPips);
+
 	const int offsetWidth = offset->Width;
 	Point2D position = { offset->X + pipOffset.X, offset->Y + pipOffset.Y };
 
 	if (pipWrap > 0)
 	{
-		const int ammo = pThis->Ammo;
+		const int ammo = pipCount;
 		const int levels = maxPips / pipWrap - 1;
 		const int startFrame = pTypeExt->AmmoPipWrapStartFrame;
 
@@ -310,10 +321,11 @@ DEFINE_HOOK(0x70A36E, TechnoClass_DrawPips_Ammo, 0x6)
 			position.Y += yOffset;
 		}
 	}
-	
-	// position already points past the last ammo pip after the draw loop
+
+	// Keep the optional second pip row (Passengers/Power/etc.) working. Ammo2 was
+	// removed together with the old Ammo.Secondary pool.
 	Point2D secondaryPos = { position.X + 2, position.Y };
-    TechnoExt::DrawSecondaryPips(pThis, &secondaryPos, rect);
+	TechnoExt::DrawSecondaryPips(pThis, &secondaryPos, rect);
 
 	return SkipGameDrawing;
 }

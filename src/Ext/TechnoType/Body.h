@@ -21,6 +21,20 @@
 
 class Matrix3D;
 class ParticleSystemTypeClass;
+
+// Per-slot overrides for the per-weapon ammo pools. Every field is optional so an
+// unset key falls back to the firing weapon's own [WeaponType] Ammo.* value.
+struct WeaponAmmoOverride
+{
+	Nullable<int> Ammo;
+	Nullable<int> Initial;
+	Nullable<int> Reload;
+	Nullable<int> EmptyReload;
+	Nullable<int> ReloadAmount;
+	Nullable<int> Cost;
+	Nullable<bool> PerBurst;
+};
+
 class TechnoTypeExt
 {
 public:
@@ -86,21 +100,6 @@ public:
 		Valueable<int> Ammo_DeployUnlockMinimumAmount;
 		Valueable<int> Ammo_DeployUnlockMaximumAmount;
 
-		// Separate ammo pool for the secondary weapon (weapon index 1).
-		// When Ammo.Secondary <= 0 (default), primary & secondary weapons share Ammo.
-		Valueable<int> Ammo_Secondary;
-		Valueable<int> Ammo_Secondary_InitialAmmo;
-		Valueable<int> Ammo_Secondary_Reload;
-		Valueable<int> Ammo_Secondary_EmptyReload;
-		Valueable<int> Ammo_Secondary_ReloadIncrement;
-		Valueable<int> Ammo_Secondary_AddOnDeploy;
-		Valueable<int> Ammo_Secondary_AutoDeployMinimumAmount;
-		Valueable<int> Ammo_Secondary_AutoDeployMaximumAmount;
-		Valueable<int> Ammo_Secondary_DeployUnlockMinimumAmount;
-		Valueable<int> Ammo_Secondary_DeployUnlockMaximumAmount;
-		Valueable<bool> Ammo_Secondary_Shared;
-		Valueable<int> Ammo_Secondary_Shared_Group;
-		Valueable<Point2D> Ammo_Secondary_Offset;
 
 		Nullable<AutoDeathBehavior> AutoDeath_Behavior;
 		ValueableVector<AnimTypeClass*> AutoDeath_VanishAnimation;
@@ -221,6 +220,40 @@ public:
 
 		Valueable<bool> Ammo_Shared;
 		Valueable<int> Ammo_Shared_Group;
+
+		// Per-weapon ammo pools. Indexed by weapon slot (0 = primary, 1 = secondary,
+		// 2..17 = additional weapon slots). Elite weapons share the slot's pool.
+		WeaponAmmoOverride WeaponAmmo[TechnoTypeClass::MaxWeapons];
+
+		// Enhanced drive acceleration. 0 = vanilla, 1 = enhanced. The mode must be
+		// explicitly set; merely writing the new keys does not enable it.
+		Valueable<int> Acceleration_Mode { 0 };
+		Nullable<int> Acceleration_Time;
+		Nullable<int> Deceleration_Time;
+		Valueable<int> Acceleration_Curve { 0 }; // 0 linear, 1 ease-in, 2 ease-out, 3 smoothstep
+		Valueable<int> Deceleration_Curve { 0 };
+		Valueable<double> InitialSpeed { 0.0 }; // speed fraction when starting from rest
+		Valueable<double> MinimumSpeed { 0.05 };
+		Valueable<int> BrakeDistance { -1 }; // -1 automatic, >0 fixed leptons
+		Valueable<double> BrakeDistance_Multiplier { 1.0 };
+		Valueable<int> StopDistance { 16 }; // leptons
+		Valueable<double> TurnSpeedFactor { 1.0 };
+		Valueable<double> SlopeSpeedFactor { 1.0 };
+		Valueable<double> LoadSpeedFactor { 1.0 };
+		Valueable<double> HealthSpeedFactor { 1.0 };
+		Valueable<double> HealthSpeedThreshold { 0.5 };
+		Valueable<double> TerrainSpeed_Clear { 1.0 };
+		Valueable<double> TerrainSpeed_Road { 1.0 };
+		Valueable<double> TerrainSpeed_Water { 1.0 };
+		Valueable<double> TerrainSpeed_Rock { 1.0 };
+		Valueable<double> TerrainSpeed_Wall { 1.0 };
+		Valueable<double> TerrainSpeed_Tiberium { 1.0 };
+		Valueable<double> TerrainSpeed_Beach { 1.0 };
+		Valueable<double> TerrainSpeed_Rough { 1.0 };
+		Valueable<double> TerrainSpeed_Ice { 1.0 };
+		Valueable<double> TerrainSpeed_Railroad { 1.0 };
+		Valueable<double> TerrainSpeed_Tunnel { 1.0 };
+		Valueable<double> TerrainSpeed_Weeds { 1.0 };
 
 		Nullable<SelfHealGainType> SelfHealGainType;
 		Valueable<bool> Passengers_SyncOwner;
@@ -646,19 +679,6 @@ public:
 			, Ammo_DeployUnlockMinimumAmount { -1 }
 			, Ammo_DeployUnlockMaximumAmount { -1 }
 
-			, Ammo_Secondary { 0 }
-			, Ammo_Secondary_InitialAmmo { -1 }
-			, Ammo_Secondary_Reload { -1 }
-			, Ammo_Secondary_EmptyReload { -1 }
-			, Ammo_Secondary_ReloadIncrement { 1 }
-			, Ammo_Secondary_AddOnDeploy { 0 }
-			, Ammo_Secondary_AutoDeployMinimumAmount { -1 }
-			, Ammo_Secondary_AutoDeployMaximumAmount { -1 }
-			, Ammo_Secondary_DeployUnlockMinimumAmount { -1 }
-			, Ammo_Secondary_DeployUnlockMaximumAmount { -1 }
-			, Ammo_Secondary_Shared { false }
-			, Ammo_Secondary_Shared_Group { -1 }
-			, Ammo_Secondary_Offset { { 0, 0 } }
 
 			, AutoDeath_Behavior { }
 			, AutoDeath_VanishAnimation {}

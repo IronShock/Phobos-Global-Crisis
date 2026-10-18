@@ -1,4 +1,4 @@
-#include "Body.h"
+﻿#include "Body.h"
 
 #include <algorithm>
 #include <BuildingClass.h>
@@ -149,15 +149,19 @@ void AircraftExt::FireWeapon(AircraftClass* pThis, AbstractClass* pTarget)
 
 			if (pWeaponExt->Strafing_UseAmmoPerShot)
 			{
-				// Ammo.Secondary: drain the matching ammo pool based on the weapon fired.
-				if (TechnoExt::HasSecondaryAmmo(pThis) && weaponIndex == 1)
-					TechnoExt::DecreaseSecondaryAmmo(pThis);
-				else
+				TechnoExt::RefreshWeaponAmmoSlot(pThis, weaponIndex);
+				auto const& runtime = pExt->WeaponAmmo[weaponIndex];
+
+				// Own-pool and explicit-infinite weapons never touch the unit Ammo
+				// field here. Only the legacy unit Ammo path still drains it.
+				if (!runtime.HasPool && !runtime.Infinite)
 					pThis->Ammo--;
 
 				pThis->ShouldLoseAmmo = false;
 
-				if (!pThis->Ammo)
+				const int remaining = TechnoExt::GetWeaponAmmoRemaining(pThis, weaponIndex);
+
+				if (remaining == 0)
 				{
 					pThis->SetTarget(nullptr);
 					pThis->SetDestination(nullptr, true);

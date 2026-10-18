@@ -1,4 +1,4 @@
-// methods used in TechnoClass_AI hooks or anything similar
+﻿// methods used in TechnoClass_AI hooks or anything similar
 #include "Body.h"
 
 #include <algorithm>
@@ -29,7 +29,8 @@
 // It's not recommended to do anything more here it could have a better place for performance consideration
 void TechnoExt::ExtData::OnEarlyUpdate()
 {
-	auto const pType = this->OwnerObject()->GetTechnoType();
+	auto const pThis = this->OwnerObject();
+	auto const pType = pThis->GetTechnoType();
 
 	// NOTE: The PR previously destroyed all particle systems here when the techno
 	// was under fog (UnInit + null). That runs every frame for every fogged techno
@@ -40,6 +41,9 @@ void TechnoExt::ExtData::OnEarlyUpdate()
 	// Notice that Ares may handle type conversion in the same hook here, which is executed right before this one thankfully
 	if (!this->TypeExtData || this->TypeExtData->OwnerObject() != pType)
 		this->UpdateTypeData(pType);
+
+	if (!this->WeaponAmmoInitialized || this->WeaponAmmoElite != pThis->Veterancy.IsElite())
+		TechnoExt::RefreshAllWeaponAmmo(pThis);
 
 	if (this->CheckDeathConditions())
 		return;
@@ -53,7 +57,7 @@ void TechnoExt::ExtData::OnEarlyUpdate()
 	this->UpdateRecountBurst();
 	this->UpdateExtraFire();
 	this->UpdateRearmInEMPState();
-	TechnoExt::UpdateSecondaryReload(this->OwnerObject());
+	TechnoExt::UpdateWeaponAmmoReload(pThis);
 
 	if (this->AttackMoveFollowerTempCount)
 		this->AttackMoveFollowerTempCount--;
@@ -205,7 +209,7 @@ void TechnoExt::ExtData::DepletedAmmoActions()
 	auto const pTypeExt = this->TypeExtData;
 	auto const pType = pTypeExt->OwnerObject();
 
-	if (pType->Ammo <= 0 && pTypeExt->Ammo_Secondary.Get() <= 0)
+	if (pType->Ammo <= 0)
 		return;
 
 	auto const rtti = pThis->WhatAmI();
@@ -231,20 +235,6 @@ void TechnoExt::ExtData::DepletedAmmoActions()
 
 	int const ammo = pThis->Ammo;
 	bool canDeploy = TechnoExt::HasAmmoToDeploy(pThis) && (min < 0 || ammo >= min) && (max < 0 || ammo <= max);
-
-	// Mirror auto-deploy thresholds for the secondary pool.
-	if (pTypeExt->Ammo_Secondary.Get() > 0)
-	{
-		int const minSecondary = pTypeExt->Ammo_Secondary_AutoDeployMinimumAmount;
-		int const maxSecondary = pTypeExt->Ammo_Secondary_AutoDeployMaximumAmount;
-
-		if (minSecondary >= 0 || maxSecondary >= 0)
-		{
-			const auto pExt = TechnoExt::ExtMap.Find(pThis);
-			int const ammoSecondary = pExt->AmmoSecondary;
-			canDeploy = canDeploy && (minSecondary < 0 || ammoSecondary >= minSecondary) && (maxSecondary < 0 || ammoSecondary <= maxSecondary);
-		}
-	}
 
 	bool isDeploying = pThis->CurrentMission == Mission::Unload || pThis->QueuedMission == Mission::Unload;
 
@@ -675,6 +665,10 @@ void TechnoExt::ExtData::UpdateTypeData(TechnoTypeClass* pCurrentType)
 	this->PreviousType = pOldType;
 	auto const pNewTypeExt = TechnoTypeExt::ExtMap.Find(pCurrentType);
 	this->TypeExtData = pNewTypeExt;
+
+	// Re-resolve all weapon ammo slots against the new type. Existing slot pools are
+	// kept and clamped by RefreshAllWeaponAmmo rather than being refilled.
+	this->WeaponAmmoInitialized = false;
 	
 	// Handle attachment slot matching and conversion
 	TechnoExt::HandleAttachmentConversion(pThis, pOldType, pCurrentType);
@@ -1509,6 +1503,392 @@ namespace
 	}
 }
 
+void TechnoExt::RefreshExtraFireAmmoEntry(TechnoClass* pThis, int slot, int entry)
+{
+	if (!pThis || slot < 0 || slot >= TechnoTypeClass::MaxWeapons)
+		return;
+
+	const int index = slot * TechnoExt::ExtraFirePerSlot + entry;
+
+	if (index < 0 || index >= TechnoExt::ExtraFireMaxEntries)
+		return;
+
+	const auto pType = pThis->GetTechnoType();
+	const auto pParentWeapon = TechnoTypeExt::GetWeaponType(pType, slot, pThis->Veterancy.IsElite());
+
+	if (!pParentWeapon)
+		return;
+
+	const auto pParentExt = WeaponTypeExt::ExtMap.Find(pParentWeapon);
+
+	if (entry < 0 || entry >= static_cast<int>(pParentExt->ExtraFire_Weapons.size()))
+		return;
+
+	const auto pExtra = pParentExt->ExtraFire_Weapons[entry];
+
+	if (!pExtra)
+		return;
+
+	const auto pExt = TechnoExt::ExtMap.Find(pThis);
+	const auto pExtraExt = WeaponTypeExt::ExtMap.Find(pExtra);
+
+	const auto ensureSize = [&]()
+	{
+		const size_t size = static_cast<size_t>(TechnoExt::ExtraFireMaxEntries);
+
+		// Each vector is resized independently: the serialized count/timer vectors may
+		// already be full while the transient config vectors are still empty after load.
+		if (pExt->ExtraFireAmmoCount.size() < size)
+			pExt->ExtraFireAmmoCount.resize(size, 0);
+
+		if (pExt->ExtraFireAmmoReloadTimer.size() < size)
+			pExt->ExtraFireAmmoReloadTimer.resize(size);
+
+		if (pExt->ExtraFireAmmoMax.size() < size)
+			pExt->ExtraFireAmmoMax.resize(size, 0);
+
+		if (pExt->ExtraFireAmmoReload.size() < size)
+			pExt->ExtraFireAmmoReload.resize(size, -1);
+
+		if (pExt->ExtraFireAmmoEmptyReload.size() < size)
+			pExt->ExtraFireAmmoEmptyReload.resize(size, -1);
+
+		if (pExt->ExtraFireAmmoReloadAmount.size() < size)
+			pExt->ExtraFireAmmoReloadAmount.resize(size, 1);
+
+		if (pExt->ExtraFireAmmoCost.size() < size)
+			pExt->ExtraFireAmmoCost.resize(size, 1);
+
+		if (pExt->ExtraFireAmmoHasPool.size() < size)
+			pExt->ExtraFireAmmoHasPool.resize(size, 0);
+
+		if (pExt->ExtraFireAmmoInfinite.size() < size)
+			pExt->ExtraFireAmmoInfinite.resize(size, 0);
+
+		if (pExt->ExtraFireAmmoUsesUnit.size() < size)
+			pExt->ExtraFireAmmoUsesUnit.resize(size, 0);
+
+		if (pExt->ExtraFireAmmoPerBurst.size() < size)
+			pExt->ExtraFireAmmoPerBurst.resize(size, 0);
+
+		if (pExt->ExtraFireAmmoWeapon.size() < size)
+			pExt->ExtraFireAmmoWeapon.resize(size, nullptr);
+	};
+
+	ensureSize();
+
+	const bool hadPool = pExt->ExtraFireAmmoHasPool[index] != 0;
+	const int oldMax = pExt->ExtraFireAmmoMax[index];
+	const bool preserveLoaded = pExt->ExtraFireAmmoLoadedFromSave
+		&& index < static_cast<int>(pExt->ExtraFireAmmoCount.size())
+		&& !hadPool;
+	const bool weaponChanged = index < static_cast<int>(pExt->ExtraFireAmmoWeapon.size())
+		&& pExt->ExtraFireAmmoWeapon[index] != pExtra;
+
+	int maxAmmo = -1;
+
+	if (pExtraExt->Ammo.isset())
+		maxAmmo = pExtraExt->Ammo.Get();
+
+	const bool hasPool = maxAmmo > 0;
+	const bool explicitlyInfinite = maxAmmo == 0;
+
+	// No Ammo key at all: follow the unit Ammo when the techno has one, exactly like
+	// a normal weapon slot. ExtraFire.UseAmmo=no is the explicit opt-out to unlimited.
+	const auto& useAmmoOption = pParentExt->ExtraFire_UseAmmo[entry];
+	const bool useAmmoSet = useAmmoOption.isset();
+	const bool useAmmoValue = useAmmoSet && useAmmoOption.Get();
+
+	bool usesUnitAmmo = false;
+	bool infinite = explicitlyInfinite;
+
+	if (!hasPool && !explicitlyInfinite)
+	{
+		if (useAmmoSet && !useAmmoValue)
+			infinite = true;
+		else if (pThis->GetTechnoType()->Ammo > 0)
+			usesUnitAmmo = true;
+		else
+			infinite = true;
+	}
+
+	const int max = hasPool ? maxAmmo : 0;
+	const int initial = hasPool
+		? (pExtraExt->Ammo_Initial.isset() ? pExtraExt->Ammo_Initial.Get() : -1)
+		: 0;
+	const int reload = hasPool
+		? (pExtraExt->Ammo_Reload.isset() ? pExtraExt->Ammo_Reload.Get() : -1)
+		: -1;
+	int emptyReload = hasPool
+		? (pExtraExt->Ammo_Reload_Empty.isset() ? pExtraExt->Ammo_Reload_Empty.Get() : -1)
+		: -1;
+
+	if (emptyReload < 0)
+		emptyReload = reload;
+
+	const int amount = hasPool
+		? Math::max(1, pExtraExt->Ammo_Reload_Amount.Get())
+		: 1;
+	const int cost = Math::max(1, pExtraExt->Ammo_Cost.Get());
+	const bool perBurst = pExtraExt->Ammo_PerBurst.Get();
+
+	pExt->ExtraFireAmmoHasPool[index] = hasPool ? 1 : 0;
+	pExt->ExtraFireAmmoInfinite[index] = infinite ? 1 : 0;
+	pExt->ExtraFireAmmoUsesUnit[index] = usesUnitAmmo ? 1 : 0;
+	pExt->ExtraFireAmmoMax[index] = max;
+	pExt->ExtraFireAmmoReload[index] = reload;
+	pExt->ExtraFireAmmoEmptyReload[index] = emptyReload;
+	pExt->ExtraFireAmmoReloadAmount[index] = amount;
+	pExt->ExtraFireAmmoCost[index] = cost;
+	pExt->ExtraFireAmmoPerBurst[index] = perBurst ? 1 : 0;
+	pExt->ExtraFireAmmoWeapon[index] = pExtra;
+
+	if (weaponChanged)
+	{
+		Debug::Log("[WeaponAmmo] [%s] ExtraFire slot=%d entry=%d weapon=%s: pool=%d max=%d infinite=%d usesUnit=%d cost=%d perBurst=%d\n",
+			pThis->GetTechnoType()->ID, slot, entry, pExtra->ID,
+			hasPool ? 1 : 0, max, infinite ? 1 : 0, usesUnitAmmo ? 1 : 0,
+			cost, perBurst ? 1 : 0);
+	}
+
+	if (hasPool)
+	{
+		if (preserveLoaded)
+		{
+			pExt->ExtraFireAmmoCount[index] = Math::clamp(pExt->ExtraFireAmmoCount[index], 0, max);
+		}
+		else if (!hadPool || weaponChanged || (oldMax != max && pExt->ExtraFireAmmoCount[index] > max))
+		{
+			if (!hadPool || weaponChanged)
+			{
+				const int start = initial < 0 ? max : initial;
+				pExt->ExtraFireAmmoCount[index] = Math::clamp(start, 0, max);
+				pExt->ExtraFireAmmoReloadTimer[index].Stop();
+			}
+			else
+			{
+				pExt->ExtraFireAmmoCount[index] = Math::clamp(pExt->ExtraFireAmmoCount[index], 0, max);
+			}
+		}
+
+		if (pExt->ExtraFireAmmoCount[index] >= max)
+		{
+			pExt->ExtraFireAmmoReloadTimer[index].Stop();
+		}
+		else
+		{
+			auto& timer = pExt->ExtraFireAmmoReloadTimer[index];
+
+			if (!timer.IsTicking() && !timer.InProgress())
+			{
+				const int delay = pExt->ExtraFireAmmoCount[index] <= 0 ? emptyReload : reload;
+
+				if (delay >= 0)
+					timer.Start(delay);
+			}
+		}
+	}
+	else
+	{
+		pExt->ExtraFireAmmoCount[index] = 0;
+		pExt->ExtraFireAmmoReloadTimer[index].Stop();
+	}
+}
+
+bool TechnoExt::CanFireExtraFire(TechnoClass* pThis, int index)
+{
+	if (!pThis || index < 0 || index >= TechnoExt::ExtraFireMaxEntries)
+		return true;
+
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+
+	if (!pExt || index >= static_cast<int>(pExt->ExtraFireAmmoHasPool.size()))
+		return true;
+
+	const int cost = index < static_cast<int>(pExt->ExtraFireAmmoCost.size())
+		? Math::max(1, pExt->ExtraFireAmmoCost[index])
+		: 1;
+
+	if (pExt->ExtraFireAmmoHasPool[index])
+	{
+		if (index >= static_cast<int>(pExt->ExtraFireAmmoCount.size()))
+			return false;
+
+		return pExt->ExtraFireAmmoCount[index] >= cost;
+	}
+
+	if (index < static_cast<int>(pExt->ExtraFireAmmoInfinite.size())
+		&& pExt->ExtraFireAmmoInfinite[index])
+	{
+		return true;
+	}
+
+	if (index < static_cast<int>(pExt->ExtraFireAmmoUsesUnit.size())
+		&& pExt->ExtraFireAmmoUsesUnit[index])
+	{
+		auto const pType = pThis->GetTechnoType();
+		return pType->Ammo > 0 && pThis->Ammo >= cost;
+	}
+
+	return true;
+}
+
+bool TechnoExt::ConsumeExtraFireAmmo(TechnoClass* pThis, int index)
+{
+	if (!pThis || index < 0 || index >= TechnoExt::ExtraFireMaxEntries)
+		return false;
+
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+
+	if (!pExt || index >= static_cast<int>(pExt->ExtraFireAmmoHasPool.size()))
+		return false;
+
+	const int cost = index < static_cast<int>(pExt->ExtraFireAmmoCost.size())
+		? Math::max(1, pExt->ExtraFireAmmoCost[index])
+		: 1;
+
+	if (pExt->ExtraFireAmmoHasPool[index])
+	{
+		pExt->ExtraFireAmmoCount[index] = Math::max(0, pExt->ExtraFireAmmoCount[index] - cost);
+
+		if (pExt->ExtraFireAmmoCount[index] == 0)
+		{
+			Debug::Log("[WeaponAmmo] [%s] ExtraFire index=%d weapon=%s reached 0\n",
+				pThis->GetTechnoType()->ID, index,
+				pExt->ExtraFireAmmoWeapon[index] ? pExt->ExtraFireAmmoWeapon[index]->ID : "<none>");
+		}
+
+		auto& timer = pExt->ExtraFireAmmoReloadTimer[index];
+		const int ammo = pExt->ExtraFireAmmoCount[index];
+
+		if (ammo < pExt->ExtraFireAmmoMax[index])
+		{
+			if (!timer.InProgress())
+			{
+				const int delay = ammo <= 0 ? pExt->ExtraFireAmmoEmptyReload[index] : pExt->ExtraFireAmmoReload[index];
+
+				if (delay >= 0)
+					timer.Start(delay);
+				else
+					timer.Stop();
+			}
+		}
+		else
+		{
+			timer.Stop();
+		}
+
+		TechnoExt::UpdateAircraftAmmoCompat(pThis);
+
+		return true;
+	}
+
+	if (index < static_cast<int>(pExt->ExtraFireAmmoInfinite.size())
+		&& pExt->ExtraFireAmmoInfinite[index])
+	{
+		return false;
+	}
+
+	if (index < static_cast<int>(pExt->ExtraFireAmmoUsesUnit.size())
+		&& pExt->ExtraFireAmmoUsesUnit[index])
+	{
+		auto const pType = pThis->GetTechnoType();
+
+		if (pType->Ammo > 0 && pThis->Ammo > 0)
+		{
+			pThis->Ammo = Math::max(0, pThis->Ammo - cost);
+
+			if (pThis->Ammo == 0)
+			{
+				Debug::Log("[WeaponAmmo] [%s] ExtraFire index=%d consumed the last unit Ammo\n",
+					pThis->GetTechnoType()->ID, index);
+			}
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void TechnoExt::UpdateExtraFireAmmoReload(TechnoClass* pThis)
+{
+	if (!pThis)
+		return;
+
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+
+	if (!pExt)
+		return;
+
+	const bool atAirfield = IsAtAirfield(pThis);
+	const auto pType = pThis->GetTechnoType();
+
+	int padReload = -1;
+	int padEmptyReload = -1;
+	int padIncrement = 1;
+
+	if (atAirfield)
+	{
+		padReload = pType->Reload > 0
+			? pType->Reload
+			: Math::max(1, static_cast<int>(RulesClass::Instance->ReloadRate));
+		padEmptyReload = pType->EmptyReload > 0 ? pType->EmptyReload : padReload;
+		padIncrement = pType->ReloadIncrement > 0 ? pType->ReloadIncrement : 1;
+	}
+
+	int count = Math::min(static_cast<int>(pExt->ExtraFireAmmoCount.size()),
+		static_cast<int>(pExt->ExtraFireAmmoReloadTimer.size()));
+	count = Math::min(count, static_cast<int>(pExt->ExtraFireAmmoHasPool.size()));
+	count = Math::min(count, static_cast<int>(pExt->ExtraFireAmmoMax.size()));
+	count = Math::min(count, static_cast<int>(pExt->ExtraFireAmmoReloadAmount.size()));
+	count = Math::min(count, static_cast<int>(pExt->ExtraFireAmmoReload.size()));
+	count = Math::min(count, static_cast<int>(pExt->ExtraFireAmmoEmptyReload.size()));
+
+	for (int index = 0; index < count; ++index)
+	{
+		if (!pExt->ExtraFireAmmoHasPool[index])
+			continue;
+
+		int& ammo = pExt->ExtraFireAmmoCount[index];
+		const int max = pExt->ExtraFireAmmoMax[index];
+
+		if (ammo >= max)
+			continue;
+
+		auto& timer = pExt->ExtraFireAmmoReloadTimer[index];
+
+		if (timer.InProgress())
+			continue;
+
+		const int increment = atAirfield ? padIncrement : pExt->ExtraFireAmmoReloadAmount[index];
+
+		if (increment <= 0)
+			continue;
+
+		const int delay = atAirfield
+			? (ammo <= 0 ? padEmptyReload : padReload)
+			: (ammo <= 0 ? pExt->ExtraFireAmmoEmptyReload[index] : pExt->ExtraFireAmmoReload[index]);
+
+		if (!timer.IsTicking())
+		{
+			if (delay >= 0)
+				timer.Start(delay);
+
+			continue;
+		}
+
+		ammo = Math::min(max, ammo + increment);
+
+		if (ammo >= max)
+			timer.Stop();
+		else if (delay >= 0)
+			timer.Start(delay);
+		else
+			timer.Stop();
+	}
+}
+
 void TechnoExt::ExtData::UpdateExtraFire()
 {
 	const auto pThis = this->OwnerObject();
@@ -1670,6 +2050,8 @@ void TechnoExt::ExtData::UpdateExtraFire()
 
 			if (!IsExtraFireUsable(pExtra))
 				continue;
+
+			TechnoExt::RefreshExtraFireAmmoEntry(pThis, slot, i);
 
 			const int range = GetExtraFireRange(pParentExt, i, pExtra, pThis, parentRange);
 
@@ -1862,15 +2244,26 @@ void TechnoExt::ExtData::UpdateExtraFire()
 					continue;
 			}
 
-			const bool useAmmo = pParentExt->ExtraFire_UseAmmo[i];
-			const bool useAmmo2 = pParentExt->ExtraFire_UseAmmo2[i];
+			const bool hasOwnPool = index < static_cast<int>(this->ExtraFireAmmoHasPool.size())
+				&& this->ExtraFireAmmoHasPool[index] != 0;
+			const bool infinite = index < static_cast<int>(this->ExtraFireAmmoInfinite.size())
+				&& this->ExtraFireAmmoInfinite[index] != 0;
+			const bool usesUnit = index < static_cast<int>(this->ExtraFireAmmoUsesUnit.size())
+				&& this->ExtraFireAmmoUsesUnit[index] != 0;
 
-			// Ammo gates. A type with Ammo=0 has unlimited ammo and ignores UseAmmo.
-			if (useAmmo && pType->Ammo > 0 && pThis->Ammo <= 0)
-				continue;
+			// Ammo gate: own pool, unit Ammo fallback, or explicit unlimited. A
+			// PerBurst entry that already paid for the current burst is always allowed
+			// to finish it.
+			if (!infinite)
+			{
+				const bool midBurst = index < static_cast<int>(this->ExtraFireAmmoPerBurst.size())
+					&& this->ExtraFireAmmoPerBurst[index] != 0
+					&& index < static_cast<int>(this->ExtraFireBurstIndex.size())
+					&& this->ExtraFireBurstIndex[index] > 0;
 
-			if (useAmmo2 && TechnoExt::HasSecondaryAmmo(pThis) && this->AmmoSecondary <= 0)
-				continue;
+				if (!midBurst && !TechnoExt::CanFireExtraFire(pThis, index))
+					continue;
+			}
 
 			// Facing gate: the turret (or body for turretless units) must actually be
 			// pointing at this target before firing. Takes precedence over OwnTarget.
@@ -1980,6 +2373,7 @@ void TechnoExt::ExtData::UpdateExtraFire()
 			// ROF cooldown only starts after the last shot of the burst.
 			auto const pExtraExt = WeaponTypeExt::ExtMap.Find(pExtra);
 			int& burstIndex = this->ExtraFireBurstIndex[index];
+			const int firedBurstIndex = burstIndex;
 			burstIndex++;
 
 			if (pExtra->Burst > 1 && burstIndex < pExtra->Burst)
@@ -2008,11 +2402,14 @@ void TechnoExt::ExtData::UpdateExtraFire()
 				this->ExtraFireCooldowns[index].Start(rof);
 			}
 
-			if (useAmmo && pType->Ammo > 0 && pThis->Ammo > 0)
-				pThis->Ammo--;
+			if (!infinite && (hasOwnPool || usesUnit))
+			{
+				const bool perBurst = index < static_cast<int>(this->ExtraFireAmmoPerBurst.size())
+					&& this->ExtraFireAmmoPerBurst[index] != 0;
 
-			if (useAmmo2 && TechnoExt::HasSecondaryAmmo(pThis))
-				TechnoExt::DecreaseSecondaryAmmo(pThis);
+				if (!perBurst || firedBurstIndex == 0)
+					TechnoExt::ConsumeExtraFireAmmo(pThis, index);
+			}
 		}
 	}
 }
@@ -2308,30 +2705,6 @@ void TechnoExt::UpdateSharedAmmo(TechnoClass* pThis)
 			}
 		}
 
-		// Mirror Ammo.Shared for the secondary pool.
-		if (pExt->Ammo_Secondary_Shared && pExt->Ammo_Secondary.Get() > 0)
-		{
-			const auto pThisExt = TechnoExt::ExtMap.Find(pThis);
-
-			for (auto pPassenger = pThis->Passengers.GetFirstPassenger(); pPassenger; pPassenger = abstract_cast<FootClass*>(pPassenger->NextObject))
-			{
-				const auto pPassengerExt = TechnoTypeExt::ExtMap.Find(pPassenger->GetTechnoType());
-
-				if (pPassengerExt->Ammo_Secondary_Shared && pPassengerExt->Ammo_Secondary.Get() > 0)
-				{
-					if (pExt->Ammo_Secondary_Shared_Group < 0 || pExt->Ammo_Secondary_Shared_Group == pPassengerExt->Ammo_Secondary_Shared_Group)
-					{
-						const auto pPassengerUnitExt = TechnoExt::ExtMap.Find(pPassenger);
-
-						if (pThisExt->AmmoSecondary > 0 && (pPassengerUnitExt->AmmoSecondary < pPassengerExt->Ammo_Secondary.Get()))
-						{
-							pThisExt->AmmoSecondary--;
-							pPassengerUnitExt->AmmoSecondary++;
-						}
-					}
-				}
-			}
-		}
 	}
 }
 

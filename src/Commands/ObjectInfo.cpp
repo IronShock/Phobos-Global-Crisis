@@ -1,4 +1,4 @@
-#include "ObjectInfo.h"
+﻿#include "ObjectInfo.h"
 
 #include <Utilities/GeneralUtils.h>
 #include <BuildingClass.h>
@@ -147,7 +147,19 @@ void ObjectInfoCommandClass::Execute(WWKey eInput) const
 		if (pTechnoExt->CurrentShieldType && pShieldData)
 			append(", Current Shield HP = (%d / %d)", pShieldData->GetHP(), pTechnoExt->CurrentShieldType->Strength);
 
-		if (pType->Ammo > 0)
+		for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+		{
+			if (!TechnoTypeExt::GetWeaponType(pType, slot, pFoot->Veterancy.IsElite()))
+				continue;
+
+			const int maxAmmo = TechnoExt::GetWeaponAmmoMax(pFoot, slot);
+			const int currentAmmo = TechnoExt::GetWeaponAmmoRemaining(pFoot, slot);
+
+			if (maxAmmo > 0)
+				append(", Weapon%d Ammo = (%d / %d)", slot, currentAmmo, maxAmmo);
+		}
+
+		if (pType->Ammo > 0 && TechnoExt::HasLegacyWeaponAmmo(pFoot))
 			append(", Ammo = (%d / %d)", pFoot->Ammo, pType->Ammo);
 
 		append("\n");
@@ -196,8 +208,20 @@ void ObjectInfoCommandClass::Execute(WWKey eInput) const
 			append("\n");
 		}
 
-		if (pBuilding->Type->Ammo > 0)
-			append("Ammo = (%d / %d)\n", pBuilding->Ammo, pBuilding->Type->Ammo);
+		for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+		{
+			if (!TechnoTypeExt::GetWeaponType(pType, slot, pBuilding->Veterancy.IsElite()))
+				continue;
+
+			const int maxAmmo = TechnoExt::GetWeaponAmmoMax(pBuilding, slot);
+			const int currentAmmo = TechnoExt::GetWeaponAmmoRemaining(pBuilding, slot);
+
+			if (maxAmmo > 0)
+				append("Weapon%d Ammo = (%d / %d)\n", slot, currentAmmo, maxAmmo);
+		}
+
+		if (pType->Ammo > 0 && TechnoExt::HasLegacyWeaponAmmo(pBuilding))
+			append("Ammo = (%d / %d)\n", pBuilding->Ammo, pType->Ammo);
 
 		if (pBuilding->Target)
 		{
