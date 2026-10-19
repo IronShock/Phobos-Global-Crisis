@@ -1006,6 +1006,21 @@ namespace PassengerDirections
 		return nullptr;
 	}
 
+	void TrackTransport(FootClass* pPassenger, UnitClass* pTransport)
+	{
+		if (!pPassenger || !pTransport)
+			return;
+
+		auto& state = s_entryStates[pPassenger->UniqueID];
+
+		if (state.TransportID != pTransport->UniqueID)
+		{
+			ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+			state = EntryState {};
+			state.TransportID = pTransport->UniqueID;
+		}
+	}
+
 	bool IsManagedMove(FootClass* pPassenger)
 	{
 		if (!pPassenger)
@@ -1046,30 +1061,29 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 		return 0;
 	}
 
+	auto const pTracked = PassengerDirections::GetTrackedTransport(pThis);
+
 	// A Move order that is not the controller's own approach move replaces the
 	// boarding order. A Move to the transport itself is the engine's approach
 	// and must not cancel the controller.
-	if (pThis->CurrentMission == Mission::Move)
+	if (pThis->CurrentMission == Mission::Move && pTracked)
 	{
-		if (auto const pTracked = PassengerDirections::GetTrackedTransport(pThis))
-		{
-			auto const pDestination = pThis->Destination;
+		auto const pDestination = pThis->Destination;
 
-			if (pDestination && pDestination != pTracked
-				&& abstract_cast<CellClass*>(pDestination)
-				&& !PassengerDirections::IsManagedMove(pThis))
-			{
-				PassengerDirections::ClearPassenger(pThis);
-				return 0;
-			}
+		if (pDestination && pDestination != pTracked
+			&& abstract_cast<CellClass*>(pDestination)
+			&& !PassengerDirections::IsManagedMove(pThis))
+		{
+			PassengerDirections::ClearPassenger(pThis);
+			return 0;
 		}
 	}
 
 	// A new Move/Stop/Guard order must be able to cancel the boarding attempt.
-	// A Move to our assigned approach cell is our own order and keeps it alive.
 	const bool entering = pThis->CurrentMission == Mission::Enter
 		|| pThis->QueueUpToEnter != nullptr
-		|| PassengerDirections::IsManagedMove(pThis);
+		|| (pTracked && (pThis->CurrentMission == Mission::Move
+			|| pThis->CurrentMission == Mission::None));
 
 	if (!entering)
 	{
@@ -1087,7 +1101,7 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 		pEntryTarget = abstract_cast<TechnoClass*>(pThis->Target);
 
 	if (!pEntryTarget)
-		pEntryTarget = PassengerDirections::GetTrackedTransport(pThis);
+		pEntryTarget = pTracked;
 
 	if (!pEntryTarget)
 	{
@@ -1342,6 +1356,7 @@ DEFINE_HOOK(0x70D842, FootClass_UpdateEnter_NoMoveToBridge, 0x5)
 			{
 				// The boarding controller owns the approach cell and the hand-off.
 				// Keep the engine link alive so Mission::Enter stays valid.
+				PassengerDirections::TrackTransport(pThis, pTransport);
 				return NoMove;
 			}
 		}
@@ -1365,7 +1380,10 @@ DEFINE_HOOK(0x70D910, FootClass_QueueEnter_NoMoveToBridge, 0x5)
 			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
 
 			if (flags != PassengerDirections::All)
+			{
+				PassengerDirections::TrackTransport(pThis, pTransport);
 				return NoMove;
+			}
 		}
 	}
 

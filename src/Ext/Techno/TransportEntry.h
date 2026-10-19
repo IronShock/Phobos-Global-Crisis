@@ -113,6 +113,10 @@ namespace PassengerDirections
 	// the engine link has already been cleared while our own Move is active.
 	TechnoClass* GetTrackedTransport(FootClass* pPassenger);
 
+	// Records the transport as soon as the enter order is issued, before the
+	// engine link is available. Does not assign an approach cell yet.
+	void TrackTransport(FootClass* pPassenger, UnitClass* pTransport);
+
 	// True when the passenger's current Move mission points at its assigned
 	// approach cell, i.e. the move was issued by the boarding controller and
 	// not by a new player order.
