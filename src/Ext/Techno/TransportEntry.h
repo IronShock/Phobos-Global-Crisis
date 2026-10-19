@@ -121,4 +121,7 @@ namespace PassengerDirections
 	// approach cell, i.e. the move was issued by the boarding controller and
 	// not by a new player order.
 	bool IsManagedMove(FootClass* pPassenger);
+
+	// True once the controller has assigned an approach cell.
+	bool HasApproachCell(FootClass* pPassenger);
 }

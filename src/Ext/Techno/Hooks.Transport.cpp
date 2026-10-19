@@ -824,8 +824,10 @@ namespace PassengerDirections
 			if (pPassenger->Destination != pApproach)
 				pPassenger->SetDestination(pApproach, true);
 
-			if (pPassenger->CurrentMission != Mission::Move
-				&& pPassenger->CurrentMission != Mission::Enter)
+			// Mission::Enter does not reliably move to a cell destination, so
+			// drive the approach with Mission::Move. The tracked transport keeps
+			// the boarding intent alive across the mission change.
+			if (pPassenger->CurrentMission != Mission::Move)
 			{
 				pPassenger->QueueMission(Mission::Move, false);
 				pPassenger->NextMission();
@@ -1048,9 +1050,16 @@ namespace PassengerDirections
 			return false;
 
 		auto const pCell = MapClass::Instance.TryGetCellAt(it->second.ApproachCell);
-		return pCell
-			&& pPassenger->CurrentMission == Mission::Move
-			&& pPassenger->Destination == pCell;
+		return pCell && (pPassenger->Destination == pCell || pPassenger->GetCell() == pCell);
+	}
+
+	bool HasApproachCell(FootClass* pPassenger)
+	{
+		if (!pPassenger)
+			return false;
+
+		auto const it = s_entryStates.find(pPassenger->UniqueID);
+		return it != s_entryStates.end() && it->second.ApproachCell != CellStruct::Empty;
 	}
 }
 
@@ -1082,7 +1091,8 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 	// A Move order that is not the controller's own approach move replaces the
 	// boarding order. A Move to the transport itself is the engine's approach
 	// and must not cancel the controller.
-	if (pThis->CurrentMission == Mission::Move && pTracked)
+	if (pThis->CurrentMission == Mission::Move && pTracked
+		&& PassengerDirections::HasApproachCell(pThis))
 	{
 		auto const pDestination = pThis->Destination;
 
@@ -1098,7 +1108,8 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 	// A new Move/Stop/Guard order must be able to cancel the boarding attempt.
 	const bool entering = pThis->CurrentMission == Mission::Enter
 		|| pThis->QueueUpToEnter != nullptr
-		|| (pTracked && (pThis->CurrentMission == Mission::Move
+		|| (pTracked && (PassengerDirections::IsManagedMove(pThis)
+			|| pThis->CurrentMission == Mission::Move
 			|| pThis->CurrentMission == Mission::None));
 
 	if (!entering)
