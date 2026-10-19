@@ -1053,7 +1053,6 @@ namespace PassengerDirections
 			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
 			const bool atTransport = pPassengerCell == pTransportCell;
 			const bool nearTransport = IsNearTransport(pTransport, pPassenger, 320);
-			const bool atVehicle = atTransport || nearTransport;
 
 			auto const TryAdmit = [&]() -> bool
 			{
@@ -1101,7 +1100,7 @@ namespace PassengerDirections
 				return true;
 			};
 
-			if (atVehicle || atApproach)
+			if (atApproach || atTransport)
 			{
 				if (!nearTransport)
 				{
