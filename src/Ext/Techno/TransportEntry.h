@@ -113,6 +113,18 @@ namespace PassengerDirections
 	// the engine link has already been cleared while our own Move is active.
 	TechnoClass* GetTrackedTransport(FootClass* pPassenger);
 
+	// True while the scenario/savegame is being restored. All custom entry
+	// gates must step aside so pre-placed cargo is not dropped.
+	bool IsLoading();
+
+	// True when the controller currently tracks this passenger for this
+	// transport. Used to apply the direction check without breaking load.
+	bool IsTracked(UnitClass* pTransport, FootClass* pPassenger);
+
+	// True when the passenger stands on an adjacent cell that is an allowed
+	// entry side. At that point the engine may perform the final walk-in.
+	bool IsAtFrontCell(UnitClass* pTransport, FootClass* pPassenger);
+
 	// Records the transport as soon as the enter order is issued, before the
 	// engine link is available. Does not assign an approach cell yet.
 	void TrackTransport(FootClass* pPassenger, UnitClass* pTransport);

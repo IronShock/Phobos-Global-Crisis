@@ -357,13 +357,19 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 		{
 			if (auto const pTransport = abstract_cast<UnitClass*>(pEntryTarget))
 			{
-				// Restricted transports are boarded exclusively through the
-				// approach controller. Letting the engine's per-cell path add
-				// the same passenger as well corrupts the cargo chain
-				// (p1->NextObject == p1) and hangs the game.
-				if (pThis->WhatAmI() == AbstractType::Infantry
-					&& static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections) != PassengerDirections::All)
-					continue;
+				if (pThis->WhatAmI() == AbstractType::Infantry)
+				{
+					if (PassengerDirections::IsPassengerInside(pTransport, pThis))
+						continue;
+
+					// Do not block scenario/savegame cargo restore. Outside
+					// loading, a tracked boarding attempt must come from an
+					// allowed side; the controller owns the actual approach.
+					if (!PassengerDirections::IsLoading()
+						&& PassengerDirections::IsTracked(pTransport, pThis)
+						&& !PassengerDirections::IsEntryAllowedByDirection(pTransport, pThis))
+						continue;
+				}
 			}
 
 			R->EDI<TechnoClass*>(pEntryTarget);
