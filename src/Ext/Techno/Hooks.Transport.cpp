@@ -1057,11 +1057,68 @@ namespace PassengerDirections
 			const bool atTransport = pPassengerCell == pTransportCell;
 			const bool atVehicle = atTransport || IsAtVehicle(pTransport, pPassenger);
 
-			if (atVehicle || atApproach)
+			if (atVehicle)
 			{
-				// Hand over to the original engine once. From here on the
-				// controller must not touch destination or mission.
-				StartVanillaEnter(pTransport, pPassenger, state);
+				// Only add when the passenger is physically at the vehicle
+				// (transport cell / contact distance). Multiple passengers on
+				// the same cell are added directly in the same frame; no
+				// vanilla single-entry queue.
+				if (!IsEntryApproachAllowed(pTransport, pPassenger))
+				{
+					state.VanillaEntering = false;
+
+					if (auto const pCell = MapClass::Instance.TryGetCellAt(state.ApproachCell))
+					{
+						pPassenger->SetDestination(pCell, true);
+						pPassenger->QueueMission(Mission::Move, false);
+						pPassenger->NextMission();
+					}
+
+					if (LogEnabled())
+					{
+						Debug::Log("[Passengers.EnterDirections] wrong-side add rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
+							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
+							pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+							Unsorted::CurrentFrame);
+					}
+
+					return;
+				}
+
+				if (CanEnterNow(pTransport, pPassenger, true))
+				{
+					if (DoEnterNow(pTransport, pPassenger))
+					{
+						ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+						s_entryStates.erase(pPassenger->UniqueID);
+					}
+				}
+
+				return;
+			}
+
+			if (atApproach)
+			{
+				// From the rear approach cell walk the last step into the
+				// transport cell, then the manual add above fires.
+				if (pPassenger->Destination != pTransportCell)
+					pPassenger->SetDestination(pTransportCell, true);
+
+				if (pPassenger->CurrentMission != Mission::Move
+					&& (state.LastMoveFrame == 0
+						|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
+				{
+					state.LastMoveFrame = Unsorted::CurrentFrame;
+					pPassenger->QueueMission(Mission::Move, false);
+					pPassenger->NextMission();
+				}
+
+				// Fallback only if the cell cannot be entered at all. This may
+				// use the vanilla queue, but it prevents a permanent stall.
+				if (Unsorted::CurrentFrame - state.LastProgressFrame > 60)
+					StartVanillaEnter(pTransport, pPassenger, state);
+
 				return;
 			}
 
