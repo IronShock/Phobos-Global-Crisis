@@ -135,6 +135,26 @@ DEFINE_HOOK(0x71067B, TechnoClass_EnterTransport, 0x7)
 				return SkipGameCode;
 			}
 
+			// Restricted infantry under controller control are added only by
+			// the 2-frame admission path. The engine must not add/queue them.
+			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
+
+			if (!PassengerDirections::IsLoading()
+				&& pPassenger->WhatAmI() == AbstractType::Infantry
+				&& flags != PassengerDirections::All
+				&& PassengerDirections::IsTracked(pTransport, pPassenger))
+			{
+				if (Phobos::Config::DebugGCDiagnostics)
+				{
+					Debug::Log("[Passengers.EnterDirections][cargo] engine add disabled transport=%s(%u) passenger=%p id=%u passengers=%d frame=%d\n",
+						pTransport->Type->ID, pTransport->UniqueID, static_cast<void*>(pPassenger),
+						pPassenger->UniqueID, pTransport->Passengers.NumPassengers,
+						Unsorted::CurrentFrame);
+				}
+
+				return SkipGameCode;
+			}
+
 			if (!PassengerDirections::IsEntryApproachAllowed(pTransport, pPassenger))
 			{
 				if (Phobos::Config::DebugGCDiagnostics)
@@ -433,8 +453,6 @@ static inline bool DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 
 namespace PassengerDirections
 {
-	namespace
-	{
 		constexpr int MaxDirections = 8;
 
 		struct EntryState
@@ -968,6 +986,16 @@ namespace PassengerDirections
 			return pBest;
 		}
 
+		bool IsNearTransport(UnitClass* pTransport, FootClass* pPassenger, int distance)
+		{
+			if (!pTransport || !pPassenger)
+				return false;
+
+			return std::abs(pPassenger->Location.X - pTransport->Location.X) <= distance
+				&& std::abs(pPassenger->Location.Y - pTransport->Location.Y) <= distance
+				&& std::abs(pPassenger->Location.Z - pTransport->Location.Z) < Unsorted::CellHeight;
+		}
+
 		void HandleEntry(UnitClass* pTransport, FootClass* pPassenger, int flags)
 		{
 			if (!pTransport || !pPassenger)
@@ -1021,104 +1049,72 @@ namespace PassengerDirections
 				return;
 			}
 
-			// Once handed over to Mission::Enter, do not touch destination or
-			// mission again — unless the engine is trying to enter from a
-			// disallowed side, in which case abort and re-route to the rear.
-			if (state.VanillaEntering)
-			{
-				if (!IsEntryApproachAllowed(pTransport, pPassenger))
-				{
-					state.VanillaEntering = false;
-
-					if (auto const pCell = MapClass::Instance.TryGetCellAt(state.ApproachCell))
-					{
-						pPassenger->SetDestination(pCell, true);
-						pPassenger->QueueMission(Mission::Move, false);
-						pPassenger->NextMission();
-					}
-
-					if (LogEnabled())
-					{
-						auto const pCell = pPassenger->GetCell();
-
-						Debug::Log("[Passengers.EnterDirections] wrong-side entry aborted transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
-							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
-							pCell ? pCell->MapCoords.X : -1, pCell ? pCell->MapCoords.Y : -1,
-							pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
-							Unsorted::CurrentFrame);
-					}
-				}
-
-				return;
-			}
-
 			CellClass* pApproach = nullptr;
 			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
 			const bool atTransport = pPassengerCell == pTransportCell;
-			const bool atVehicle = atTransport || IsAtVehicle(pTransport, pPassenger);
+			const bool nearTransport = IsNearTransport(pTransport, pPassenger, 320);
+			const bool atVehicle = atTransport || nearTransport;
 
-			if (atVehicle)
+			auto const TryAdmit = [&]() -> bool
 			{
-				// Only add when the passenger is physically at the vehicle
-				// (transport cell / contact distance). Multiple passengers on
-				// the same cell are added directly in the same frame; no
-				// vanilla single-entry queue.
+				const int stagger = GetStagger(pTransport->Type, false);
+
+				if (stagger > 0)
+				{
+					const int frame = Unsorted::CurrentFrame;
+					auto const it = s_lastEnterFrame.find(pTransport->UniqueID);
+
+					if (it != s_lastEnterFrame.end() && frame - it->second < stagger)
+						return false;
+				}
+
 				if (!IsEntryApproachAllowed(pTransport, pPassenger))
 				{
-					state.VanillaEntering = false;
+					state.ApproachCell = CellStruct::Empty;
+					state.Relative = -1;
+					state.Facing = -1;
 
-					if (auto const pCell = MapClass::Instance.TryGetCellAt(state.ApproachCell))
-					{
-						pPassenger->SetDestination(pCell, true);
-						pPassenger->QueueMission(Mission::Move, false);
-						pPassenger->NextMission();
-					}
+					if (pPassenger->Destination)
+						pPassenger->SetDestination(nullptr, true);
 
 					if (LogEnabled())
 					{
-						Debug::Log("[Passengers.EnterDirections] wrong-side add rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
+						Debug::Log("[Passengers.EnterDirections] wrong-side admission rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
 							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
 							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
 							pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
 							Unsorted::CurrentFrame);
 					}
 
+					return false;
+				}
+
+				if (!CanEnterNow(pTransport, pPassenger, true))
+					return false;
+
+				if (!DoEnterNow(pTransport, pPassenger))
+					return false;
+
+				s_lastEnterFrame[pTransport->UniqueID] = Unsorted::CurrentFrame;
+				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+				s_entryStates.erase(pPassenger->UniqueID);
+				return true;
+			};
+
+			if (atVehicle || atApproach)
+			{
+				if (!nearTransport)
+				{
+					state.ApproachCell = CellStruct::Empty;
+					state.Relative = -1;
+					state.Facing = -1;
 					return;
 				}
 
-				if (CanEnterNow(pTransport, pPassenger, true))
-				{
-					if (DoEnterNow(pTransport, pPassenger))
-					{
-						ReleaseReservation(state.TransportID, pPassenger->UniqueID);
-						s_entryStates.erase(pPassenger->UniqueID);
-					}
-				}
-
-				return;
-			}
-
-			if (atApproach)
-			{
-				// From the rear approach cell walk the last step into the
-				// transport cell, then the manual add above fires.
-				if (pPassenger->Destination != pTransportCell)
-					pPassenger->SetDestination(pTransportCell, true);
-
-				if (pPassenger->CurrentMission != Mission::Move
-					&& (state.LastMoveFrame == 0
-						|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
-				{
-					state.LastMoveFrame = Unsorted::CurrentFrame;
-					pPassenger->QueueMission(Mission::Move, false);
-					pPassenger->NextMission();
-				}
-
-				// Fallback only if the cell cannot be entered at all. This may
-				// use the vanilla queue, but it prevents a permanent stall.
-				if (Unsorted::CurrentFrame - state.LastProgressFrame > 60)
-					StartVanillaEnter(pTransport, pPassenger, state);
-
+				// One admission per configured interval. Everyone else waits in
+				// the boarding cell; no vanilla queue, no movement into the
+				// occupied transport cell, no same-cell jitter.
+				TryAdmit();
 				return;
 			}
 
@@ -1164,8 +1160,6 @@ namespace PassengerDirections
 					pPassenger->SetDestination(pCell, true);
 			}
 		}
-
-	}
 
 	bool IsPassengerInside(UnitClass* pTransport, FootClass* pPassenger)
 	{
@@ -1592,11 +1586,12 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 	}
 
 	// A new Move/Stop/Guard order must be able to cancel the boarding attempt.
-	const bool entering = pThis->CurrentMission == Mission::Enter
-		|| pThis->QueueUpToEnter != nullptr
-		|| (pTracked && (PassengerDirections::IsManagedMove(pThis)
-			|| pThis->CurrentMission == Mission::Move
-			|| pThis->CurrentMission == Mission::None));
+	// The controller's tracked state is authoritative. The engine queue may be
+	// blocked (NoMove) and therefore empty while the passenger is still
+	// walking to the boarding position.
+	const bool entering = pTracked != nullptr
+		|| pThis->CurrentMission == Mission::Enter
+		|| pThis->QueueUpToEnter != nullptr;
 
 	if (!entering)
 	{
@@ -1873,16 +1868,11 @@ DEFINE_HOOK(0x70D842, FootClass_UpdateEnter_NoMoveToBridge, 0x5)
 
 			if (flags != PassengerDirections::All)
 			{
-				// The boarding controller owns the approach cell and the hand-off.
-				// Keep the engine link alive so Mission::Enter stays valid.
 				PassengerDirections::TrackTransport(pThis, pTransport);
 
-				// At the allowed front cell, let the engine walk the last step
-				// into the vehicle. Loading must also use vanilla behaviour so
-				// pre-placed cargo is restored.
-				if (PassengerDirections::IsLoading()
-					|| PassengerDirections::IsAtFrontCell(pTransport, pThis)
-					|| PassengerDirections::IsVanillaEntering(pThis))
+				// The controller drives the approach and the manual 2-frame
+				// admission. Loading must stay vanilla so cargo is restored.
+				if (PassengerDirections::IsLoading())
 					return 0;
 
 				return NoMove;
@@ -1911,10 +1901,11 @@ DEFINE_HOOK(0x70D910, FootClass_QueueEnter_NoMoveToBridge, 0x5)
 			{
 				PassengerDirections::TrackTransport(pThis, pTransport);
 
-				// Do not return NoMove here. The original QueueEnter has to
-				// run so the engine establishes the transport-side queue and
-				// radio link. The controller only overrides the destination.
-				return 0;
+				// Controller-owned entry; no vanilla queue/link.
+				if (PassengerDirections::IsLoading())
+					return 0;
+
+				return NoMove;
 			}
 		}
 	}
