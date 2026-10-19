@@ -135,26 +135,6 @@ DEFINE_HOOK(0x71067B, TechnoClass_EnterTransport, 0x7)
 				return SkipGameCode;
 			}
 
-			// Restricted infantry under controller control are added only by
-			// the 2-frame admission path. The engine must not add/queue them.
-			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
-
-			if (!PassengerDirections::IsLoading()
-				&& pPassenger->WhatAmI() == AbstractType::Infantry
-				&& flags != PassengerDirections::All
-				&& PassengerDirections::IsTracked(pTransport, pPassenger))
-			{
-				if (Phobos::Config::DebugGCDiagnostics)
-				{
-					Debug::Log("[Passengers.EnterDirections][cargo] engine add disabled transport=%s(%u) passenger=%p id=%u passengers=%d frame=%d\n",
-						pTransport->Type->ID, pTransport->UniqueID, static_cast<void*>(pPassenger),
-						pPassenger->UniqueID, pTransport->Passengers.NumPassengers,
-						Unsorted::CurrentFrame);
-				}
-
-				return SkipGameCode;
-			}
-
 			if (!PassengerDirections::IsEntryApproachAllowed(pTransport, pPassenger))
 			{
 				if (Phobos::Config::DebugGCDiagnostics)
@@ -478,6 +458,8 @@ namespace PassengerDirections
 		std::unordered_map<DWORD, std::unordered_map<int, DWORD>> s_reservations;
 		std::unordered_map<DWORD, int> s_lastEnterFrame;
 		std::unordered_map<DWORD, int> s_lastUnloadFrame;
+		// transport UniqueID -> currently admitted passenger UniqueID (0 = none)
+		std::unordered_map<DWORD, DWORD> s_activeEntrant;
 		std::unordered_map<DWORD, TechnoClass*> s_liveTechnos;
 		int s_liveFrame = -1;
 		ScenarioClass* s_lastScenario = nullptr;
@@ -537,6 +519,13 @@ namespace PassengerDirections
 				return;
 
 			ReleaseReservation(it->second.TransportID, pPassenger->UniqueID);
+
+			if (auto const active = s_activeEntrant.find(it->second.TransportID);
+				active != s_activeEntrant.end() && active->second == pPassenger->UniqueID)
+			{
+				s_activeEntrant.erase(active);
+			}
+
 			s_entryStates.erase(it);
 		}
 
@@ -598,6 +587,14 @@ namespace PassengerDirections
 			{
 				if (!live.contains(it->first))
 					it = s_lastUnloadFrame.erase(it);
+				else
+					++it;
+			}
+
+			for (auto it = s_activeEntrant.begin(); it != s_activeEntrant.end();)
+			{
+				if (!live.contains(it->first) || !live.contains(it->second))
+					it = s_activeEntrant.erase(it);
 				else
 					++it;
 			}
@@ -1049,44 +1046,72 @@ namespace PassengerDirections
 				return;
 			}
 
+			auto& active = s_activeEntrant[pTransport->UniqueID];
+
+			if (active != 0 && active != pPassenger->UniqueID)
+			{
+				auto const it = s_entryStates.find(active);
+
+				if (it == s_entryStates.end() || !s_liveTechnos.contains(active))
+					active = 0;
+			}
+
 			CellClass* pApproach = nullptr;
 			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
 			const bool atTransport = pPassengerCell == pTransportCell;
 			const bool nearTransport = IsNearTransport(pTransport, pPassenger, 320);
+			const int stagger = GetStagger(pTransport->Type, false);
+			const int frame = Unsorted::CurrentFrame;
+			auto const lastIt = s_lastEnterFrame.find(pTransport->UniqueID);
+			const bool timerReady = stagger <= 0
+				|| lastIt == s_lastEnterFrame.end()
+				|| frame - lastIt->second >= stagger;
 
-			auto const TryAdmit = [&]() -> bool
+			auto const MoveToTransportCell = [&]()
 			{
-				const int stagger = GetStagger(pTransport->Type, false);
+				if (pPassenger->Destination != pTransportCell)
+					pPassenger->SetDestination(pTransportCell, true);
 
-				if (stagger > 0)
+				if (pPassenger->CurrentMission != Mission::Move
+					&& (state.LastMoveFrame == 0
+						|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
 				{
-					const int frame = Unsorted::CurrentFrame;
-					auto const it = s_lastEnterFrame.find(pTransport->UniqueID);
-
-					if (it != s_lastEnterFrame.end() && frame - it->second < stagger)
-						return false;
+					state.LastMoveFrame = Unsorted::CurrentFrame;
+					pPassenger->QueueMission(Mission::Move, false);
+					pPassenger->NextMission();
 				}
+			};
 
+			auto const RejectWrongSide = [&]()
+			{
+				active = 0;
+				state.ApproachCell = CellStruct::Empty;
+				state.Relative = -1;
+				state.Facing = -1;
+
+				if (pPassenger->Destination)
+					pPassenger->SetDestination(nullptr, true);
+
+				if (LogEnabled())
+				{
+					Debug::Log("[Passengers.EnterDirections] wrong-side entry rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
+						pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+						pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
+						pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+						Unsorted::CurrentFrame);
+				}
+			};
+
+			auto const AddAtTransportCell = [&]() -> bool
+			{
 				if (!IsEntryApproachAllowed(pTransport, pPassenger))
 				{
-					state.ApproachCell = CellStruct::Empty;
-					state.Relative = -1;
-					state.Facing = -1;
-
-					if (pPassenger->Destination)
-						pPassenger->SetDestination(nullptr, true);
-
-					if (LogEnabled())
-					{
-						Debug::Log("[Passengers.EnterDirections] wrong-side admission rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
-							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
-							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
-							pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
-							Unsorted::CurrentFrame);
-					}
-
+					RejectWrongSide();
 					return false;
 				}
+
+				if (!timerReady)
+					return false;
 
 				if (!CanEnterNow(pTransport, pPassenger, true))
 					return false;
@@ -1094,14 +1119,81 @@ namespace PassengerDirections
 				if (!DoEnterNow(pTransport, pPassenger))
 					return false;
 
+				// Never leave a limboed passenger behind if the add failed.
+				if (!IsPassengerInside(pTransport, pPassenger))
+				{
+					if (LogEnabled())
+					{
+						Debug::Log("[Passengers.EnterDirections][cargo] add failed after limbo transport=%s(%u) passenger=%u frame=%d\n",
+							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+							Unsorted::CurrentFrame);
+					}
+
+					active = 0;
+					return false;
+				}
+
+				if (pTransport->Type->EnterTransportSound >= 0)
+					VoxClass::PlayAtPos(pTransport->Type->EnterTransportSound, &pTransport->Location);
+
 				s_lastEnterFrame[pTransport->UniqueID] = Unsorted::CurrentFrame;
+				active = 0;
 				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
 				s_entryStates.erase(pPassenger->UniqueID);
 				return true;
 			};
 
-			if (atApproach || atTransport)
+			// The admitted passenger: walk to the transport cell, then add.
+			if (active == pPassenger->UniqueID)
 			{
+				if (atTransport)
+				{
+					AddAtTransportCell();
+					return;
+				}
+
+				if (!nearTransport || Unsorted::CurrentFrame - state.LastProgressFrame > 120)
+				{
+					// Could not reach the vehicle cell. Drop the slot and let the
+					// passenger re-approach; do not add from the entry cell.
+					active = 0;
+					state.ApproachCell = CellStruct::Empty;
+					state.Relative = -1;
+					state.Facing = -1;
+
+					if (pPassenger->Destination)
+						pPassenger->SetDestination(nullptr, true);
+
+					return;
+				}
+
+				MoveToTransportCell();
+				return;
+			}
+
+			// Someone already at the vehicle cell but not the admitted one.
+			if (atTransport)
+			{
+				if (active != 0 || !timerReady)
+					return;
+
+				if (!IsEntryApproachAllowed(pTransport, pPassenger))
+				{
+					RejectWrongSide();
+					return;
+				}
+
+				active = pPassenger->UniqueID;
+				AddAtTransportCell();
+				return;
+			}
+
+			// Waiting at the rear entry cell.
+			if (atApproach)
+			{
+				if (active != 0 || !timerReady)
+					return;
+
 				if (!nearTransport)
 				{
 					state.ApproachCell = CellStruct::Empty;
@@ -1110,10 +1202,9 @@ namespace PassengerDirections
 					return;
 				}
 
-				// One admission per configured interval. Everyone else waits in
-				// the boarding cell; no vanilla queue, no movement into the
-				// occupied transport cell, no same-cell jitter.
-				TryAdmit();
+				active = pPassenger->UniqueID;
+				state.LastMoveFrame = 0;
+				MoveToTransportCell();
 				return;
 			}
 
@@ -1151,8 +1242,6 @@ namespace PassengerDirections
 				return;
 			}
 
-			// Approach already assigned: never re-target. If the engine cleared
-			// the destination, restore it once so the passenger still arrives.
 			if (!pPassenger->Destination)
 			{
 				if (auto const pCell = MapClass::Instance.TryGetCellAt(state.ApproachCell))
@@ -1410,6 +1499,7 @@ namespace PassengerDirections
 		s_reservations.clear();
 		s_lastEnterFrame.clear();
 		s_lastUnloadFrame.clear();
+		s_activeEntrant.clear();
 		s_liveTechnos.clear();
 		s_liveFrame = -1;
 	}

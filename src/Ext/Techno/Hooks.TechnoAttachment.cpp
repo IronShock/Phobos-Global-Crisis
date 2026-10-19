@@ -362,15 +362,6 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 					if (PassengerDirections::IsPassengerInside(pTransport, pThis))
 						continue;
 
-					// Restricted infantry under controller control are added
-					// only by the 2-frame admission path.
-					const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
-
-					if (!PassengerDirections::IsLoading()
-						&& pThis->WhatAmI() == AbstractType::Infantry
-						&& flags != PassengerDirections::All
-						&& PassengerDirections::IsTracked(pTransport, pThis))
-						continue;
 
 					if (!PassengerDirections::IsEntryApproachAllowed(pTransport, pThis))
 						continue;
