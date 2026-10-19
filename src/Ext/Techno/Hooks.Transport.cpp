@@ -1046,154 +1046,13 @@ namespace PassengerDirections
 				return;
 			}
 
-			auto& active = s_activeEntrant[pTransport->UniqueID];
-
-			if (active != 0 && active != pPassenger->UniqueID)
-			{
-				auto const it = s_entryStates.find(active);
-
-				if (it == s_entryStates.end() || !s_liveTechnos.contains(active))
-					active = 0;
-			}
-
 			CellClass* pApproach = nullptr;
 			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
 			const bool atTransport = pPassengerCell == pTransportCell;
 			const bool nearTransport = IsNearTransport(pTransport, pPassenger, 320);
-			const int stagger = GetStagger(pTransport->Type, false);
-			const int frame = Unsorted::CurrentFrame;
-			auto const lastIt = s_lastEnterFrame.find(pTransport->UniqueID);
-			const bool timerReady = stagger <= 0
-				|| lastIt == s_lastEnterFrame.end()
-				|| frame - lastIt->second >= stagger;
 
-			auto const MoveToTransportCell = [&]()
+			if (atApproach || atTransport)
 			{
-				if (pPassenger->Destination != pTransportCell)
-					pPassenger->SetDestination(pTransportCell, true);
-
-				if (pPassenger->CurrentMission != Mission::Move
-					&& (state.LastMoveFrame == 0
-						|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
-				{
-					state.LastMoveFrame = Unsorted::CurrentFrame;
-					pPassenger->QueueMission(Mission::Move, false);
-					pPassenger->NextMission();
-				}
-			};
-
-			auto const RejectWrongSide = [&]()
-			{
-				active = 0;
-				state.ApproachCell = CellStruct::Empty;
-				state.Relative = -1;
-				state.Facing = -1;
-
-				if (pPassenger->Destination)
-					pPassenger->SetDestination(nullptr, true);
-
-				if (LogEnabled())
-				{
-					Debug::Log("[Passengers.EnterDirections] wrong-side entry rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
-						pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
-						pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
-						pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
-						Unsorted::CurrentFrame);
-				}
-			};
-
-			auto const AddAtTransportCell = [&]() -> bool
-			{
-				if (!IsEntryApproachAllowed(pTransport, pPassenger))
-				{
-					RejectWrongSide();
-					return false;
-				}
-
-				if (!timerReady)
-					return false;
-
-				if (!CanEnterNow(pTransport, pPassenger, true))
-					return false;
-
-				if (!DoEnterNow(pTransport, pPassenger))
-					return false;
-
-				// Never leave a limboed passenger behind if the add failed.
-				if (!IsPassengerInside(pTransport, pPassenger))
-				{
-					if (LogEnabled())
-					{
-						Debug::Log("[Passengers.EnterDirections][cargo] add failed after limbo transport=%s(%u) passenger=%u frame=%d\n",
-							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
-							Unsorted::CurrentFrame);
-					}
-
-					active = 0;
-					return false;
-				}
-
-				if (pTransport->Type->EnterTransportSound >= 0)
-					VoxClass::PlayAtPos(pTransport->Type->EnterTransportSound, &pTransport->Location);
-
-				s_lastEnterFrame[pTransport->UniqueID] = Unsorted::CurrentFrame;
-				active = 0;
-				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
-				s_entryStates.erase(pPassenger->UniqueID);
-				return true;
-			};
-
-			// The admitted passenger: walk to the transport cell, then add.
-			if (active == pPassenger->UniqueID)
-			{
-				if (atTransport)
-				{
-					AddAtTransportCell();
-					return;
-				}
-
-				if (!nearTransport || Unsorted::CurrentFrame - state.LastProgressFrame > 120)
-				{
-					// Could not reach the vehicle cell. Drop the slot and let the
-					// passenger re-approach; do not add from the entry cell.
-					active = 0;
-					state.ApproachCell = CellStruct::Empty;
-					state.Relative = -1;
-					state.Facing = -1;
-
-					if (pPassenger->Destination)
-						pPassenger->SetDestination(nullptr, true);
-
-					return;
-				}
-
-				MoveToTransportCell();
-				return;
-			}
-
-			// Someone already at the vehicle cell but not the admitted one.
-			if (atTransport)
-			{
-				if (active != 0 || !timerReady)
-					return;
-
-				if (!IsEntryApproachAllowed(pTransport, pPassenger))
-				{
-					RejectWrongSide();
-					return;
-				}
-
-				active = pPassenger->UniqueID;
-				AddAtTransportCell();
-				return;
-			}
-
-			// Waiting at the rear entry cell.
-			if (atApproach)
-			{
-				if (active != 0 || !timerReady)
-					return;
-
 				if (!nearTransport)
 				{
 					state.ApproachCell = CellStruct::Empty;
@@ -1202,9 +1061,54 @@ namespace PassengerDirections
 					return;
 				}
 
-				active = pPassenger->UniqueID;
-				state.LastMoveFrame = 0;
-				MoveToTransportCell();
+				if (!IsEntryApproachAllowed(pTransport, pPassenger))
+				{
+					state.ApproachCell = CellStruct::Empty;
+					state.Relative = -1;
+					state.Facing = -1;
+
+					if (pPassenger->Destination)
+						pPassenger->SetDestination(nullptr, true);
+
+					if (LogEnabled())
+					{
+						Debug::Log("[Passengers.EnterDirections] wrong-side entry rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
+							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
+							pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+							Unsorted::CurrentFrame);
+					}
+
+					return;
+				}
+
+				if (!CanEnterNow(pTransport, pPassenger, true))
+					return;
+
+				// Each passenger enters on its own update as soon as it reaches
+				// the rear boarding cell. No active slot, no queue, no timer,
+				// no arrival ordering.
+				if (DoEnterNow(pTransport, pPassenger))
+				{
+					if (!IsPassengerInside(pTransport, pPassenger))
+					{
+						if (LogEnabled())
+						{
+							Debug::Log("[Passengers.EnterDirections][cargo] add failed after limbo transport=%s(%u) passenger=%u frame=%d\n",
+								pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+								Unsorted::CurrentFrame);
+						}
+
+						return;
+					}
+
+					if (pTransport->Type->EnterTransportSound >= 0)
+						VoxClass::PlayAtPos(pTransport->Type->EnterTransportSound, &pTransport->Location);
+
+					ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+					s_entryStates.erase(pPassenger->UniqueID);
+				}
+
 				return;
 			}
 
