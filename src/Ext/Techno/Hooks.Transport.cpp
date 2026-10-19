@@ -108,8 +108,37 @@ static inline void PreparePassengerEntry(TechnoClass* pTransport, FootClass* pPa
 
 DEFINE_HOOK(0x71067B, TechnoClass_EnterTransport, 0x7)
 {
+	enum { SkipGameCode = 0x7106D5 };
+
 	GET(TechnoClass*, pThis, ESI);
 	GET(FootClass*, pPassenger, EDI);
+
+	if (pPassenger && pPassenger->WhatAmI() == AbstractType::Infantry)
+	{
+		if (auto const pTransport = abstract_cast<UnitClass*>(pThis))
+		{
+			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
+
+			if (flags != PassengerDirections::All)
+			{
+				// Only the approach controller may add restricted infantry.
+				// Skipping the engine add here prevents a second AddPassenger
+				// for the same passenger in the same frame, which would turn
+				// the cargo list into a self-referencing cycle.
+				if (Phobos::Config::DebugGCDiagnostics)
+				{
+					Debug::Log("[Passengers.EnterDirections][cargo] engine add blocked transport=%s(%u) passenger=%p id=%u inside=%d transporter=%p passengers=%d frame=%d\n",
+						pTransport->Type->ID, pTransport->UniqueID, static_cast<void*>(pPassenger),
+						pPassenger->UniqueID,
+						PassengerDirections::IsPassengerInside(pTransport, pPassenger) ? 1 : 0,
+						static_cast<void*>(pPassenger->Transporter),
+						pTransport->Passengers.NumPassengers, Unsorted::CurrentFrame);
+				}
+
+				return SkipGameCode;
+			}
+		}
+	}
 
 	PreparePassengerEntry(pThis, pPassenger);
 
@@ -317,6 +346,9 @@ static inline bool DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 	if (!pTransport || !pPassenger)
 		return false;
 
+	if (pPassenger->Transporter)
+		return false;
+
 	// Never add a passenger that is already in the cargo list.
 	if (PassengerDirections::IsPassengerInside(pTransport, pPassenger))
 		return false;
@@ -397,7 +429,10 @@ namespace PassengerDirections
 		{
 			DWORD TransportID = 0;
 			CellStruct ApproachCell = CellStruct::Empty;
+			CellStruct LastPassengerCell = CellStruct::Empty;
 			int Relative = -1;
+			int LastProgressFrame = 0;
+			int LastMoveFrame = 0;
 		};
 
 		// Transient state only. Not serialized; cleared on scenario load.
@@ -407,6 +442,8 @@ namespace PassengerDirections
 		std::unordered_map<DWORD, std::array<DWORD, MaxDirections>> s_reservations;
 		std::unordered_map<DWORD, int> s_lastEnterFrame;
 		std::unordered_map<DWORD, int> s_lastUnloadFrame;
+		std::unordered_map<DWORD, TechnoClass*> s_liveTechnos;
+		int s_liveFrame = -1;
 		ScenarioClass* s_lastScenario = nullptr;
 
 		inline bool LogEnabled()
@@ -456,16 +493,30 @@ namespace PassengerDirections
 			s_entryStates.erase(it);
 		}
 
+		void CancelPassenger(FootClass* pPassenger, const char* reason)
+		{
+			if (!pPassenger)
+				return;
+
+			ClearPassengerState(pPassenger);
+
+			pPassenger->QueueUpToEnter = nullptr;
+			pPassenger->SetArchiveTarget(nullptr);
+			pPassenger->SetDestination(nullptr, true);
+			pPassenger->QueueMission(Mission::None, false);
+			pPassenger->NextMission();
+
+			if (Phobos::Config::DebugGCDiagnostics)
+			{
+				Debug::Log("[Passengers.EnterDirections] cancel passenger=%p id=%u reason=%s frame=%d\n",
+					static_cast<void*>(pPassenger), pPassenger->UniqueID, reason,
+					Unsorted::CurrentFrame);
+			}
+		}
+
 		void PruneStates()
 		{
-			std::unordered_set<DWORD> live;
-			live.reserve(static_cast<size_t>(TechnoClass::Array.Count) * 2);
-
-			for (auto const pTechno : TechnoClass::Array)
-			{
-				if (pTechno)
-					live.insert(pTechno->UniqueID);
-			}
+			auto const& live = s_liveTechnos;
 
 			for (auto it = s_entryStates.begin(); it != s_entryStates.end();)
 			{
@@ -614,11 +665,8 @@ namespace PassengerDirections
 			auto& slots = s_reservations[pTransport->UniqueID];
 
 			CellClass* pBestFree = nullptr;
-			CellClass* pBestAny = nullptr;
 			int bestFreeScore = std::numeric_limits<int>::max();
-			int bestAnyScore = std::numeric_limits<int>::max();
 			int bestFreeRelative = -1;
-			int bestAnyRelative = -1;
 
 			for (int relative = 0; relative < MaxDirections; ++relative)
 			{
@@ -647,17 +695,13 @@ namespace PassengerDirections
 					bestFreeScore = score;
 					bestFreeRelative = relative;
 				}
-
-				if (score < bestAnyScore
-					|| (score == bestAnyScore && relative < bestAnyRelative))
-				{
-					pBestAny = pCell;
-					bestAnyScore = score;
-					bestAnyRelative = relative;
-				}
 			}
 
-			return pBestFree ? pBestFree : pBestAny;
+			// No fallback to a reserved cell: with 3 allowed sides, at most 3
+			// passengers approach at once and the rest wait for a free cell.
+			// Sharing the same cell with dozens of infantry caused pathing and
+			// collision pile-ups (and could stall the game).
+			return pBestFree;
 		}
 
 		void AssignApproachCell(UnitClass* pTransport, FootClass* pPassenger, CellClass* pCell,
@@ -677,6 +721,7 @@ namespace PassengerDirections
 			state.TransportID = pTransport->UniqueID;
 			state.ApproachCell = pCell->MapCoords;
 			state.Relative = relative;
+			state.LastMoveFrame = 0;
 
 			if (LogEnabled())
 			{
@@ -771,6 +816,21 @@ namespace PassengerDirections
 			if (!pPassengerCell || !pTransportCell)
 				return;
 
+			// Progress watchdog: cancel a boarding attempt that has not changed
+			// cells for a long time (blocked path, full transport, ...). This
+			// also releases the reserved approach cell for the next passenger.
+			if (state.LastProgressFrame == 0
+				|| state.LastPassengerCell != pPassengerCell->MapCoords)
+			{
+				state.LastPassengerCell = pPassengerCell->MapCoords;
+				state.LastProgressFrame = Unsorted::CurrentFrame;
+			}
+			else if (Unsorted::CurrentFrame - state.LastProgressFrame > 900)
+			{
+				CancelPassenger(pPassenger, "no-progress");
+				return;
+			}
+
 			CellClass* pApproach = nullptr;
 			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
 			const bool atTransport = pPassengerCell == pTransportCell;
@@ -808,9 +868,14 @@ namespace PassengerDirections
 
 				if (!pApproach)
 				{
+					// All allowed cells are currently reserved. Stop moving and
+					// wait for one to free up instead of sharing/piling up.
+					if (pPassenger->Destination)
+						pPassenger->SetDestination(nullptr, true);
+
 					if (LogEnabled() && Unsorted::CurrentFrame % 60 == 0)
 					{
-						Debug::Log("[Passengers.EnterDirections] no approach cell transport=%s(%u) passenger=%u flags=0x%02X cell=(%d,%d)\n",
+						Debug::Log("[Passengers.EnterDirections] waiting for cell transport=%s(%u) passenger=%u flags=0x%02X cell=(%d,%d)\n",
 							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID, flags,
 							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y);
 					}
@@ -829,10 +894,13 @@ namespace PassengerDirections
 				pPassenger->SetDestination(pApproach, true);
 
 			// Mission::Enter does not reliably move to a cell destination, so
-			// drive the approach with Mission::Move. The tracked transport keeps
-			// the boarding intent alive across the mission change.
-			if (pPassenger->CurrentMission != Mission::Move)
+			// drive the approach with Mission::Move. Do not re-queue every
+			// frame if the engine keeps changing the mission back.
+			if (pPassenger->CurrentMission != Mission::Move
+				&& (state.LastMoveFrame == 0
+					|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
 			{
+				state.LastMoveFrame = Unsorted::CurrentFrame;
 				pPassenger->QueueMission(Mission::Move, false);
 				pPassenger->NextMission();
 			}
@@ -841,8 +909,42 @@ namespace PassengerDirections
 
 	bool IsPassengerInside(UnitClass* pTransport, FootClass* pPassenger)
 	{
-		return pTransport && pPassenger
-			&& pTransport->Passengers.IndexOf(pPassenger) >= 0;
+		if (!pTransport || !pPassenger)
+			return false;
+
+		// Never use Passengers.IndexOf here: if a previous bug created a
+		// self-referencing cargo chain it would loop forever. Walk with a hard
+		// bound and treat an overflowing chain as "inside" so no further add
+		// can make the corruption worse.
+		int guard = pTransport->Passengers.NumPassengers + 8;
+
+		for (auto pCurrent = pTransport->Passengers.GetFirstPassenger();
+			pCurrent;
+			pCurrent = abstract_cast<FootClass*>(pCurrent->NextObject))
+		{
+			if (pCurrent == pPassenger)
+				return true;
+
+			if (--guard <= 0)
+				break;
+		}
+
+		if (guard <= 0)
+		{
+			static int s_lastCargoLogFrame = -1000;
+
+			if (Unsorted::CurrentFrame - s_lastCargoLogFrame >= 60)
+			{
+				s_lastCargoLogFrame = Unsorted::CurrentFrame;
+				Debug::Log("[Passengers.EnterDirections][cargo] chain overflow transport=%s(%u) passengers=%d looking=%p id=%u frame=%d\n",
+					pTransport->Type->ID, pTransport->UniqueID, pTransport->Passengers.NumPassengers,
+					static_cast<void*>(pPassenger), pPassenger->UniqueID, Unsorted::CurrentFrame);
+			}
+
+			return true;
+		}
+
+		return false;
 	}
 
 	bool IsEntryAllowedByDirection(UnitClass* pTransport, FootClass* pPassenger)
@@ -988,6 +1090,8 @@ namespace PassengerDirections
 		s_reservations.clear();
 		s_lastEnterFrame.clear();
 		s_lastUnloadFrame.clear();
+		s_liveTechnos.clear();
+		s_liveFrame = -1;
 	}
 
 	void ClearPassenger(FootClass* pPassenger)
@@ -997,16 +1101,34 @@ namespace PassengerDirections
 
 	void EnsureScenario()
 	{
-		if (ScenarioClass::Instance != s_lastScenario || Unsorted::CurrentFrame == 0)
+		const int frame = Unsorted::CurrentFrame;
+
+		if (ScenarioClass::Instance != s_lastScenario || frame == 0)
 		{
 			ClearAll();
 			s_lastScenario = ScenarioClass::Instance;
-			return;
 		}
 
-		// Drop state for passengers/transports that died while boarding.
-		if (Unsorted::CurrentFrame % 300 == 0)
-			PruneStates();
+		// Rebuild the live Techno lookup once per frame. GetTrackedTransport
+		// used to scan TechnoClass::Array for every boarding passenger, which
+		// became O(passengers * technos) with large groups.
+		if (s_liveFrame != frame)
+		{
+			s_liveTechnos.clear();
+			s_liveTechnos.reserve(static_cast<size_t>(TechnoClass::Array.Count));
+
+			for (auto const pTechno : TechnoClass::Array)
+			{
+				if (pTechno)
+					s_liveTechnos[pTechno->UniqueID] = pTechno;
+			}
+
+			s_liveFrame = frame;
+
+			// Drop state for passengers/transports that died while boarding.
+			if (frame != 0 && frame % 300 == 0)
+				PruneStates();
+		}
 	}
 
 	TechnoClass* GetTrackedTransport(FootClass* pPassenger)
@@ -1019,13 +1141,8 @@ namespace PassengerDirections
 		if (it == s_entryStates.end() || !it->second.TransportID)
 			return nullptr;
 
-		for (auto const pTechno : TechnoClass::Array)
-		{
-			if (pTechno && pTechno->UniqueID == it->second.TransportID)
-				return pTechno;
-		}
-
-		return nullptr;
+		auto const live = s_liveTechnos.find(it->second.TransportID);
+		return live != s_liveTechnos.end() ? live->second : nullptr;
 	}
 
 	void TrackTransport(FootClass* pPassenger, UnitClass* pTransport)

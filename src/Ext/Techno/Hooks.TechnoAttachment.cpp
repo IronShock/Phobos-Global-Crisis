@@ -357,11 +357,12 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 		{
 			if (auto const pTransport = abstract_cast<UnitClass*>(pEntryTarget))
 			{
-				// Stateless safety net: the engine's per-cell path must not
-				// board from a disallowed side. The approach controller owns
-				// the actual hand-off; this check never paces or mutates state.
+				// Restricted transports are boarded exclusively through the
+				// approach controller. Letting the engine's per-cell path add
+				// the same passenger as well corrupts the cargo chain
+				// (p1->NextObject == p1) and hangs the game.
 				if (pThis->WhatAmI() == AbstractType::Infantry
-					&& !PassengerDirections::IsEntryAllowedByDirection(pTransport, pThis))
+					&& static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections) != PassengerDirections::All)
 					continue;
 			}
 
