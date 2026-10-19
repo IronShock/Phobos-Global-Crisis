@@ -16,6 +16,7 @@
 #include <New/Type/InsigniaTypeClass.h>
 
 #include <Utilities/GeneralUtils.h>
+#include <Utilities/Debug.h>
 
 TechnoTypeExt::ExtContainer TechnoTypeExt::ExtMap;
 bool TechnoTypeExt::SelectWeaponMutex = false;
@@ -1262,7 +1263,11 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 	// Passenger boarding sides / pacing. These stay out of Serialize so old
 	// savegames keep loading; the values are re-read from rules on startup.
 	if (exINI.ReadString(pSection, "Passengers.EnterDirections"))
+	{
 		this->Passengers_EnterDirections = PassengerDirections::Parse(exINI.value());
+		Debug::Log("[Passengers.EnterDirections] %s = '%s' (0x%02X)\n",
+			pSection, exINI.value(), static_cast<int>(this->Passengers_EnterDirections));
+	}
 
 	this->Passengers_EnterStaggerFrames.Read(exINI, pSection, "Passengers.EnterStaggerFrames");
 	this->Passengers_UnloadStaggerFrames.Read(exINI, pSection, "Passengers.UnloadStaggerFrames");
