@@ -486,6 +486,22 @@ namespace PassengerDirections
 				else
 					++it;
 			}
+
+			for (auto it = s_lastEnterFrame.begin(); it != s_lastEnterFrame.end();)
+			{
+				if (!live.contains(it->first))
+					it = s_lastEnterFrame.erase(it);
+				else
+					++it;
+			}
+
+			for (auto it = s_lastUnloadFrame.begin(); it != s_lastUnloadFrame.end();)
+			{
+				if (!live.contains(it->first))
+					it = s_lastUnloadFrame.erase(it);
+				else
+					++it;
+			}
 		}
 
 		int RelativeFromCell(UnitClass* pTransport, CellClass* pCell)
