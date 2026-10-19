@@ -2055,11 +2055,11 @@ AmphibiousUnload=        ; boolean, default to [General] -> AmphibiousUnload
 - By default infantry can board a transport vehicle from any side. `Passengers.EnterDirections` restricts boarding to the listed sides of the transport.
 - Directions are relative to the transport's **current body facing**: `front`, `frontright`, `right`, `backright`, `back`, `backleft`, `left`, `frontleft`.
   - `all` (default) restores vanilla behaviour.
-  - `none` makes the transport unboardable.
-- When an infantry is ordered to enter, it is redirected to the nearest allowed adjacent cell and boards from there. If the transport rotates, the allowed side rotates with it.
-- The final hand-off uses the infantry's actual position: it must walk to within 96 leptons of the vehicle. A nearby side cell cannot trigger an entry, and being on the vehicle's centre is always accepted.
-- Restricted transports pace boarding: by default one passenger enters every 4 frames. `Passengers.EnterStaggerFrames` overrides this per transport; `0` disables pacing.
-- Unloading from a restricted transport is paced the same way: by default one passenger leaves every 2 frames. `Passengers.UnloadStaggerFrames` overrides this per transport; `0` restores instant unloading.
+  - `none` blocks boarding; the transport can still unload.
+- When an infantry is ordered to enter, it walks to an allowed adjacent cell and only boards after reaching it. It is never removed from a distance.
+- If the transport rotates or moves so that the assigned cell is no longer allowed, the infantry is re-routed to another allowed cell.
+- Every passenger that reaches the vehicle in the same frame boards in that frame, so a group can board together instead of waiting in a queue. `Passengers.EnterStaggerFrames` can delay hand-offs per transport when a paced animation is preferred; it never drops a passenger.
+- Unloading is restricted to the same sides. If no allowed exit cell is free, the transport keeps the passenger on board and retries instead of ejecting it into water, a wall or a blocked cell.
 - Only infantry are restricted. Vehicle passengers keep vanilla behaviour.
 - Capacity, `Passengers.BySize`, `AmphibiousEnter` and bridge checks still apply.
 
@@ -2067,7 +2067,7 @@ In `rulesmd.ini`:
 ```ini
 [SOMEVEHICLE]                            ; VehicleType, transport
 Passengers.EnterDirections=all           ; all|none|comma-separated direction list
-Passengers.EnterStaggerFrames=4          ; integer, frames between passengers; 0 = instant
+Passengers.EnterStaggerFrames=0          ; integer, frames between hand-offs; 0 = same-frame/parallel
 Passengers.UnloadStaggerFrames=2         ; integer, frames between passengers; 0 = instant
 ; Passengers.EnterDirections=back
 ; Passengers.EnterDirections=back,backleft,backright

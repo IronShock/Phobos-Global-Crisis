@@ -11,6 +11,7 @@
 #include <Ext/BuildingType/Body.h>
 #include <Ext/BulletType/Body.h>
 #include <Ext/Techno/Body.h>
+#include <Ext/Techno/TransportEntry.h>
 #include <Ext/WeaponType/Body.h>
 #include <New/Type/InsigniaTypeClass.h>
 
@@ -1257,6 +1258,20 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 
 	// Ares 2.0
 	this->Passengers_BySize.Read(exINI, pSection, "Passengers.BySize");
+
+	// Passenger boarding sides / pacing. These stay out of Serialize so old
+	// savegames keep loading; the values are re-read from rules on startup.
+	if (exINI.ReadString(pSection, "Passengers.EnterDirections"))
+		this->Passengers_EnterDirections = PassengerDirections::Parse(exINI.value());
+
+	this->Passengers_EnterStaggerFrames.Read(exINI, pSection, "Passengers.EnterStaggerFrames");
+	this->Passengers_UnloadStaggerFrames.Read(exINI, pSection, "Passengers.UnloadStaggerFrames");
+
+	if (static_cast<int>(this->Passengers_EnterStaggerFrames) < 0)
+		this->Passengers_EnterStaggerFrames = 0;
+
+	if (static_cast<int>(this->Passengers_UnloadStaggerFrames) < 0)
+		this->Passengers_UnloadStaggerFrames = 0;
 
 	char tempBuffer[40];
 

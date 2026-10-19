@@ -451,20 +451,21 @@ AIDirectionalArmor.Delay=0
 ### Passenger enter directions
 Restricts which side of a transport vehicle infantry may board from. Directions
 are relative to the transport's current body facing (`front`, `frontright`,
-`right`, `backright`, `back`, `backleft`, `left`, `frontleft`). Infantry are
-redirected to the nearest allowed adjacent cell and board from there. Entry is
-gated by the infantry's actual position: it must reach the allowed cell and
-walk to within 96 leptons of the vehicle before entry. A nearby side cell
-cannot trigger entry, while the vehicle centre is always accepted. Restricted
-transports also pace entry and exit: one passenger every 4 frames when
-boarding and every 2 frames when unloading by default. `all` is the vanilla
-default and `none` makes the transport unboardable. Only infantry are
-restricted, and capacity/`BySize`/amphibious/bridge checks still apply.
+`right`, `backright`, `back`, `backleft`, `left`, `frontleft`). Infantry walk to
+an allowed adjacent cell and only board after reaching it, so they are never
+removed from a distance. If the transport rotates or moves away from the
+assigned cell, the infantry is re-routed. Every passenger that reaches the
+vehicle in the same frame boards in that frame, allowing a group to board
+together; `EnterStaggerFrames` can optionally pace the hand-offs. Unloading uses
+the same sides and waits for a valid exit cell instead of ejecting into water
+or a wall. `all` is the vanilla default; `none` blocks boarding but still allows
+unloading. Only infantry are restricted, and
+capacity/`BySize`/amphibious/bridge checks still apply.
 
 ```ini
 [SOMEVEHICLE]                            ; VehicleType, transport
 Passengers.EnterDirections=all           ; all|none|comma-separated directions
-Passengers.EnterStaggerFrames=4          ; frames between boarding passengers; 0 = instant
+Passengers.EnterStaggerFrames=0          ; frames between hand-offs; 0 = same-frame/parallel
 Passengers.UnloadStaggerFrames=2         ; frames between exiting passengers; 0 = instant
 ; Passengers.EnterDirections=back
 ; Passengers.EnterDirections=back,backleft,backright

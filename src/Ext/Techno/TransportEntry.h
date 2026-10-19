@@ -1,35 +1,120 @@
 #pragma once
 
+#include <cstring>
+#include <ranges>
+#include <string>
+#include <string_view>
+#include <utility>
+
 class FootClass;
+class TechnoClass;
 class UnitClass;
 
-namespace PassengerEnterDirections
+// Passenger boarding direction masks. The bit index is the direction relative
+// to the transport's current body facing, matching FacingType / AdjacentCell:
+// 0 front, 1 frontright, 2 right, 3 backright, 4 back, 5 backleft, 6 left,
+// 7 frontleft.
+namespace PassengerDirections
 {
-	// Returns false when the transport restricts entry directions and the
-	// passenger is not approaching from an allowed side. Used by the vanilla
-	// per-cell entry path so a disallowed approach cannot bypass the fast-entry
-	// direction check.
-	bool IsEntryAllowedByDirection(UnitClass* pTransport, FootClass* pPassenger,
-		const char* gate = "entry");
+	constexpr int Front = 1 << 0;
+	constexpr int FrontRight = 1 << 1;
+	constexpr int Right = 1 << 2;
+	constexpr int BackRight = 1 << 3;
+	constexpr int Back = 1 << 4;
+	constexpr int BackLeft = 1 << 5;
+	constexpr int Left = 1 << 6;
+	constexpr int FrontLeft = 1 << 7;
+	constexpr int All = Front | FrontRight | Right | BackRight | Back | BackLeft | Left | FrontLeft;
+	constexpr int None = 0;
 
-	// Exact cargo-list membership check. Transporter/InLimbo are not reliable
-	// for passengers in the engine's CargoClass, so re-entry must use this.
+	// Parses a comma separated direction list. "all" and "none" win
+	// immediately; unknown tokens are ignored. An empty/absent value means
+	// vanilla behaviour.
+	inline int Parse(const char* text)
+	{
+		if (!text || !*text)
+			return All;
+
+		int flags = 0;
+		bool sawDirection = false;
+
+		for (auto&& part : std::string_view { text } | std::views::split(','))
+		{
+			std::string_view token { part.begin(), part.end() };
+			const auto first = token.find_first_not_of(" \t\r");
+
+			if (first == std::string_view::npos)
+				continue;
+
+			const auto last = token.find_last_not_of(" \t\r");
+			token = token.substr(first, last - first + 1);
+
+			const std::string name { token };
+
+			if (_stricmp(name.c_str(), "all") == 0)
+				return All;
+
+			if (_stricmp(name.c_str(), "none") == 0)
+				return None;
+
+			static constexpr std::pair<const char*, int> Names[] =
+			{
+				{ "front", Front },
+				{ "frontright", FrontRight },
+				{ "right", Right },
+				{ "backright", BackRight },
+				{ "back", Back },
+				{ "backleft", BackLeft },
+				{ "left", Left },
+				{ "frontleft", FrontLeft },
+			};
+
+			for (auto const& [pName, bit] : Names)
+			{
+				if (_stricmp(name.c_str(), pName) == 0)
+				{
+					flags |= bit;
+					sawDirection = true;
+					break;
+				}
+			}
+		}
+
+		return sawDirection ? flags : All;
+	}
+
+	// True when the passenger is in the transport's cargo list. Uses the
+	// engine's exact list rather than Transporter/InLimbo flags.
 	bool IsPassengerInside(UnitClass* pTransport, FootClass* pPassenger);
 
-	// Boarding gate shared by the fast-entry and engine entry paths. It
-	// enforces the "at vehicle" rule and the per-transport entry interval.
-	bool TryBeginEnter(UnitClass* pTransport, FootClass* pPassenger);
+	// Cell based direction check. Used as a stateless safety net by the
+	// engine's own entry paths; it never paces or mutates entry state.
+	bool IsEntryAllowedByDirection(UnitClass* pTransport, FootClass* pPassenger);
 
-	// Per-transport unloading interval used by the fast-unload loop.
+	// Per-transport unload pacing, only used by the fast unload loop.
 	bool TryBeginUnload(UnitClass* pTransport);
 	void FinishUnload(UnitClass* pTransport);
 
-}
+	// True when at least one allowed adjacent cell can receive the passenger.
+	bool HasValidUnloadCell(UnitClass* pTransport, FootClass* pPassenger);
 
-namespace TechnoAttachmentTemp
-{
-	// The engine's normal passenger attachment path uses single-object mode.
-	// Direct CargoClass::AddPassenger calls must use the same mode, otherwise
-	// the passenger's NextObject chain is attached as cargo as well.
-	void SetSingleObjectAttach(bool single);
+	// Returns the world direction (0..7) to unload to. Keeps the requested
+	// direction when it is allowed and valid, otherwise picks the first
+	// allowed valid direction in fixed relative order.
+	int ChooseUnloadDirection(UnitClass* pTransport, FootClass* pPassenger, int direction);
+
+	// Drops transient boarding state. Called on scenario load and whenever an
+	// order no longer wants to board.
+	void ClearAll();
+	void ClearPassenger(FootClass* pPassenger);
+	void EnsureScenario();
+
+	// Resolves the transport tracked for this passenger by UniqueID. Used when
+	// the engine link has already been cleared while our own Move is active.
+	TechnoClass* GetTrackedTransport(FootClass* pPassenger);
+
+	// True when the passenger's current Move mission points at its assigned
+	// approach cell, i.e. the move was issued by the boarding controller and
+	// not by a new player order.
+	bool IsManagedMove(FootClass* pPassenger);
 }

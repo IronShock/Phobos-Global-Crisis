@@ -9,9 +9,11 @@
 #include <CCINIClass.h>
 #include <MapClass.h>
 #include <RulesClass.h>
+#include <ScenarioClass.h>
 #include <UnitTypeClass.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -19,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 DEFINE_HOOK_AGAIN(0x6FA33C, TechnoClass_ThreatEvals_OpenToppedOwner, 0x6) // TechnoClass::AI
@@ -81,66 +84,10 @@ DEFINE_HOOK(0x701881, TechnoClass_ChangeHouse_Passenger_SyncOwner, 0x5)
 	return 0;
 }
 
-// Temporary diagnostics: identify exactly who adds/removes cargo passengers.
-static inline TechnoClass* TransportFromPassengers(PassengersClass* pThis)
-{
-	return reinterpret_cast<TechnoClass*>(reinterpret_cast<char*>(pThis) - 0x114);
-}
-
-DEFINE_HOOK(0x4734B0, PassengersClass_RemovePassenger_Debug, 0x5)
-{
-	GET(PassengersClass*, pThis, ECX);
-	auto const pTransport = TransportFromPassengers(pThis);
-	auto const pPassenger = R->Stack<FootClass*>(0x4);
-
-	Debug::Log("[cargo] frame=%d transport=%p op=remove passenger=%p before=%d first=%p caller=%p\n",
-		Unsorted::CurrentFrame, static_cast<void*>(pTransport), static_cast<void*>(pPassenger),
-		pThis->NumPassengers, static_cast<void*>(pThis->FirstPassenger),
-		reinterpret_cast<void*>(R->Stack<DWORD>(0x0)));
-
-	return 0;
-}
-
-DEFINE_HOOK(0x473430, PassengersClass_RemoveFirstPassenger_Debug, 0x5)
-{
-	GET(PassengersClass*, pThis, ECX);
-	auto const pTransport = TransportFromPassengers(pThis);
-
-	Debug::Log("[cargo] frame=%d transport=%p op=remove_first passenger=%p before=%d caller=%p\n",
-		Unsorted::CurrentFrame, static_cast<void*>(pTransport),
-		static_cast<void*>(pThis->FirstPassenger), pThis->NumPassengers,
-		reinterpret_cast<void*>(R->Stack<DWORD>(0x0)));
-
-	return 0;
-}
-
-DEFINE_HOOK(0x4DE630, FootClass_EnterAsPassenger_Debug, 0x6)
-{
-	GET(FootClass*, pThis, ECX);
-	auto const pPassenger = R->Stack<FootClass*>(0x4);
-
-	Debug::Log("[cargo] frame=%d transport=%s(%p) op=enter_as_passenger passenger=%p before=%d caller=%p\n",
-		Unsorted::CurrentFrame, pThis->GetTechnoType()->ID, static_cast<void*>(pThis),
-		static_cast<void*>(pPassenger), pThis->Passengers.NumPassengers,
-		reinterpret_cast<void*>(R->Stack<DWORD>(0x0)));
-
-	return 0;
-}
-
 DEFINE_HOOK(0x71067B, TechnoClass_EnterTransport, 0x7)
 {
-	enum { SkipGameCode = 0x7106D5 };
-
 	GET(TechnoClass*, pThis, ESI);
 	GET(FootClass*, pPassenger, EDI);
-
-	if (auto const pTransport = abstract_cast<UnitClass*>(pThis))
-	{
-		// Shared gate: already inside, wrong side, not at the vehicle yet,
-		// full, or still inside the per-transport entry interval.
-		if (!PassengerEnterDirections::TryBeginEnter(pTransport, pPassenger))
-			return SkipGameCode;
-	}
 
 	if (pPassenger)
 	{
@@ -294,13 +241,9 @@ static inline bool IsCloseEnoughToEnter(UnitClass* pTransport, FootClass* pPasse
 		&& std::abs(pPassenger->Location.Z - pTransport->Location.Z) < Unsorted::CellHeight);
 }
 
-// Fast entry must not limbo a passenger that is still approaching from a distance.
-// This is the "visually at the vehicle" check: roughly the vehicle's own cell edge.
+// Fast entry must not limbo a passenger that is still approaching from a
+// distance. Restricted transports use a cell based approach instead.
 constexpr int PassengerAtVehicleDistance = 96; // leptons
-constexpr int PassengerDirectionEntryDistance = 320; // leptons, one cell + tolerance
-constexpr double PassengerDirectionCheckDistance = 384.0; // leptons
-constexpr double PassengerLineHalfWidth = 64.0; // leptons
-constexpr double PassengerMaxLineAngle = 30.0; // degrees
 
 static inline bool IsAtVehicle(UnitClass* pTransport, FootClass* pPassenger)
 {
@@ -367,24 +310,25 @@ static inline void DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 	if (!pTransport || !pPassenger)
 		return;
 
-	// Never add a passenger that is already in the cargo list. Transporter /
-	// InLimbo are not reliable for engine-added passengers.
-	if (PassengerEnterDirections::IsPassengerInside(pTransport, pPassenger))
+	// Never add a passenger that is already in the cargo list.
+	if (PassengerDirections::IsPassengerInside(pTransport, pPassenger))
 		return;
+
+	const auto pTransportTypeExt = TechnoTypeExt::ExtMap.Find(pTransport->Type);
+	const bool bySize = pTransportTypeExt->Passengers_BySize;
+	const int maxSize = pTransport->Type->Passengers;
+	const int passengerSize = static_cast<int>(pPassenger->GetTechnoType()->Size);
+	const int predictedSize = bySize
+		? (pTransport->Passengers.GetTotalSize() + passengerSize)
+		: (pTransport->Passengers.NumPassengers + 1);
 
 	// Hard capacity guard: never append past the transport's passenger limit.
-	if (pTransport->Type->Passengers > 0
-		&& pTransport->Passengers.NumPassengers >= pTransport->Type->Passengers)
-	{
-		Debug::Log("[Passengers.EnterDirections][add] transport=%s blocked=full passengers=%d/%d\n",
-			pTransport->Type->ID, pTransport->Passengers.NumPassengers, pTransport->Type->Passengers);
+	if (maxSize > 0 && predictedSize > maxSize)
 		return;
-	}
 
-	const int passengersBefore = pTransport->Passengers.NumPassengers;
-
-	// Hard gate: every direct AddPassenger path must pass the direction check.
-	if (!PassengerEnterDirections::IsEntryAllowedByDirection(pTransport, pPassenger, "DoEnterNow"))
+	// Stateless direction guard. The approach controller already selected an
+	// allowed cell; this protects direct callers as well.
+	if (!PassengerDirections::IsEntryAllowedByDirection(pTransport, pPassenger))
 		return;
 
 	// Vanilla only for infantry, but why
@@ -417,17 +361,8 @@ static inline void DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 		pPassenger->Locomotor->Link_To_Object(pPassenger);
 	}
 
-	// Use the same attachment mode as the engine's normal entry path. The
-	// default chain mode would attach the passenger's NextObject list too.
-	TechnoAttachmentTemp::SetSingleObjectAttach(true);
 	pTransport->AddPassenger(pPassenger); // Don't swap order casually, very very important
-	TechnoAttachmentTemp::SetSingleObjectAttach(false);
 	pPassenger->Transporter = pTransport;
-
-	Debug::Log("[Passengers.EnterDirections][add] transport=%s(%p) frame=%d before=%d after=%d expected=%d next=%p\n",
-		pTransport->Type->ID, static_cast<void*>(pTransport), Unsorted::CurrentFrame,
-		passengersBefore, pTransport->Passengers.NumPassengers, passengersBefore + 1,
-		static_cast<void*>(pPassenger->NextObject));
 
 	if (pTransport->Type->OpenTopped)
 		pTransport->EnteredOpenTopped(pPassenger);
@@ -438,514 +373,474 @@ static inline void DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 	pPassenger->Undiscover();
 }
 
-#pragma region PassengerEnterDirections
+#pragma region PassengerDirections
 
-// Directions are relative to the transport's current body facing:
-// 0 front, 1 frontright, 2 right, 3 backright, 4 back, 5 backleft, 6 left, 7 frontleft.
-namespace PassengerEnterDirections
+namespace PassengerDirections
 {
-	constexpr int Front = 1 << 0;
-	constexpr int FrontRight = 1 << 1;
-	constexpr int Right = 1 << 2;
-	constexpr int BackRight = 1 << 3;
-	constexpr int Back = 1 << 4;
-	constexpr int BackLeft = 1 << 5;
-	constexpr int Left = 1 << 6;
-	constexpr int FrontLeft = 1 << 7;
-	constexpr int All = Front | FrontRight | Right | BackRight | Back | BackLeft | Left | FrontLeft;
-	constexpr int None = 0;
-
-	// Transient parallel-entry targets. Not serialized; used to keep every
-	// passenger independent after the engine queue link is cleared.
-	std::unordered_map<FootClass*, UnitClass*> s_parallelEntryTargets;
-
-	// Transient pacing state. These maps are not serialized.
-	std::unordered_map<UnitClass*, int> s_lastEnterFrame;
-	std::unordered_map<UnitClass*, int> s_lastUnloadFrame;
-
-
-
-	constexpr int DefaultEnterStaggerFrames = 4;
-	constexpr int DefaultUnloadStaggerFrames = 2;
-
-	RulesClass* s_lastRules = nullptr;
-	std::unordered_map<UnitTypeClass*, int> s_directionCache;
-	std::unordered_map<UnitTypeClass*, int> s_enterStaggerCache;
-	std::unordered_map<UnitTypeClass*, int> s_unloadStaggerCache;
-
-	void EnsureRulesCache()
+	namespace
 	{
-		if (s_lastRules == RulesClass::Instance)
-			return;
+		constexpr int MaxDirections = 8;
 
-		s_parallelEntryTargets.clear();
-		s_lastEnterFrame.clear();
-		s_lastUnloadFrame.clear();
-		s_directionCache.clear();
-		s_enterStaggerCache.clear();
-		s_unloadStaggerCache.clear();
-		s_lastRules = RulesClass::Instance;
+		struct EntryState
+		{
+			DWORD TransportID = 0;
+			CellStruct ApproachCell = CellStruct::Empty;
+			int Relative = -1;
+		};
+
+		// Transient state only. Not serialized; cleared on scenario load.
+		// Keyed by UniqueID so a recycled object pointer cannot inherit stale
+		// boarding state.
+		std::unordered_map<DWORD, EntryState> s_entryStates;
+		std::unordered_map<DWORD, std::array<DWORD, MaxDirections>> s_reservations;
+		std::unordered_map<DWORD, int> s_lastEnterFrame;
+		std::unordered_map<DWORD, int> s_lastUnloadFrame;
+		ScenarioClass* s_lastScenario = nullptr;
+
+		inline bool LogEnabled()
+		{
+			return Phobos::Config::DebugGCDiagnostics;
+		}
+
+		inline int GetStagger(UnitTypeClass* pType, bool unload)
+		{
+			if (!pType)
+				return 0;
+
+			const auto pExt = TechnoTypeExt::ExtMap.Find(pType);
+			return unload
+				? static_cast<int>(pExt->Passengers_UnloadStaggerFrames)
+				: static_cast<int>(pExt->Passengers_EnterStaggerFrames);
+		}
+
+		void ReleaseReservation(DWORD transportID, DWORD passengerID)
+		{
+			if (!transportID || !passengerID)
+				return;
+
+			auto const it = s_reservations.find(transportID);
+
+			if (it == s_reservations.end())
+				return;
+
+			for (auto& id : it->second)
+			{
+				if (id == passengerID)
+					id = 0;
+			}
+		}
+
+		void ClearPassengerState(FootClass* pPassenger)
+		{
+			if (!pPassenger)
+				return;
+
+			auto const it = s_entryStates.find(pPassenger->UniqueID);
+
+			if (it == s_entryStates.end())
+				return;
+
+			ReleaseReservation(it->second.TransportID, pPassenger->UniqueID);
+			s_entryStates.erase(it);
+		}
+
+		void PruneStates()
+		{
+			std::unordered_set<DWORD> live;
+			live.reserve(static_cast<size_t>(TechnoClass::Array.Count) * 2);
+
+			for (auto const pTechno : TechnoClass::Array)
+			{
+				if (pTechno)
+					live.insert(pTechno->UniqueID);
+			}
+
+			for (auto it = s_entryStates.begin(); it != s_entryStates.end();)
+			{
+				if (!live.contains(it->first) || !live.contains(it->second.TransportID))
+				{
+					ReleaseReservation(it->second.TransportID, it->first);
+					it = s_entryStates.erase(it);
+				}
+				else
+				{
+					++it;
+				}
+			}
+
+			for (auto it = s_reservations.begin(); it != s_reservations.end();)
+			{
+				if (!live.contains(it->first))
+					it = s_reservations.erase(it);
+				else
+					++it;
+			}
+		}
+
+		int RelativeFromCell(UnitClass* pTransport, CellClass* pCell)
+		{
+			if (!pTransport || !pCell)
+				return -1;
+
+			auto const pTransportCell = pTransport->GetCell();
+
+			if (!pTransportCell)
+				return -1;
+
+			const int dx = pCell->MapCoords.X - pTransportCell->MapCoords.X;
+			const int dy = pCell->MapCoords.Y - pTransportCell->MapCoords.Y;
+
+			for (int dir = 0; dir < MaxDirections; ++dir)
+			{
+				if (Unsorted::AdjacentCell[dir].X != dx || Unsorted::AdjacentCell[dir].Y != dy)
+					continue;
+
+				const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
+				return (dir - facing + MaxDirections) % MaxDirections;
+			}
+
+			return -1;
+		}
+
+		bool IsValidApproachCell(UnitClass* pTransport, FootClass* pPassenger, CellClass* pCell)
+		{
+			if (!pTransport || !pPassenger || !pCell)
+				return false;
+
+			auto const pTransportCell = pTransport->GetCell();
+
+			if (!pTransportCell)
+				return false;
+
+			// Same bridge layer. Ground height differences (ramps, slopes) are
+			// handled by the locomotor and must not block boarding.
+			if (pCell->ContainsBridge() != pTransportCell->ContainsBridge())
+				return false;
+
+			if (pTransportCell->ContainsBridge() && pCell->GetLevel() != pTransportCell->GetLevel())
+				return false;
+
+			const auto speedType = pPassenger->GetTechnoType()->SpeedType;
+
+			if (GroundType::Array[static_cast<int>(pCell->LandType)].Cost[static_cast<int>(speedType)] <= 0.0)
+				return false;
+
+			if (auto const pContent = pCell->GetContent())
+			{
+				if (pContent != pTransport && pContent != pPassenger)
+				{
+					const auto absType = pContent->WhatAmI();
+
+					// Buildings, vehicles and landed aircraft block the cell;
+					// infantry may share.
+					if (absType == AbstractType::Building
+						|| absType == AbstractType::Unit
+						|| absType == AbstractType::Aircraft)
+						return false;
+				}
+			}
+
+			return true;
+		}
+
+		bool IsValidUnloadCell(UnitClass* pTransport, FootClass* pPassenger, CellClass* pCell)
+		{
+			if (!pTransport || !pPassenger || !pCell)
+				return false;
+
+			auto const pTransportCell = pTransport->GetCell();
+
+			if (!pTransportCell)
+				return false;
+
+			if (pCell->ContainsBridge() != pTransportCell->ContainsBridge())
+				return false;
+
+			if (pTransportCell->ContainsBridge() && pCell->GetLevel() != pTransportCell->GetLevel())
+				return false;
+
+			const auto speedType = pPassenger->GetTechnoType()->SpeedType;
+
+			if (GroundType::Array[static_cast<int>(pCell->LandType)].Cost[static_cast<int>(speedType)] <= 0.0)
+				return false;
+
+			if (auto const pContent = pCell->GetContent())
+			{
+				if (pContent != pTransport && pContent != pPassenger
+					&& pContent->WhatAmI() == AbstractType::Building)
+					return false;
+			}
+
+			return true;
+		}
+
+		CellClass* FindApproachCell(UnitClass* pTransport, FootClass* pPassenger, int flags)
+		{
+			auto const pTransportCell = pTransport->GetCell();
+
+			if (!pTransportCell)
+				return nullptr;
+
+			auto const pPassengerCell = pPassenger->GetCell();
+			const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
+			auto& slots = s_reservations[pTransport->UniqueID];
+
+			CellClass* pBestFree = nullptr;
+			CellClass* pBestAny = nullptr;
+			int bestFreeScore = std::numeric_limits<int>::max();
+			int bestAnyScore = std::numeric_limits<int>::max();
+			int bestFreeRelative = -1;
+			int bestAnyRelative = -1;
+
+			for (int relative = 0; relative < MaxDirections; ++relative)
+			{
+				if (!(flags & (1 << relative)))
+					continue;
+
+				const int world = (facing + relative) % MaxDirections;
+				auto const pCell = pTransportCell->GetNeighbourCell(static_cast<FacingType>(world));
+
+				if (!IsValidApproachCell(pTransport, pPassenger, pCell))
+					continue;
+
+				const int score = pPassengerCell
+					? std::abs(pCell->MapCoords.X - pPassengerCell->MapCoords.X)
+						+ std::abs(pCell->MapCoords.Y - pPassengerCell->MapCoords.Y)
+					: relative;
+
+				const bool reservedByOther = slots[relative] != 0
+					&& slots[relative] != pPassenger->UniqueID;
+
+				if (!reservedByOther
+					&& (score < bestFreeScore
+						|| (score == bestFreeScore && relative < bestFreeRelative)))
+				{
+					pBestFree = pCell;
+					bestFreeScore = score;
+					bestFreeRelative = relative;
+				}
+
+				if (score < bestAnyScore
+					|| (score == bestAnyScore && relative < bestAnyRelative))
+				{
+					pBestAny = pCell;
+					bestAnyScore = score;
+					bestAnyRelative = relative;
+				}
+			}
+
+			return pBestFree ? pBestFree : pBestAny;
+		}
+
+		void AssignApproachCell(UnitClass* pTransport, FootClass* pPassenger, CellClass* pCell,
+			int relative, EntryState& state)
+		{
+			if (relative < 0)
+				return;
+
+			ReleaseReservation(pTransport->UniqueID, pPassenger->UniqueID);
+			auto& slots = s_reservations[pTransport->UniqueID];
+
+			// When every allowed cell is already reserved this passenger may
+			// share one; do not steal the other passenger's reservation.
+			if (slots[relative] == 0 || slots[relative] == pPassenger->UniqueID)
+				slots[relative] = pPassenger->UniqueID;
+
+			state.TransportID = pTransport->UniqueID;
+			state.ApproachCell = pCell->MapCoords;
+			state.Relative = relative;
+
+			if (LogEnabled())
+			{
+				Debug::Log("[Passengers.EnterDirections] assign transport=%s(%u) passenger=%u cell=(%d,%d) relative=%d frame=%d\n",
+					pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+					pCell->MapCoords.X, pCell->MapCoords.Y, relative, Unsorted::CurrentFrame);
+			}
+		}
+
+		bool IsAtApproach(UnitClass* pTransport, FootClass* pPassenger, EntryState& state, int flags,
+			CellClass*& pApproach)
+		{
+			pApproach = nullptr;
+
+			if (state.ApproachCell == CellStruct::Empty)
+				return false;
+
+			pApproach = MapClass::Instance.TryGetCellAt(state.ApproachCell);
+
+			if (!pApproach)
+				return false;
+
+			const int relative = RelativeFromCell(pTransport, pApproach);
+
+			if (relative < 0 || !(flags & (1 << relative))
+				|| !IsValidApproachCell(pTransport, pPassenger, pApproach))
+			{
+				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+				state.ApproachCell = CellStruct::Empty;
+				state.Relative = -1;
+				pApproach = nullptr;
+				return false;
+			}
+
+			// The transport may have rotated/moved since the assignment; keep
+			// the reservation in the slot that matches the current facing.
+			if (state.Relative != relative)
+			{
+				auto& slots = s_reservations[state.TransportID];
+
+				if (slots[relative] != 0 && slots[relative] != pPassenger->UniqueID)
+				{
+					// Another passenger already owns this slot after the
+					// rotation; drop the assignment and pick a new cell.
+					ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+					state.ApproachCell = CellStruct::Empty;
+					state.Relative = -1;
+					pApproach = nullptr;
+					return false;
+				}
+
+				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+				slots[relative] = pPassenger->UniqueID;
+				state.Relative = relative;
+			}
+
+			return pPassenger->GetCell() == pApproach;
+		}
+
+		void HandleEntry(UnitClass* pTransport, FootClass* pPassenger, int flags)
+		{
+			if (!pTransport || !pPassenger)
+				return;
+
+			if (pPassenger->WhatAmI() != AbstractType::Infantry)
+				return;
+
+			if (IsPassengerInside(pTransport, pPassenger))
+			{
+				ClearPassengerState(pPassenger);
+				return;
+			}
+
+			if (flags == None)
+			{
+				ClearPassengerState(pPassenger);
+				return;
+			}
+
+			auto& state = s_entryStates[pPassenger->UniqueID];
+
+			if (state.TransportID != pTransport->UniqueID)
+			{
+				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+				state = EntryState {};
+				state.TransportID = pTransport->UniqueID;
+			}
+
+			auto const pPassengerCell = pPassenger->GetCell();
+			auto const pTransportCell = pTransport->GetCell();
+
+			if (!pPassengerCell || !pTransportCell)
+				return;
+
+			CellClass* pApproach = nullptr;
+			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
+			const bool atTransport = pPassengerCell == pTransportCell;
+
+			if (atTransport || atApproach)
+			{
+				if (!CanEnterNow(pTransport, pPassenger, true))
+					return;
+
+				const int stagger = GetStagger(pTransport->Type, false);
+
+				if (stagger > 0)
+				{
+					const int frame = Unsorted::CurrentFrame;
+					auto const it = s_lastEnterFrame.find(pTransport->UniqueID);
+
+					if (it != s_lastEnterFrame.end() && frame - it->second < stagger)
+						return;
+
+					s_lastEnterFrame[pTransport->UniqueID] = frame;
+				}
+
+				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+				s_entryStates.erase(pPassenger->UniqueID);
+				DoEnterNow(pTransport, pPassenger);
+				return;
+			}
+
+			if (!pApproach)
+			{
+				pApproach = FindApproachCell(pTransport, pPassenger, flags);
+
+				if (!pApproach)
+				{
+					if (LogEnabled() && Unsorted::CurrentFrame % 60 == 0)
+					{
+						Debug::Log("[Passengers.EnterDirections] no approach cell transport=%s(%u) passenger=%u flags=0x%02X cell=(%d,%d)\n",
+							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID, flags,
+							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y);
+					}
+
+					return;
+				}
+
+				const int relative = RelativeFromCell(pTransport, pApproach);
+				AssignApproachCell(pTransport, pPassenger, pApproach, relative, state);
+
+				if (relative < 0)
+					return;
+			}
+
+			if (pPassenger->Destination != pApproach)
+				pPassenger->SetDestination(pApproach, true);
+
+			if (pPassenger->CurrentMission != Mission::Move
+				&& pPassenger->CurrentMission != Mission::Enter)
+			{
+				pPassenger->QueueMission(Mission::Move, false);
+				pPassenger->NextMission();
+			}
+		}
 	}
 
 	bool IsPassengerInside(UnitClass* pTransport, FootClass* pPassenger)
 	{
-		if (!pTransport || !pPassenger)
-			return false;
-
-		for (auto pCurrent = pTransport->Passengers.GetFirstPassenger();
-			pCurrent;
-			pCurrent = abstract_cast<FootClass*>(pCurrent->NextObject))
-		{
-			if (pCurrent == pPassenger)
-				return true;
-		}
-
-		return false;
+		return pTransport && pPassenger
+			&& pTransport->Passengers.IndexOf(pPassenger) >= 0;
 	}
 
-	int Parse(const char* text)
-	{
-		if (!text || !*text)
-			return All;
-
-		int flags = 0;
-		bool sawDirection = false;
-
-		for (auto&& part : std::string_view { text } | std::views::split(','))
-		{
-			std::string_view token { part.begin(), part.end() };
-			const auto first = token.find_first_not_of(" \t\r");
-			const auto last = token.find_last_not_of(" \t\r");
-
-			if (first == std::string_view::npos)
-				continue;
-
-			token = token.substr(first, last - first + 1);
-			const std::string name { token };
-
-			if (_stricmp(name.c_str(), "all") == 0)
-				return All;
-
-			if (_stricmp(name.c_str(), "none") == 0)
-				return None;
-
-			static const std::pair<const char*, int> Names[] =
-			{
-				{ "front", Front },
-				{ "frontright", FrontRight },
-				{ "right", Right },
-				{ "backright", BackRight },
-				{ "back", Back },
-				{ "backleft", BackLeft },
-				{ "left", Left },
-				{ "frontleft", FrontLeft },
-			};
-
-			bool matched = false;
-
-			for (auto const& [pName, bit] : Names)
-			{
-				if (_stricmp(name.c_str(), pName) == 0)
-				{
-					flags |= bit;
-					sawDirection = true;
-					matched = true;
-					break;
-				}
-			}
-
-			if (!matched)
-				Debug::Log("[Passengers.EnterDirections] Unknown direction '%s'.\n", name.c_str());
-		}
-
-		return sawDirection ? flags : All;
-	}
-
-	int Get(UnitTypeClass* pType)
-	{
-		if (!pType || !CCINIClass::INI_Rules)
-			return All;
-
-		EnsureRulesCache();
-
-		if (auto const it = s_directionCache.find(pType); it != s_directionCache.end())
-			return it->second;
-
-		char buffer[0x80] {};
-		const int read = CCINIClass::INI_Rules->ReadString(
-			pType->ID, "Passengers.EnterDirections", "", buffer, sizeof(buffer));
-
-		const int flags = read > 0 ? Parse(buffer) : All;
-
-		Debug::Log("[Passengers.EnterDirections] %s = '%s' (0x%02X)\n",
-			pType->ID, read > 0 ? buffer : "absent", flags);
-
-		s_directionCache.emplace(pType, flags);
-		return flags;
-	}
-
-	int ReadStaggerFrames(UnitTypeClass* pType, const char* key, int fallback,
-		std::unordered_map<UnitTypeClass*, int>& cache)
-	{
-		if (!pType || !CCINIClass::INI_Rules)
-			return fallback;
-
-		EnsureRulesCache();
-
-		if (auto const it = cache.find(pType); it != cache.end())
-			return it->second;
-
-		const int value = std::max(0, CCINIClass::INI_Rules->ReadInteger(pType->ID, key, fallback));
-		cache.emplace(pType, value);
-		return value;
-	}
-
-	int GetEnterStaggerFrames(UnitTypeClass* pType)
-	{
-		return ReadStaggerFrames(pType, "Passengers.EnterStaggerFrames",
-			DefaultEnterStaggerFrames, s_enterStaggerCache);
-	}
-
-	int GetUnloadStaggerFrames(UnitTypeClass* pType)
-	{
-		return ReadStaggerFrames(pType, "Passengers.UnloadStaggerFrames",
-			DefaultUnloadStaggerFrames, s_unloadStaggerCache);
-	}
-
-	// Returns 0..7 relative to the transport's current body facing, or -1 when
-	// the passenger is exactly on the transport's centre.
-	int GetRelativeDirection(UnitClass* pTransport, FootClass* pPassenger)
-	{
-		if (!pTransport || !pPassenger)
-			return -1;
-
-		auto const pTransportCell = pTransport->GetCell();
-
-		if (!pTransportCell)
-			return -1;
-
-		const CoordStruct transportCoords = pTransport->GetCoords();
-		const CoordStruct passengerCoords = pPassenger->GetCoords();
-
-		// On the transport centre: every neighbour is equally close, so
-		// picking the nearest cell would return an arbitrary side. Treat a
-		// tiny deadzone around the centre as "at vehicle" and accept it.
-		constexpr int CentreDeadzone = 16; // leptons
-		if (std::abs(passengerCoords.X - transportCoords.X) <= CentreDeadzone
-			&& std::abs(passengerCoords.Y - transportCoords.Y) <= CentreDeadzone)
-		{
-			return -1;
-		}
-
-		int bestWorld = -1;
-		long long bestDistance = std::numeric_limits<long long>::max();
-
-		// Use the engine's own neighbour cells. This keeps the direction mapping
-		// consistent with FacingType / AdjacentCell instead of assuming a
-		// particular world-to-screen or isometric angle.
-		for (int dir = 0; dir < 8; ++dir)
-		{
-			auto const pCell = pTransportCell->GetNeighbourCell(static_cast<FacingType>(dir));
-
-			if (!pCell)
-				continue;
-
-			const CoordStruct cellCoords = pCell->GetCoords();
-			const long long dx = static_cast<long long>(passengerCoords.X) - cellCoords.X;
-			const long long dy = static_cast<long long>(passengerCoords.Y) - cellCoords.Y;
-			const long long distance = dx * dx + dy * dy;
-
-			if (distance < bestDistance)
-			{
-				bestDistance = distance;
-				bestWorld = dir;
-			}
-		}
-
-		if (bestWorld < 0)
-			return -1;
-
-		const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
-		return (bestWorld - facing + 8) % 8;
-	}
-
-	struct LineCheckResult
-	{
-		bool Pass = false;
-		int Relative = -1;
-		double Dot = 0.0;
-		double Cross = 0.0;
-		double Along = 0.0;
-		double Perp = 0.0;
-		double Angle = 0.0;
-	};
-
-	LineCheckResult CheckLine(UnitClass* pTransport, FootClass* pPassenger, int flags)
-	{
-		LineCheckResult result {};
-
-		if (!pTransport || !pPassenger || flags == None)
-			return result;
-
-		const CoordStruct transportCoords = pTransport->GetCoords();
-		const CoordStruct passengerCoords = pPassenger->GetCoords();
-		const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
-		const double vx = static_cast<double>(passengerCoords.X - transportCoords.X);
-		const double vy = static_cast<double>(passengerCoords.Y - transportCoords.Y);
-
-		double bestPerp = std::numeric_limits<double>::max();
-
-		for (int relative = 0; relative < 8; ++relative)
-		{
-			if (!(flags & (1 << relative)))
-				continue;
-
-			const int world = (facing + relative) % 8;
-			const CellStruct& dir = Unsorted::AdjacentCell[world];
-			const double dirLength = std::sqrt(static_cast<double>(dir.X * dir.X + dir.Y * dir.Y));
-
-			if (dirLength <= 0.0)
-				continue;
-
-			const double dot = vx * dir.X + vy * dir.Y;
-			const double cross = vx * dir.Y - vy * dir.X;
-			const double along = dot / dirLength;
-			const double perp = std::abs(cross) / dirLength;
-			const double angle = std::atan2(std::abs(cross), dot) * (180.0 / 3.14159265358979323846);
-
-			if (result.Relative < 0 || perp < bestPerp)
-			{
-				result.Relative = relative;
-				result.Dot = dot;
-				result.Cross = cross;
-				result.Along = along;
-				result.Perp = perp;
-				result.Angle = angle;
-				bestPerp = perp;
-			}
-
-			// Direction gate: in front of the allowed side, within 64 leptons of
-			// the centre line and 30 degrees. The 96-lepton "at vehicle" check is
-			// applied separately; this gate only decides whether the side is right.
-			if (along > 0.0
-				&& along <= PassengerDirectionCheckDistance
-				&& perp <= PassengerLineHalfWidth
-				&& angle <= PassengerMaxLineAngle)
-			{
-				result.Pass = true;
-				result.Relative = relative;
-				result.Dot = dot;
-				result.Cross = cross;
-				result.Along = along;
-				result.Perp = perp;
-				result.Angle = angle;
-				break;
-			}
-		}
-
-		return result;
-	}
-
-	std::unordered_map<FootClass*, int> s_lastGateLogFrame;
-
-	void LogGate(UnitClass* pTransport, FootClass* pPassenger, int flags, const char* gate,
-		bool allowed, const char* reason, const LineCheckResult& line)
-	{
-		if (!pTransport || !pPassenger)
-			return;
-
-		const int frame = Unsorted::CurrentFrame;
-		auto const it = s_lastGateLogFrame.find(pPassenger);
-
-		if (it != s_lastGateLogFrame.end() && frame - it->second < 30)
-			return;
-
-		s_lastGateLogFrame[pPassenger] = frame;
-
-		auto const pTransportCell = pTransport->GetCell();
-		auto const pPassengerCell = pPassenger->GetCell();
-		const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
-		const int relative = GetRelativeDirection(pTransport, pPassenger);
-		const CoordStruct transportCoords = pTransport->GetCoords();
-		const CoordStruct passengerCoords = pPassenger->GetCoords();
-
-		Debug::Log("[Passengers.EnterDirections][gate] gate=%s transport=%s(%p) flags=0x%02X facing=%d relative=%d "
-			"pcell=(%d,%d) last=(%d,%d) tcell=(%d,%d) pcoords=(%d,%d,%d) tcoords=(%d,%d,%d) "
-			"dot=%.1f cross=%.1f perp=%.1f angle=%.1f along=%.1f line=%d mission=%d dest=%p queue=%p link=%p passengers=%d/%d parallel=%p result=%s reason=%s\n",
-			gate, pTransport->Type->ID, static_cast<void*>(pTransport), flags, facing, relative,
-			pPassengerCell ? pPassengerCell->MapCoords.X : -1,
-			pPassengerCell ? pPassengerCell->MapCoords.Y : -1,
-			pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
-			pTransportCell ? pTransportCell->MapCoords.X : -1,
-			pTransportCell ? pTransportCell->MapCoords.Y : -1,
-			passengerCoords.X, passengerCoords.Y, passengerCoords.Z,
-			transportCoords.X, transportCoords.Y, transportCoords.Z,
-			line.Dot, line.Cross, line.Perp, line.Angle, line.Along, line.Pass ? 1 : 0,
-			static_cast<int>(pPassenger->CurrentMission),
-			static_cast<void*>(pPassenger->Destination),
-			static_cast<void*>(pPassenger->QueueUpToEnter),
-			static_cast<void*>(pTransport->GetNthLink()),
-			pTransport->Passengers.NumPassengers, pTransport->Type->Passengers,
-			static_cast<void*>(s_parallelEntryTargets.contains(pPassenger)
-				? s_parallelEntryTargets[pPassenger] : nullptr),
-			allowed ? "allow" : "block", reason);
-	}
-
-	CellClass* FindAllowedCell(UnitClass* pTransport, FootClass* pPassenger, int flags)
-	{
-		if (!pTransport || !pPassenger || flags == None)
-			return nullptr;
-
-		auto const pTransportCell = pTransport->GetCell();
-
-		if (!pTransportCell)
-			return nullptr;
-
-		auto const pPassengerCell = pPassenger->GetCell();
-		const CellStruct passengerCoords = pPassengerCell ? pPassengerCell->MapCoords : pTransportCell->MapCoords;
-		const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
-
-		CellClass* pBest = nullptr;
-		int bestScore = std::numeric_limits<int>::max();
-
-		for (int relative = 0; relative < 8; ++relative)
-		{
-			if (!(flags & (1 << relative)))
-				continue;
-
-			const int world = (facing + relative) % 8;
-			auto const pCell = pTransportCell->GetNeighbourCell(static_cast<FacingType>(world));
-
-			if (!pCell)
-				continue;
-
-			// Buildings block the cell; infantry/vehicles may share or be pushed.
-			if (pCell->FirstObject && pCell->FirstObject != pPassenger
-				&& pCell->FirstObject != pTransport
-				&& pCell->FirstObject->WhatAmI() == AbstractType::Building)
-			{
-				continue;
-			}
-
-			const int score = std::abs(pCell->MapCoords.X - passengerCoords.X)
-				+ std::abs(pCell->MapCoords.Y - passengerCoords.Y);
-
-			if (score < bestScore)
-			{
-				bestScore = score;
-				pBest = pCell;
-			}
-		}
-
-		return pBest;
-	}
-
-	bool IsEntryAllowedByDirection(UnitClass* pTransport, FootClass* pPassenger, const char* gate)
+	bool IsEntryAllowedByDirection(UnitClass* pTransport, FootClass* pPassenger)
 	{
 		if (!pTransport || !pPassenger)
 			return true;
 
-		// Only infantry are restricted; vehicle passengers keep vanilla behaviour.
 		if (pPassenger->WhatAmI() != AbstractType::Infantry)
 			return true;
 
-		const int flags = Get(pTransport->Type);
+		const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
 
 		if (flags == All)
 			return true;
 
 		if (flags == None)
-		{
-			LogGate(pTransport, pPassenger, flags, gate, false, "none", {});
 			return false;
-		}
 
-		// A passenger standing on the transport's cell is already at the
-		// vehicle. Its sub-cell offset can resolve to any side, so do not
-		// reject it as a side approach.
 		auto const pPassengerCell = pPassenger->GetCell();
 		auto const pTransportCell = pTransport->GetCell();
 
-		if (pPassengerCell && pTransportCell && pPassengerCell == pTransportCell)
-		{
-			LogGate(pTransport, pPassenger, flags, gate, true, "same-cell", {});
-			return true;
-		}
-
-		const int relative = GetRelativeDirection(pTransport, pPassenger);
-
-		if (relative < 0)
-		{
-			LogGate(pTransport, pPassenger, flags, gate, true, "centre", {});
-			return true;
-		}
-
-		const CoordStruct transportCoords = pTransport->GetCoords();
-		const CoordStruct passengerCoords = pPassenger->GetCoords();
-		const int dx = std::abs(passengerCoords.X - transportCoords.X);
-		const int dy = std::abs(passengerCoords.Y - transportCoords.Y);
-		const bool directionAllowed = (flags & (1 << relative)) != 0;
-		const bool closeEnough = dx <= PassengerDirectionEntryDistance
-			&& dy <= PassengerDirectionEntryDistance;
-		const bool allowed = directionAllowed && closeEnough;
-
-		// Diagnostic only: the old line values remain visible in the log.
-		LineCheckResult line = CheckLine(pTransport, pPassenger, flags);
-
-		LogGate(pTransport, pPassenger, flags, gate, allowed,
-			allowed ? "sector" : (directionAllowed ? "distance" : "direction"), line);
-
-		return allowed;
-	}
-
-	bool TryBeginEnter(UnitClass* pTransport, FootClass* pPassenger)
-	{
-		if (!pTransport || !pPassenger)
+		if (!pPassengerCell || !pTransportCell)
 			return false;
 
-		// The engine consumes this gate for every entry path. Never allow a
-		// passenger that is already in cargo to be attached again.
-		if (IsPassengerInside(pTransport, pPassenger))
-			return false;
-
-		// Direction restrictions and pacing apply to infantry only.
-		if (pPassenger->WhatAmI() != AbstractType::Infantry)
+		// Standing on the transport itself is always accepted; the approach
+		// side was validated before the passenger stepped onto the cell.
+		if (pPassengerCell == pTransportCell)
 			return true;
 
-		const int flags = Get(pTransport->Type);
-
-		if (flags == All)
-			return true;
-
-		// The engine/per-cell paths call this only when the passenger is
-		// actually entering. Do not add a second distance or CanEnterNow
-		// check here: rejecting the engine's own validated entry leaves the
-		// passenger standing next to the transport forever.
-		if (!IsEntryAllowedByDirection(pTransport, pPassenger, "TryBeginEnter"))
-			return false;
-
-		if (pTransport->Type->Passengers > 0
-			&& pTransport->Passengers.NumPassengers >= pTransport->Type->Passengers)
-			return false;
-
-		const int staggerFrames = GetEnterStaggerFrames(pTransport->Type);
-
-		if (staggerFrames > 0)
-		{
-			const int frame = Unsorted::CurrentFrame;
-			auto const it = s_lastEnterFrame.find(pTransport);
-
-			if (it != s_lastEnterFrame.end() && frame - it->second < staggerFrames)
-				return false;
-
-			s_lastEnterFrame[pTransport] = frame;
-
-			Debug::Log("[Passengers.EnterDirections][stagger-enter] transport=%s(%p) frame=%d interval=%d passenger=%p\n",
-				pTransport->Type->ID, static_cast<void*>(pTransport), frame, staggerFrames,
-				static_cast<void*>(pPassenger));
-		}
-
-		return true;
+		const int relative = RelativeFromCell(pTransport, pPassengerCell);
+		return relative >= 0 && (flags & (1 << relative)) != 0;
 	}
 
 	bool TryBeginUnload(UnitClass* pTransport)
@@ -953,140 +848,167 @@ namespace PassengerEnterDirections
 		if (!pTransport)
 			return false;
 
-		// No pacing for unrestricted transports or transports that explicitly
-		// use the old instant-unload feature.
-		if (Get(pTransport->Type) == All)
+		const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
+
+		// None means "no entry side"; unloading is still allowed.
+		if (flags == All || flags == None)
 			return true;
 
-		const int staggerFrames = GetUnloadStaggerFrames(pTransport->Type);
+		const int stagger = GetStagger(pTransport->Type, true);
 
-		if (staggerFrames <= 0)
+		if (stagger <= 0)
 			return true;
 
 		const int frame = Unsorted::CurrentFrame;
-		auto const it = s_lastUnloadFrame.find(pTransport);
+		auto const it = s_lastUnloadFrame.find(pTransport->UniqueID);
 
-		if (it != s_lastUnloadFrame.end() && frame - it->second < staggerFrames)
+		if (it != s_lastUnloadFrame.end() && frame - it->second < stagger)
 			return false;
 
-		s_lastUnloadFrame[pTransport] = frame;
-
-		Debug::Log("[Passengers.EnterDirections][stagger-unload] transport=%s(%p) frame=%d interval=%d\n",
-			pTransport->Type->ID, static_cast<void*>(pTransport), frame, staggerFrames);
-
+		s_lastUnloadFrame[pTransport->UniqueID] = frame;
 		return true;
 	}
 
 	void FinishUnload(UnitClass* pTransport)
 	{
 		if (pTransport)
-			s_lastUnloadFrame.erase(pTransport);
+			s_lastUnloadFrame.erase(pTransport->UniqueID);
 	}
 
-	void EnsureMovingTo(FootClass* pPassenger, AbstractClass* pDestination)
+	bool HasValidUnloadCell(UnitClass* pTransport, FootClass* pPassenger)
 	{
-		if (!pPassenger || !pDestination)
-			return;
+		if (!pTransport || !pPassenger)
+			return false;
 
-		if (pPassenger->Destination != pDestination)
-			pPassenger->SetDestination(pDestination, true);
+		const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
 
-		const Mission mission = pPassenger->CurrentMission;
-
-		// Even when the destination is already correct, a queued passenger may
-		// have a non-moving mission. Kick it so everyone moves independently.
-		if (mission != Mission::Enter && mission != Mission::Move)
-		{
-			pPassenger->QueueMission(Mission::Move, false);
-			pPassenger->NextMission();
-		}
-	}
-
-	bool IsOwnEntryDestination(UnitClass* pTransport, FootClass* pPassenger, CellClass* pAllowedCell)
-	{
-		AbstractClass* const pDestination = pPassenger->Destination;
-
-		if (!pDestination)
+		if (flags == All || flags == None)
 			return true;
 
-		if (pDestination == pTransport || pDestination == pAllowedCell)
-			return true;
+		auto const pCell = pTransport->GetCell();
 
-		// The engine may use a cell as the enter destination. Only the
-		// transport cell or the selected allowed cell belong to this order.
-		if (auto const pCell = abstract_cast<CellClass*>(pDestination))
+		if (!pCell)
+			return false;
+
+		const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
+
+		for (int relative = 0; relative < MaxDirections; ++relative)
 		{
-			return pCell == pTransport->GetCell()
-				|| pCell == pAllowedCell;
+			if (!(flags & (1 << relative)))
+				continue;
+
+			const int world = (facing + relative) % MaxDirections;
+
+			if (IsValidUnloadCell(pTransport, pPassenger,
+				pCell->GetNeighbourCell(static_cast<FacingType>(world))))
+				return true;
 		}
 
-		// A different object/cell is a new player order; do not override it.
 		return false;
 	}
 
-	void HandleEntry(UnitClass* pTransport, FootClass* pPassenger, int flags)
+	int ChooseUnloadDirection(UnitClass* pTransport, FootClass* pPassenger, int direction)
 	{
-		if (flags == None)
-			return;
+		if (!pTransport || !pPassenger)
+			return direction;
 
-		// Already inside the cargo list: never run the entry logic again.
-		if (IsPassengerInside(pTransport, pPassenger))
-			return;
+		const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
 
-		// Respect a new Move/Stop/Guard order: only an Enter mission or a
-		// queued passenger may keep boarding.
-		if (pPassenger->CurrentMission != Mission::Enter
-			&& pPassenger->QueueUpToEnter != pTransport)
-			return;
+		if (flags == All || flags == None)
+			return direction;
 
-		auto const pTransportCell = pTransport->GetCell();
-		auto const pPassengerCell = pPassenger->GetCell();
+		auto const pCell = pTransport->GetCell();
 
-		if (!pTransportCell || !pPassengerCell)
-			return;
+		if (!pCell)
+			return direction;
 
-		auto const pAllowedCell = FindAllowedCell(pTransport, pPassenger, flags);
+		const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
+		const int relative = (direction - facing + MaxDirections) % MaxDirections;
 
-		// A new Move/Stop order replaces the boarding destination. Do not
-		// drag the passenger back to the transport in that case.
-		if (!IsOwnEntryDestination(pTransport, pPassenger, pAllowedCell))
+		if ((flags & (1 << relative))
+			&& IsValidUnloadCell(pTransport, pPassenger,
+				pCell->GetNeighbourCell(static_cast<FacingType>(direction))))
 		{
-			s_parallelEntryTargets.erase(pPassenger);
+			return direction;
+		}
+
+		for (int offset = 0; offset < MaxDirections; ++offset)
+		{
+			if (!(flags & (1 << offset)))
+				continue;
+
+			const int world = (facing + offset) % MaxDirections;
+
+			if (IsValidUnloadCell(pTransport, pPassenger,
+				pCell->GetNeighbourCell(static_cast<FacingType>(world))))
+			{
+				return world;
+			}
+		}
+
+		return direction;
+	}
+
+	void ClearAll()
+	{
+		s_entryStates.clear();
+		s_reservations.clear();
+		s_lastEnterFrame.clear();
+		s_lastUnloadFrame.clear();
+	}
+
+	void ClearPassenger(FootClass* pPassenger)
+	{
+		ClearPassengerState(pPassenger);
+	}
+
+	void EnsureScenario()
+	{
+		if (ScenarioClass::Instance != s_lastScenario || Unsorted::CurrentFrame == 0)
+		{
+			ClearAll();
+			s_lastScenario = ScenarioClass::Instance;
 			return;
 		}
 
-		// No usable allowed cell: at least walk to the transport instead of
-		// freezing in place. The entry gate remains active.
-		if (!pAllowedCell)
+		// Drop state for passengers/transports that died while boarding.
+		if (Unsorted::CurrentFrame % 300 == 0)
+			PruneStates();
+	}
+
+	TechnoClass* GetTrackedTransport(FootClass* pPassenger)
+	{
+		if (!pPassenger)
+			return nullptr;
+
+		auto const it = s_entryStates.find(pPassenger->UniqueID);
+
+		if (it == s_entryStates.end() || !it->second.TransportID)
+			return nullptr;
+
+		for (auto const pTechno : TechnoClass::Array)
 		{
-			EnsureMovingTo(pPassenger, pTransport);
-			return;
+			if (pTechno && pTechno->UniqueID == it->second.TransportID)
+				return pTechno;
 		}
 
-		const bool canEnter = CanEnterNow(pTransport, pPassenger, true);
+		return nullptr;
+	}
 
-		if (Unsorted::CurrentFrame % 30 == 0)
-		{
-			const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
-			const int relative = GetRelativeDirection(pTransport, pPassenger);
+	bool IsManagedMove(FootClass* pPassenger)
+	{
+		if (!pPassenger)
+			return false;
 
-			Debug::Log("[Passengers.EnterDirections] %s flags=0x%02X facing=%d relative=%d pcell=(%d,%d) tcell=(%d,%d) allowed=(%d,%d) atVehicle=%d canEnter=%d current=%d/%d\n",
-				pTransport->Type->ID, flags, facing, relative,
-				pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
-				pTransportCell->MapCoords.X, pTransportCell->MapCoords.Y,
-				pAllowedCell->MapCoords.X, pAllowedCell->MapCoords.Y,
-				IsAtVehicle(pTransport, pPassenger) ? 1 : 0,
-				canEnter ? 1 : 0,
-				pTransport->Passengers.NumPassengers, pTransport->Type->Passengers);
-		}
+		auto const it = s_entryStates.find(pPassenger->UniqueID);
 
-		// Direction-restricted transports never add cargo directly. The
-		// engine owns Limbo / AddPassenger / the cargo chain; TryBeginEnter
-		// only gates the engine's own entry paths.
-		if (pPassengerCell == pAllowedCell)
-			EnsureMovingTo(pPassenger, pTransport);
-		else
-			EnsureMovingTo(pPassenger, pAllowedCell);
+		if (it == s_entryStates.end() || it->second.ApproachCell == CellStruct::Empty)
+			return false;
+
+		auto const pCell = MapClass::Instance.TryGetCellAt(it->second.ApproachCell);
+		return pCell
+			&& pPassenger->CurrentMission == Mission::Move
+			&& pPassenger->Destination == pCell;
 	}
 }
 
@@ -1104,26 +1026,37 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 	for (auto const& attachment : pExt->ChildAttachments)
 		attachment->AI();
 
-	// Passengers already inside (or limboed) must never run the entry logic
-	// again: doing so would limbo/re-add them and corrupt the cargo list.
+	PassengerDirections::EnsureScenario();
+
+	// Passengers already inside (or limboed) must never run the entry logic again.
 	if (pThis->Transporter)
 	{
-		PassengerEnterDirections::s_parallelEntryTargets.erase(pThis);
+		PassengerDirections::ClearPassenger(pThis);
+		return 0;
+	}
+
+	// A Move order that is not the controller's own approach move replaces the
+	// boarding order. (Stop/Guard are handled by the entering check below.)
+	if (pThis->CurrentMission == Mission::Move
+		&& PassengerDirections::GetTrackedTransport(pThis)
+		&& !PassengerDirections::IsManagedMove(pThis))
+	{
+		PassengerDirections::ClearPassenger(pThis);
 		return 0;
 	}
 
 	// A new Move/Stop/Guard order must be able to cancel the boarding attempt.
+	// A Move to our assigned approach cell is our own order and keeps it alive.
 	const bool entering = pThis->CurrentMission == Mission::Enter
-		|| pThis->QueueUpToEnter != nullptr;
+		|| pThis->QueueUpToEnter != nullptr
+		|| PassengerDirections::IsManagedMove(pThis);
 
 	if (!entering)
 	{
-		PassengerEnterDirections::s_parallelEntryTargets.erase(pThis);
+		PassengerDirections::ClearPassenger(pThis);
 		return 0;
 	}
 
-	// The core part of the fast enter action. Fall back to the radio link when
-	// QueueUpToEnter is not set, so every linked passenger still walks in.
 	TechnoClass* pEntryTarget = pThis->CurrentMission == Mission::Enter
 		? pThis->GetNthLink() : pThis->QueueUpToEnter;
 
@@ -1134,35 +1067,30 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 		pEntryTarget = abstract_cast<TechnoClass*>(pThis->Target);
 
 	if (!pEntryTarget)
+		pEntryTarget = PassengerDirections::GetTrackedTransport(pThis);
+
+	if (!pEntryTarget)
 	{
-		if (auto const it = PassengerEnterDirections::s_parallelEntryTargets.find(pThis);
-			it != PassengerEnterDirections::s_parallelEntryTargets.end())
-		{
-			pEntryTarget = it->second;
-		}
+		PassengerDirections::ClearPassenger(pThis);
+		return 0;
 	}
 
-	if (const auto pDest = abstract_cast<UnitClass*>(pEntryTarget))
+	if (auto const pDest = abstract_cast<UnitClass*>(pEntryTarget))
 	{
-		// Cargo membership is the only reliable "already inside" check.
-		if (PassengerEnterDirections::IsPassengerInside(pDest, pThis))
+		if (PassengerDirections::IsPassengerInside(pDest, pThis))
 		{
-			PassengerEnterDirections::s_parallelEntryTargets.erase(pThis);
+			PassengerDirections::ClearPassenger(pThis);
 			return 0;
 		}
 
 		const auto pType = pDest->Type;
+		const int enterDirections = static_cast<int>(TechnoTypeExt::ExtMap.Find(pType)->Passengers_EnterDirections);
 
-		const int enterDirections = PassengerEnterDirections::Get(pType);
-
-		if (enterDirections != PassengerEnterDirections::All
-			&& pThis->WhatAmI() == AbstractType::Infantry)
+		if (pType->Passengers > 0
+			&& pThis->WhatAmI() == AbstractType::Infantry
+			&& enterDirections != PassengerDirections::All)
 		{
-			PassengerEnterDirections::HandleEntry(pDest, pThis, enterDirections);
-
-			if (pThis->Transporter)
-				PassengerEnterDirections::s_parallelEntryTargets.erase(pThis);
-
+			PassengerDirections::HandleEntry(pDest, pThis, enterDirections);
 			return 0;
 		}
 
@@ -1175,16 +1103,20 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 				if (IsAtVehicle(pDest, pThis) && CanEnterNow(pDest, pThis, true))
 				{
 					DoEnterNow(pDest, pThis);
-
-					if (pThis->Transporter)
-						PassengerEnterDirections::s_parallelEntryTargets.erase(pThis);
 				}
-				else if (!pDest->OnBridge && pThis->Destination != pDest)
+				else if (!pDest->OnBridge && !pThis->Destination)
 				{
-					// Every passenger walks to the transport independently. They
-					// enter as soon as they reach the vehicle, so multiple
-					// passengers board in parallel instead of waiting in a queue.
-					PassengerEnterDirections::EnsureMovingTo(pThis, pDest);
+					// Move to enter position, prevent other passengers from
+					// waiting for a call and not moving early.
+					auto cell = CellStruct::Empty;
+					pThis->NearbyLocation(&cell, pDest);
+
+					if (cell != CellStruct::Empty)
+					{
+						pThis->SetDestination(MapClass::Instance.GetCellAt(cell), true);
+						pThis->QueueMission(Mission::Move, false);
+						pThis->NextMission();
+					}
 				}
 			}
 		}
@@ -1192,7 +1124,6 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 
 	return 0;
 }
-
 // Rewrite from 0x4835D5/0x74004B, replace check pThis->GetCell()->LandType != LandType::Water
 static inline bool CanUnloadNow(UnitClass* pTransport, FootClass* pPassenger)
 {
@@ -1205,7 +1136,7 @@ static inline bool CanUnloadNow(UnitClass* pTransport, FootClass* pPassenger)
 static inline bool ShouldFastUnload(UnitTypeClass* pType)
 {
 	return TechnoTypeExt::ExtMap.Find(pType)->NoQueueUpToUnload.Get(RulesExt::Global()->NoQueueUpToUnload)
-		|| PassengerEnterDirections::Get(pType) != PassengerEnterDirections::All;
+		|| static_cast<int>(TechnoTypeExt::ExtMap.Find(pType)->Passengers_EnterDirections) != PassengerDirections::All;
 }
 
 // The unload loop computes the world direction in ECX and then indexes
@@ -1216,36 +1147,21 @@ DEFINE_HOOK(0x73D934, UnitClass_Mission_Unload_DirectionGate, 0x7)
 	GET(UnitClass*, pThis, ESI);
 	GET(int, direction, ECX);
 
-	const int flags = PassengerEnterDirections::Get(pThis->Type);
+	auto const pPassenger = pThis->Passengers.GetFirstPassenger();
 
-	if (flags == PassengerEnterDirections::All)
+	if (!pPassenger)
 		return 0;
 
-	const int facing = static_cast<int>(pThis->PrimaryFacing.Current().GetFacing<8>());
-	const int relative = (direction - facing + 8) % 8;
+	const int chosen = PassengerDirections::ChooseUnloadDirection(pThis, pPassenger, direction);
 
-	if (relative >= 0 && (flags & (1 << relative)) != 0)
-		return 0;
+	if (chosen != direction)
+		R->ECX(chosen);
 
-	int allowedDirection = -1;
-
-	for (int offset = 0; offset < 8; ++offset)
+	if (Phobos::Config::DebugGCDiagnostics)
 	{
-		const int candidate = (facing + offset) % 8;
-
-		if (flags & (1 << offset))
-		{
-			allowedDirection = candidate;
-			break;
-		}
+		Debug::Log("[Passengers.EnterDirections][unload] transport=%s(%u) dir=%d chosen=%d frame=%d\n",
+			pThis->Type->ID, pThis->UniqueID, direction, chosen, Unsorted::CurrentFrame);
 	}
-
-	if (allowedDirection >= 0)
-		R->ECX(allowedDirection);
-
-	Debug::Log("[Passengers.EnterDirections][unload] transport=%s dir=%d facing=%d relative=%d result=%s\n",
-		pThis->Type->ID, direction, facing, relative,
-		allowedDirection >= 0 ? "redirect" : "no_allowed_direction");
 
 	return 0;
 }
@@ -1307,7 +1223,7 @@ DEFINE_HOOK(0x73DC1E, UnitClass_Mission_Unload_NoQueueUpToUnloadLoop, 0xA)
 	{
 		if (!pPassenger || pThis->Passengers.NumPassengers <= pThis->NonPassengerCount)
 		{
-			PassengerEnterDirections::FinishUnload(pThis);
+			PassengerDirections::FinishUnload(pThis);
 
 			// If unloading is required within one frame, the sound will only be played when the last passenger leaves
 			VoxClass::PlayAtPos(pType->LeaveTransportSound, &pThis->Location);
@@ -1322,8 +1238,16 @@ DEFINE_HOOK(0x73DC1E, UnitClass_Mission_Unload_NoQueueUpToUnloadLoop, 0xA)
 			return NoUnloadReturn;
 		}
 
+		// Direction restricted transports wait until an allowed exit cell is
+		// free instead of ejecting the passenger into water or a wall.
+		if (!PassengerDirections::HasValidUnloadCell(pThis, pPassenger))
+		{
+			pThis->MissionStatus = 0; // Retry next frame
+			return NoUnloadReturn;
+		}
+
 		// Restricted transports release one passenger per configured interval.
-		if (!PassengerEnterDirections::TryBeginUnload(pThis))
+		if (!PassengerDirections::TryBeginUnload(pThis))
 		{
 			pThis->MissionStatus = 0; // Retry next frame
 			return NoUnloadReturn;
@@ -1392,31 +1316,12 @@ DEFINE_HOOK(0x70D842, FootClass_UpdateEnter_NoMoveToBridge, 0x5)
 	{
 		if (auto const pTransport = abstract_cast<UnitClass*>(pEnter))
 		{
-			const int flags = PassengerEnterDirections::Get(pTransport->Type);
+			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
 
-			if (flags != PassengerEnterDirections::All)
+			if (flags != PassengerDirections::All)
 			{
-				// Already touching the transport: let vanilla/per-cell entry run.
-				if (pThis->GetCell() == pTransport->GetCell())
-					return 0;
-
-				if (flags != PassengerEnterDirections::None)
-				{
-					// Keep the target independently of the engine queue.
-					PassengerEnterDirections::s_parallelEntryTargets[pThis] = pTransport;
-					pThis->QueueUpToEnter = nullptr;
-					pThis->SetArchiveTarget(nullptr);
-
-					if (auto const pCell = PassengerEnterDirections::FindAllowedCell(pTransport, pThis, flags))
-					{
-						AbstractClass* pDestination = pThis->GetCell() == pCell
-							? static_cast<AbstractClass*>(pTransport) : pCell;
-						PassengerEnterDirections::EnsureMovingTo(pThis, pDestination);
-					}
-				}
-
-				// Never let the vanilla path send the passenger to the transport cell
-				// from a disallowed side.
+				// The boarding controller owns the approach cell and the hand-off.
+				// Keep the engine link alive so Mission::Enter stays valid.
 				return NoMove;
 			}
 		}
@@ -1437,31 +1342,10 @@ DEFINE_HOOK(0x70D910, FootClass_QueueEnter_NoMoveToBridge, 0x5)
 	{
 		if (auto const pTransport = abstract_cast<UnitClass*>(pEnter))
 		{
-			const int flags = PassengerEnterDirections::Get(pTransport->Type);
+			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
 
-			if (flags != PassengerEnterDirections::All)
-			{
-				// Already touching the transport: let vanilla/per-cell entry run.
-				if (pThis->GetCell() == pTransport->GetCell())
-					return 0;
-
-				if (flags != PassengerEnterDirections::None)
-				{
-					// Keep the target independently of the engine queue.
-					PassengerEnterDirections::s_parallelEntryTargets[pThis] = pTransport;
-					pThis->QueueUpToEnter = nullptr;
-					pThis->SetArchiveTarget(nullptr);
-
-					if (auto const pCell = PassengerEnterDirections::FindAllowedCell(pTransport, pThis, flags))
-					{
-						AbstractClass* pDestination = pThis->GetCell() == pCell
-							? static_cast<AbstractClass*>(pTransport) : pCell;
-						PassengerEnterDirections::EnsureMovingTo(pThis, pDestination);
-					}
-				}
-
+			if (flags != PassengerDirections::All)
 				return NoMove;
-			}
 		}
 	}
 

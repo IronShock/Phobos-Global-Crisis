@@ -349,6 +349,11 @@ public:
 		Nullable<bool> NoQueueUpToEnter;
 		Nullable<bool> NoQueueUpToUnload;
 		Valueable<bool> Passengers_BySize;
+		// Boarding side mask, relative to the transport's body facing.
+		// 0xFF = all sides (vanilla). Not serialized: read from rules on load.
+		Valueable<int> Passengers_EnterDirections;
+		Valueable<int> Passengers_EnterStaggerFrames;
+		Valueable<int> Passengers_UnloadStaggerFrames;
 
 		Valueable<int> RateDown_Delay;
 		Valueable<bool> RateDown_Reset;
@@ -843,6 +848,9 @@ public:
 			, NoQueueUpToEnter {}
 			, NoQueueUpToUnload {}
 			, Passengers_BySize { true }
+			, Passengers_EnterDirections { 0xFF }
+			, Passengers_EnterStaggerFrames { 0 }
+			, Passengers_UnloadStaggerFrames { 2 }
 
 			, RateDown_Delay { 0 }
 			, RateDown_Reset { false }

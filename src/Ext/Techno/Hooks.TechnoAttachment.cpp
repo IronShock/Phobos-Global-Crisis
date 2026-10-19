@@ -357,9 +357,11 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 		{
 			if (auto const pTransport = abstract_cast<UnitClass*>(pEntryTarget))
 			{
-				// Use the same gate as the engine entry path so the per-cell
-				// path cannot bypass the at-vehicle rule or entry interval.
-				if (!PassengerEnterDirections::TryBeginEnter(pTransport, pThis))
+				// Stateless safety net: the engine's per-cell path must not
+				// board from a disallowed side. The approach controller owns
+				// the actual hand-off; this check never paces or mutates state.
+				if (pThis->WhatAmI() == AbstractType::Infantry
+					&& !PassengerDirections::IsEntryAllowedByDirection(pTransport, pThis))
 					continue;
 			}
 
@@ -383,13 +385,6 @@ enum class AttachCargoMode
 namespace TechnoAttachmentTemp
 {
 	AttachCargoMode currentAttachMode = AttachCargoMode::DefaultBehavior;
-
-	void SetSingleObjectAttach(bool single)
-	{
-		currentAttachMode = single
-			? AttachCargoMode::SingleObject
-			: AttachCargoMode::DefaultBehavior;
-	}
 }
 
 #define DEFINE_ATTACH_WRAPPER(mode) \
