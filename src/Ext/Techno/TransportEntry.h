@@ -91,6 +91,11 @@ namespace PassengerDirections
 	// engine's own entry paths; it never paces or mutates entry state.
 	bool IsEntryAllowedByDirection(UnitClass* pTransport, FootClass* pPassenger);
 
+	// Full approach check for a tracked boarding passenger. When the passenger
+	// already stands on the transport cell it uses LastMapCoords/ApproachCell
+	// to determine which side it actually came from.
+	bool IsEntryApproachAllowed(UnitClass* pTransport, FootClass* pPassenger);
+
 	// Per-transport unload pacing, only used by the fast unload loop.
 	bool TryBeginUnload(UnitClass* pTransport);
 	void FinishUnload(UnitClass* pTransport);

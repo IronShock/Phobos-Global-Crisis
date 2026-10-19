@@ -362,13 +362,10 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 					if (PassengerDirections::IsPassengerInside(pTransport, pThis))
 						continue;
 
-					// Do not block scenario/savegame cargo restore. Outside
-					// loading, a tracked boarding attempt must come from an
-					// allowed side; the controller owns the actual approach.
-					if (!PassengerDirections::IsLoading()
-						&& PassengerDirections::IsTracked(pTransport, pThis)
-						&& !PassengerDirections::IsVanillaEntering(pThis)
-						&& !PassengerDirections::IsEntryAllowedByDirection(pTransport, pThis))
+					// Full approach check: when already on the transport cell
+					// it uses LastMapCoords/ApproachCell, so a vanilla entry
+					// from the wrong side is still rejected.
+					if (!PassengerDirections::IsEntryApproachAllowed(pTransport, pThis))
 						continue;
 				}
 			}

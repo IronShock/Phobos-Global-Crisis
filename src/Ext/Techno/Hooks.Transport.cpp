@@ -134,6 +134,21 @@ DEFINE_HOOK(0x71067B, TechnoClass_EnterTransport, 0x7)
 
 				return SkipGameCode;
 			}
+
+			if (!PassengerDirections::IsEntryApproachAllowed(pTransport, pPassenger))
+			{
+				if (Phobos::Config::DebugGCDiagnostics)
+				{
+					Debug::Log("[Passengers.EnterDirections][direction] engine add blocked transport=%s(%u) passenger=%p cell=(%d,%d) last=(%d,%d) frame=%d\n",
+						pTransport->Type->ID, pTransport->UniqueID, static_cast<void*>(pPassenger),
+						pPassenger->GetCell() ? pPassenger->GetCell()->MapCoords.X : -1,
+						pPassenger->GetCell() ? pPassenger->GetCell()->MapCoords.Y : -1,
+						pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+						Unsorted::CurrentFrame);
+				}
+
+				return SkipGameCode;
+			}
 		}
 	}
 
@@ -427,6 +442,7 @@ namespace PassengerDirections
 			DWORD TransportID = 0;
 			CellStruct ApproachCell = CellStruct::Empty;
 			CellStruct LastPassengerCell = CellStruct::Empty;
+			CellStruct PreviousCell = CellStruct::Empty;
 			CellStruct TransportCell = CellStruct::Empty;
 			int Relative = -1;
 			int Facing = -1;
@@ -863,7 +879,24 @@ namespace PassengerDirections
 				return true;
 
 			if (!CanEnterNow(pTransport, pPassenger, true))
+			{
+				if (LogEnabled())
+				{
+					auto const pCell = pPassenger->GetCell();
+
+					Debug::Log("[Passengers.EnterDirections] cannot-start transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) passengers=%d/%d onBridge=%d size=%d limit=%d frame=%d\n",
+						pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+						pCell ? pCell->MapCoords.X : -1, pCell ? pCell->MapCoords.Y : -1,
+						pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+						pTransport->Passengers.NumPassengers, pTransport->Type->Passengers,
+						pTransport->OnBridge ? 1 : 0,
+						static_cast<int>(pPassenger->GetTechnoType()->Size),
+						static_cast<int>(pTransport->Type->SizeLimit),
+						Unsorted::CurrentFrame);
+				}
+
 				return false;
+			}
 
 			// Hand the final step back to the engine. From here on the
 			// controller must not touch the passenger's destination or mission:
@@ -876,10 +909,18 @@ namespace PassengerDirections
 
 			if (LogEnabled())
 			{
-				Debug::Log("[Passengers.EnterDirections] vanilla-enter transport=%s(%u) passenger=%u cell=(%d,%d) frame=%d\n",
+				auto const pCell = pPassenger->GetCell();
+
+				Debug::Log("[Passengers.EnterDirections] vanilla-enter transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) passengers=%d/%d queue=%p nthLink=%p target=%p destination=%p mission=%d frame=%d\n",
 					pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
-					pPassenger->GetCell() ? pPassenger->GetCell()->MapCoords.X : -1,
-					pPassenger->GetCell() ? pPassenger->GetCell()->MapCoords.Y : -1,
+					pCell ? pCell->MapCoords.X : -1, pCell ? pCell->MapCoords.Y : -1,
+					pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+					pTransport->Passengers.NumPassengers, pTransport->Type->Passengers,
+					static_cast<void*>(pPassenger->QueueUpToEnter),
+					static_cast<void*>(pTransport->GetNthLink()),
+					static_cast<void*>(pPassenger->Target),
+					static_cast<void*>(pPassenger->Destination),
+					static_cast<int>(pPassenger->CurrentMission),
 					Unsorted::CurrentFrame);
 			}
 
@@ -968,6 +1009,9 @@ namespace PassengerDirections
 			if (state.LastProgressFrame == 0
 				|| state.LastPassengerCell != pPassengerCell->MapCoords)
 			{
+				if (state.LastPassengerCell != CellStruct::Empty)
+					state.PreviousCell = state.LastPassengerCell;
+
 				state.LastPassengerCell = pPassengerCell->MapCoords;
 				state.LastProgressFrame = Unsorted::CurrentFrame;
 			}
@@ -977,8 +1021,36 @@ namespace PassengerDirections
 				return;
 			}
 
+			// Once handed over to Mission::Enter, do not touch destination or
+			// mission again — unless the engine is trying to enter from a
+			// disallowed side, in which case abort and re-route to the rear.
 			if (state.VanillaEntering)
+			{
+				if (!IsEntryApproachAllowed(pTransport, pPassenger))
+				{
+					state.VanillaEntering = false;
+
+					if (auto const pCell = MapClass::Instance.TryGetCellAt(state.ApproachCell))
+					{
+						pPassenger->SetDestination(pCell, true);
+						pPassenger->QueueMission(Mission::Move, false);
+						pPassenger->NextMission();
+					}
+
+					if (LogEnabled())
+					{
+						auto const pCell = pPassenger->GetCell();
+
+						Debug::Log("[Passengers.EnterDirections] wrong-side entry aborted transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
+							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+							pCell ? pCell->MapCoords.X : -1, pCell ? pCell->MapCoords.Y : -1,
+							pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+							Unsorted::CurrentFrame);
+					}
+				}
+
 				return;
+			}
 
 			CellClass* pApproach = nullptr;
 			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
@@ -1107,6 +1179,73 @@ namespace PassengerDirections
 
 		const int relative = RelativeFromCell(pTransport, pPassengerCell);
 		return relative >= 0 && (flags & (1 << relative)) != 0;
+	}
+
+	bool IsEntryApproachAllowed(UnitClass* pTransport, FootClass* pPassenger)
+	{
+		if (!pTransport || !pPassenger)
+			return true;
+
+		if (pPassenger->WhatAmI() != AbstractType::Infantry)
+			return true;
+
+		if (IsLoading())
+			return true;
+
+		const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
+
+		if (flags == All)
+			return true;
+
+		if (flags == None)
+			return false;
+
+		auto const it = s_entryStates.find(pPassenger->UniqueID);
+
+		// Not handled by the boarding controller: leave vanilla/script entry
+		// alone. Loading was already accepted above.
+		if (it == s_entryStates.end())
+			return true;
+
+		auto const pTransportCell = pTransport->GetCell();
+		auto const pPassengerCell = pPassenger->GetCell();
+
+		if (!pTransportCell || !pPassengerCell)
+			return false;
+
+		const int facing = it->second.Facing >= 0
+			? it->second.Facing
+			: static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
+
+		// Still away from the vehicle: only enforce the side once the passenger
+		// is adjacent, otherwise normal pathing would be blocked.
+		if (pPassengerCell != pTransportCell)
+		{
+			const int relative = RelativeFromCell(pTransport, pPassengerCell, facing);
+			return relative < 0 || (flags & (1 << relative)) != 0;
+		}
+
+		// On the transport cell: the current cell no longer carries the
+		// approach side. Prefer the controller's previous-cell history, then
+		// the engine's LastMapCoords, then the assigned approach cell.
+		CellStruct approach = it->second.PreviousCell;
+
+		if (approach == CellStruct::Empty || approach == pTransportCell->MapCoords)
+			approach = pPassenger->LastMapCoords;
+
+		if (approach == CellStruct::Empty || approach == pTransportCell->MapCoords)
+			approach = it->second.ApproachCell;
+
+		if (approach == CellStruct::Empty)
+			return true;
+
+		auto const pApproachCell = MapClass::Instance.TryGetCellAt(approach);
+
+		if (!pApproachCell)
+			return true;
+
+		const int relative = RelativeFromCell(pTransport, pApproachCell, facing);
+		return relative < 0 || (flags & (1 << relative)) != 0;
 	}
 
 	bool TryBeginUnload(UnitClass* pTransport)
@@ -1715,12 +1854,10 @@ DEFINE_HOOK(0x70D910, FootClass_QueueEnter_NoMoveToBridge, 0x5)
 			{
 				PassengerDirections::TrackTransport(pThis, pTransport);
 
-				if (PassengerDirections::IsLoading()
-					|| PassengerDirections::IsAtFrontCell(pTransport, pThis)
-					|| PassengerDirections::IsVanillaEntering(pThis))
-					return 0;
-
-				return NoMove;
+				// Do not return NoMove here. The original QueueEnter has to
+				// run so the engine establishes the transport-side queue and
+				// radio link. The controller only overrides the destination.
+				return 0;
 			}
 		}
 	}
