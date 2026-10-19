@@ -1049,11 +1049,10 @@ namespace PassengerDirections
 			CellClass* pApproach = nullptr;
 			const bool atApproach = IsAtApproach(pTransport, pPassenger, state, flags, pApproach);
 			const bool atTransport = pPassengerCell == pTransportCell;
-			const bool nearTransport = IsNearTransport(pTransport, pPassenger, 320);
 
 			if (atApproach || atTransport)
 			{
-				if (!nearTransport)
+				if (!IsNearTransport(pTransport, pPassenger, 320))
 				{
 					state.ApproachCell = CellStruct::Empty;
 					state.Relative = -1;
@@ -1061,35 +1060,35 @@ namespace PassengerDirections
 					return;
 				}
 
-				if (!IsEntryApproachAllowed(pTransport, pPassenger))
+				auto const TryEnterHere = [&]() -> bool
 				{
-					state.ApproachCell = CellStruct::Empty;
-					state.Relative = -1;
-					state.Facing = -1;
-
-					if (pPassenger->Destination)
-						pPassenger->SetDestination(nullptr, true);
-
-					if (LogEnabled())
+					if (!IsEntryApproachAllowed(pTransport, pPassenger))
 					{
-						Debug::Log("[Passengers.EnterDirections] wrong-side entry rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
-							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
-							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
-							pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
-							Unsorted::CurrentFrame);
+						state.ApproachCell = CellStruct::Empty;
+						state.Relative = -1;
+						state.Facing = -1;
+
+						if (pPassenger->Destination)
+							pPassenger->SetDestination(nullptr, true);
+
+						if (LogEnabled())
+						{
+							Debug::Log("[Passengers.EnterDirections] wrong-side entry rejected transport=%s(%u) passenger=%u cell=(%d,%d) last=(%d,%d) frame=%d\n",
+								pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
+								pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y,
+								pPassenger->LastMapCoords.X, pPassenger->LastMapCoords.Y,
+								Unsorted::CurrentFrame);
+						}
+
+						return false;
 					}
 
-					return;
-				}
+					if (!CanEnterNow(pTransport, pPassenger, true))
+						return false;
 
-				if (!CanEnterNow(pTransport, pPassenger, true))
-					return;
+					if (!DoEnterNow(pTransport, pPassenger))
+						return false;
 
-				// Each passenger enters on its own update as soon as it reaches
-				// the rear boarding cell. No active slot, no queue, no timer,
-				// no arrival ordering.
-				if (DoEnterNow(pTransport, pPassenger))
-				{
 					if (!IsPassengerInside(pTransport, pPassenger))
 					{
 						if (LogEnabled())
@@ -1099,7 +1098,7 @@ namespace PassengerDirections
 								Unsorted::CurrentFrame);
 						}
 
-						return;
+						return false;
 					}
 
 					if (pTransport->Type->EnterTransportSound >= 0)
@@ -1107,6 +1106,35 @@ namespace PassengerDirections
 
 					ReleaseReservation(state.TransportID, pPassenger->UniqueID);
 					s_entryStates.erase(pPassenger->UniqueID);
+					return true;
+				};
+
+				// Fully arrived at the transport cell: enter immediately.
+				if (atTransport)
+				{
+					TryEnterHere();
+					return;
+				}
+
+				// At the rear boarding cell: walk the last step into the
+				// transport cell. If that is impossible, fall back to the
+				// currently working direct entry from the boarding cell.
+				if (Unsorted::CurrentFrame - state.LastProgressFrame > 60)
+				{
+					TryEnterHere();
+					return;
+				}
+
+				if (pPassenger->Destination != pTransportCell)
+					pPassenger->SetDestination(pTransportCell, true);
+
+				if (pPassenger->CurrentMission != Mission::Move
+					&& (state.LastMoveFrame == 0
+						|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
+				{
+					state.LastMoveFrame = Unsorted::CurrentFrame;
+					pPassenger->QueueMission(Mission::Move, false);
+					pPassenger->NextMission();
 				}
 
 				return;
