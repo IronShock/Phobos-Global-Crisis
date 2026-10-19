@@ -113,26 +113,39 @@ DEFINE_HOOK(0x71067B, TechnoClass_EnterTransport, 0x7)
 	GET(TechnoClass*, pThis, ESI);
 	GET(FootClass*, pPassenger, EDI);
 
-	if (pPassenger && pPassenger->WhatAmI() == AbstractType::Infantry)
+	if (pPassenger)
 	{
 		if (auto const pTransport = abstract_cast<UnitClass*>(pThis))
 		{
-			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
+			// Never let the engine add a passenger that is already attached.
+			// This is the general duplicate guard; it also covers the manual
+			// fast-entry path racing with the engine path in the same frame.
+			const bool alreadyInside = PassengerDirections::IsPassengerInside(pTransport, pPassenger);
 
-			if (flags != PassengerDirections::All)
+			if (alreadyInside)
 			{
-				// Only the approach controller may add restricted infantry.
-				// Skipping the engine add here prevents a second AddPassenger
-				// for the same passenger in the same frame, which would turn
-				// the cargo list into a self-referencing cycle.
 				if (Phobos::Config::DebugGCDiagnostics)
 				{
-					Debug::Log("[Passengers.EnterDirections][cargo] engine add blocked transport=%s(%u) passenger=%p id=%u inside=%d transporter=%p passengers=%d frame=%d\n",
+					Debug::Log("[Passengers.EnterDirections][cargo] duplicate add blocked transport=%s(%u) passenger=%p id=%u transporter=%p passengers=%d frame=%d\n",
 						pTransport->Type->ID, pTransport->UniqueID, static_cast<void*>(pPassenger),
-						pPassenger->UniqueID,
-						PassengerDirections::IsPassengerInside(pTransport, pPassenger) ? 1 : 0,
-						static_cast<void*>(pPassenger->Transporter),
+						pPassenger->UniqueID, static_cast<void*>(pPassenger->Transporter),
 						pTransport->Passengers.NumPassengers, Unsorted::CurrentFrame);
+				}
+
+				return SkipGameCode;
+			}
+
+			const int flags = static_cast<int>(TechnoTypeExt::ExtMap.Find(pTransport->Type)->Passengers_EnterDirections);
+
+			if (pPassenger->WhatAmI() == AbstractType::Infantry && flags != PassengerDirections::All)
+			{
+				// Only the approach controller may add restricted infantry.
+				if (Phobos::Config::DebugGCDiagnostics)
+				{
+					Debug::Log("[Passengers.EnterDirections][cargo] engine add blocked transport=%s(%u) passenger=%p id=%u passengers=%d frame=%d\n",
+						pTransport->Type->ID, pTransport->UniqueID, static_cast<void*>(pPassenger),
+						pPassenger->UniqueID, pTransport->Passengers.NumPassengers,
+						Unsorted::CurrentFrame);
 				}
 
 				return SkipGameCode;
