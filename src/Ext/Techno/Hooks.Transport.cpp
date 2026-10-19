@@ -844,73 +844,13 @@ namespace PassengerDirections
 			if (state.ApproachCell == CellStruct::Empty)
 				return false;
 
-			auto const pTransportCell = pTransport ? pTransport->GetCell() : nullptr;
-
-			if (!pTransportCell)
-				return false;
-
-			// The boarding side is snapshotted when the cell is assigned; a
-			// rotation alone must not re-route the whole group.
-			if (state.TransportCell != pTransportCell->MapCoords)
-			{
-				if (LogEnabled())
-				{
-					Debug::Log("[Passengers.EnterDirections] transport moved transport=%s(%u) passenger=%u old=(%d,%d) new=(%d,%d) frame=%d\n",
-						pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID,
-						state.TransportCell.X, state.TransportCell.Y,
-						pTransportCell->MapCoords.X, pTransportCell->MapCoords.Y,
-						Unsorted::CurrentFrame);
-				}
-
-				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
-				state.ApproachCell = CellStruct::Empty;
-				state.Relative = -1;
-				state.Facing = -1;
-				state.VanillaEntering = false;
-				return false;
-			}
-
 			pApproach = MapClass::Instance.TryGetCellAt(state.ApproachCell);
 
 			if (!pApproach)
 				return false;
 
-			const bool front = IsFrontCell(pTransport, pApproach, flags, state.Facing);
-			bool valid = IsValidApproachCell(pTransport, pPassenger, pApproach);
-
-			if (valid && !front)
-				valid = IsBehind(pTransport, pApproach->MapCoords, flags, state.Facing);
-
-			if (!valid)
-			{
-				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
-				state.ApproachCell = CellStruct::Empty;
-				state.Relative = -1;
-				state.Facing = -1;
-				state.VanillaEntering = false;
-				pApproach = nullptr;
-				return false;
-			}
-
-			// Keep the reservation keyed by the world cell. If it was lost
-			// (e.g. after a rotation), re-reserve it when still free.
-			auto& cells = s_reservations[state.TransportID];
-			const int key = CellKey(pApproach->MapCoords);
-			auto const it = cells.find(key);
-
-			if (it == cells.end())
-			{
-				cells[key] = pPassenger->UniqueID;
-			}
-			else if (it->second != pPassenger->UniqueID)
-			{
-				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
-				state.ApproachCell = CellStruct::Empty;
-				state.Relative = -1;
-				pApproach = nullptr;
-				return false;
-			}
-
+			// One-time approach only. Do not re-evaluate facing or transport
+			// movement here: that is what caused the group to keep re-routing.
 			return pPassenger->GetCell() == pApproach;
 		}
 
@@ -944,6 +884,47 @@ namespace PassengerDirections
 			}
 
 			return true;
+		}
+
+		CellClass* FindRearApproachCell(UnitClass* pTransport, FootClass* pPassenger, int flags)
+		{
+			auto const pTransportCell = pTransport ? pTransport->GetCell() : nullptr;
+
+			if (!pTransportCell)
+				return nullptr;
+
+			auto const pPassengerCell = pPassenger ? pPassenger->GetCell() : nullptr;
+			const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
+
+			CellClass* pBest = nullptr;
+			int bestScore = std::numeric_limits<int>::max();
+
+			for (int relative = 0; relative < MaxDirections; ++relative)
+			{
+				if (!(flags & (1 << relative)))
+					continue;
+
+				const int world = (facing + relative) % MaxDirections;
+				auto const pCell = pTransportCell->GetNeighbourCell(static_cast<FacingType>(world));
+
+				if (!IsValidApproachCell(pTransport, pPassenger, pCell))
+					continue;
+
+				const int score = pPassengerCell
+					? std::abs(pCell->MapCoords.X - pPassengerCell->MapCoords.X)
+						+ std::abs(pCell->MapCoords.Y - pPassengerCell->MapCoords.Y)
+					: relative;
+
+				if (score < bestScore)
+				{
+					bestScore = score;
+					pBest = pCell;
+				}
+			}
+
+			// No reservation and no gating: several infantry may share the same
+			// rear cell. They all walk and hand over to vanilla concurrently.
+			return pBest;
 		}
 
 		void HandleEntry(UnitClass* pTransport, FootClass* pPassenger, int flags)
@@ -996,13 +977,6 @@ namespace PassengerDirections
 				return;
 			}
 
-			const int facing = state.Facing >= 0
-				? state.Facing
-				: static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
-			state.Facing = facing;
-
-			// Once handed over to Mission::Enter, do not touch destination or
-			// mission again. The engine must do the real walk-in.
 			if (state.VanillaEntering)
 				return;
 
@@ -1011,49 +985,17 @@ namespace PassengerDirections
 			const bool atTransport = pPassengerCell == pTransportCell;
 			const bool atVehicle = atTransport || IsAtVehicle(pTransport, pPassenger);
 
-			if (atVehicle)
+			if (atVehicle || atApproach)
 			{
+				// Hand over to the original engine once. From here on the
+				// controller must not touch destination or mission.
 				StartVanillaEnter(pTransport, pPassenger, state);
 				return;
 			}
 
-			if (atApproach)
+			if (state.ApproachCell == CellStruct::Empty)
 			{
-				if (IsFrontCell(pTransport, pApproach, flags, state.Facing))
-				{
-					// At the allowed entry cell: hand the last step to the
-					// original engine. Whoever arrives first enters; passengers
-					// arriving in the same frame are processed together.
-					StartVanillaEnter(pTransport, pPassenger, state);
-					return;
-				}
-
-				// Waiting in a staging cell: move to a free front cell as soon
-				// as one opens up (the previous front passenger entered).
-				if (auto const pFront = FindStagingCell(pTransport, pPassenger, flags, true, state.Facing))
-				{
-					const int relative = RelativeFromCell(pTransport, pFront, state.Facing);
-					AssignApproachCell(pTransport, pPassenger, pFront, relative, state.Facing, state);
-
-					if (pPassenger->Destination != pFront)
-						pPassenger->SetDestination(pFront, true);
-
-					if (pPassenger->CurrentMission != Mission::Move
-						&& (state.LastMoveFrame == 0
-							|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
-					{
-						state.LastMoveFrame = Unsorted::CurrentFrame;
-						pPassenger->QueueMission(Mission::Move, false);
-						pPassenger->NextMission();
-					}
-				}
-
-				return;
-			}
-
-			if (!pApproach)
-			{
-				pApproach = FindStagingCell(pTransport, pPassenger, flags, false, state.Facing);
+				pApproach = FindRearApproachCell(pTransport, pPassenger, flags);
 
 				if (!pApproach)
 				{
@@ -1062,7 +1004,7 @@ namespace PassengerDirections
 
 					if (LogEnabled() && Unsorted::CurrentFrame % 60 == 0)
 					{
-						Debug::Log("[Passengers.EnterDirections] waiting for staging cell transport=%s(%u) passenger=%u flags=0x%02X cell=(%d,%d)\n",
+						Debug::Log("[Passengers.EnterDirections] waiting for rear cell transport=%s(%u) passenger=%u flags=0x%02X cell=(%d,%d)\n",
 							pTransport->Type->ID, pTransport->UniqueID, pPassenger->UniqueID, flags,
 							pPassengerCell->MapCoords.X, pPassengerCell->MapCoords.Y);
 					}
@@ -1070,25 +1012,30 @@ namespace PassengerDirections
 					return;
 				}
 
-				const int relative = RelativeFromCell(pTransport, pApproach, state.Facing);
-				AssignApproachCell(pTransport, pPassenger, pApproach, relative, state.Facing, state);
-			}
+				const int facing = static_cast<int>(pTransport->PrimaryFacing.Current().GetFacing<8>());
+				const int relative = RelativeFromCell(pTransport, pApproach, facing);
+				AssignApproachCell(pTransport, pPassenger, pApproach, relative, facing, state);
 
-			if (pPassenger->Destination != pApproach)
 				pPassenger->SetDestination(pApproach, true);
 
-			// Mission::Enter does not reliably move to a cell destination, so
-			// drive the staging approach with Mission::Move. Do not re-queue
-			// every frame if the engine keeps changing the mission back.
-			if (pPassenger->CurrentMission != Mission::Move
-				&& (state.LastMoveFrame == 0
-					|| Unsorted::CurrentFrame - state.LastMoveFrame >= 30))
+				if (pPassenger->CurrentMission != Mission::Move)
+				{
+					pPassenger->QueueMission(Mission::Move, false);
+					pPassenger->NextMission();
+				}
+
+				return;
+			}
+
+			// Approach already assigned: never re-target. If the engine cleared
+			// the destination, restore it once so the passenger still arrives.
+			if (!pPassenger->Destination)
 			{
-				state.LastMoveFrame = Unsorted::CurrentFrame;
-				pPassenger->QueueMission(Mission::Move, false);
-				pPassenger->NextMission();
+				if (auto const pCell = MapClass::Instance.TryGetCellAt(state.ApproachCell))
+					pPassenger->SetDestination(pCell, true);
 			}
 		}
+
 	}
 
 	bool IsPassengerInside(UnitClass* pTransport, FootClass* pPassenger)
