@@ -84,27 +84,34 @@ DEFINE_HOOK(0x701881, TechnoClass_ChangeHouse_Passenger_SyncOwner, 0x5)
 	return 0;
 }
 
+// Shared pre-entry setup used by both the engine's EnterTransport path and
+// the manual fast-entry path. Has to run before the passenger is attached.
+static inline void PreparePassengerEntry(TechnoClass* pTransport, FootClass* pPassenger)
+{
+	if (!pTransport || !pPassenger)
+		return;
+
+	auto const pType = pPassenger->GetTechnoType();
+	auto const pExt = TechnoExt::ExtMap.Find(pPassenger);
+	auto const whatAmI = pPassenger->WhatAmI();
+	auto const pTransTypeExt = TechnoExt::ExtMap.Find(pTransport)->TypeExtData;
+
+	if (pTransTypeExt->Passengers_SyncOwner && pTransTypeExt->Passengers_SyncOwner_RevertOnExit)
+		pExt->OriginalPassengerOwner = pPassenger->Owner;
+
+	if (whatAmI != AbstractType::Aircraft && whatAmI != AbstractType::Building
+		&& pType->Ammo > 0 && pExt->TypeExtData->ReloadInTransport)
+	{
+		ScenarioExt::Global()->TransportReloaders.push_back(pExt);
+	}
+}
+
 DEFINE_HOOK(0x71067B, TechnoClass_EnterTransport, 0x7)
 {
 	GET(TechnoClass*, pThis, ESI);
 	GET(FootClass*, pPassenger, EDI);
 
-	if (pPassenger)
-	{
-		auto const pType = pPassenger->GetTechnoType();
-		auto const pExt = TechnoExt::ExtMap.Find(pPassenger);
-		auto const whatAmI = pPassenger->WhatAmI();
-		auto const pTransTypeExt = TechnoExt::ExtMap.Find(pThis)->TypeExtData;
-
-		if (pTransTypeExt->Passengers_SyncOwner && pTransTypeExt->Passengers_SyncOwner_RevertOnExit)
-			pExt->OriginalPassengerOwner = pPassenger->Owner;
-
-		if (whatAmI != AbstractType::Aircraft && whatAmI != AbstractType::Building
-			&& pType->Ammo > 0 && pExt->TypeExtData->ReloadInTransport)
-		{
-			ScenarioExt::Global()->TransportReloaders.push_back(pExt);
-		}
-	}
+	PreparePassengerEntry(pThis, pPassenger);
 
 	return 0;
 }
@@ -360,6 +367,10 @@ static inline void DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 		pPassenger->Locomotor = std::move(pNewLoco);
 		pPassenger->Locomotor->Link_To_Object(pPassenger);
 	}
+
+	// Keep Passengers.SyncOwner / ReloadInTransport working on the manual
+	// fast-entry path too.
+	PreparePassengerEntry(pTransport, pPassenger);
 
 	pTransport->AddPassenger(pPassenger); // Don't swap order casually, very very important
 	pPassenger->Transporter = pTransport;
@@ -1036,13 +1047,22 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 	}
 
 	// A Move order that is not the controller's own approach move replaces the
-	// boarding order. (Stop/Guard are handled by the entering check below.)
-	if (pThis->CurrentMission == Mission::Move
-		&& PassengerDirections::GetTrackedTransport(pThis)
-		&& !PassengerDirections::IsManagedMove(pThis))
+	// boarding order. A Move to the transport itself is the engine's approach
+	// and must not cancel the controller.
+	if (pThis->CurrentMission == Mission::Move)
 	{
-		PassengerDirections::ClearPassenger(pThis);
-		return 0;
+		if (auto const pTracked = PassengerDirections::GetTrackedTransport(pThis))
+		{
+			auto const pDestination = pThis->Destination;
+
+			if (pDestination && pDestination != pTracked
+				&& abstract_cast<CellClass*>(pDestination)
+				&& !PassengerDirections::IsManagedMove(pThis))
+			{
+				PassengerDirections::ClearPassenger(pThis);
+				return 0;
+			}
+		}
 	}
 
 	// A new Move/Stop/Guard order must be able to cancel the boarding attempt.
@@ -1104,7 +1124,7 @@ DEFINE_HOOK(0x4DA8A0, FootClass_Update_AfterLocomotorProcess, 0x6)
 				{
 					DoEnterNow(pDest, pThis);
 				}
-				else if (!pDest->OnBridge && !pThis->Destination)
+				else if (!pThis->Destination && !pDest->OnBridge && !pDest->Destination)
 				{
 					// Move to enter position, prevent other passengers from
 					// waiting for a call and not moving early.
