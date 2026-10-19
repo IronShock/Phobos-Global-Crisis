@@ -312,14 +312,14 @@ static inline bool CanEnterNow(UnitClass* pTransport, FootClass* pPassenger, boo
 }
 
 // Rewrite from 0x51A21B/0x73A6D1
-static inline void DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
+static inline bool DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 {
 	if (!pTransport || !pPassenger)
-		return;
+		return false;
 
 	// Never add a passenger that is already in the cargo list.
 	if (PassengerDirections::IsPassengerInside(pTransport, pPassenger))
-		return;
+		return false;
 
 	const auto pTransportTypeExt = TechnoTypeExt::ExtMap.Find(pTransport->Type);
 	const bool bySize = pTransportTypeExt->Passengers_BySize;
@@ -331,12 +331,12 @@ static inline void DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 
 	// Hard capacity guard: never append past the transport's passenger limit.
 	if (maxSize > 0 && predictedSize > maxSize)
-		return;
+		return false;
 
 	// Stateless direction guard. The approach controller already selected an
 	// allowed cell; this protects direct callers as well.
 	if (!PassengerDirections::IsEntryAllowedByDirection(pTransport, pPassenger))
-		return;
+		return false;
 
 	// Vanilla only for infantry, but why
 	if (const auto pTag = pTransport->AttachedTag)
@@ -382,6 +382,7 @@ static inline void DoEnterNow(UnitClass* pTransport, FootClass* pPassenger)
 		pPassenger->SetTargetForPassengers(nullptr);
 
 	pPassenger->Undiscover();
+	return true;
 }
 
 #pragma region PassengerDirections
@@ -792,9 +793,12 @@ namespace PassengerDirections
 					s_lastEnterFrame[pTransport->UniqueID] = frame;
 				}
 
-				ReleaseReservation(state.TransportID, pPassenger->UniqueID);
-				s_entryStates.erase(pPassenger->UniqueID);
-				DoEnterNow(pTransport, pPassenger);
+				if (DoEnterNow(pTransport, pPassenger))
+				{
+					ReleaseReservation(state.TransportID, pPassenger->UniqueID);
+					s_entryStates.erase(pPassenger->UniqueID);
+				}
+
 				return;
 			}
 
