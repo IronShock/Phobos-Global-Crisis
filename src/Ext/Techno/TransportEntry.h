@@ -121,6 +121,10 @@ namespace PassengerDirections
 	// transport. Used to apply the direction check without breaking load.
 	bool IsTracked(UnitClass* pTransport, FootClass* pPassenger);
 
+	// True after the final step has been handed to Mission::Enter. The
+	// controller must not touch the passenger again until it is inside.
+	bool IsVanillaEntering(FootClass* pPassenger);
+
 	// True when the passenger stands on an adjacent cell that is an allowed
 	// entry side. At that point the engine may perform the final walk-in.
 	bool IsAtFrontCell(UnitClass* pTransport, FootClass* pPassenger);

@@ -367,6 +367,7 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 					// allowed side; the controller owns the actual approach.
 					if (!PassengerDirections::IsLoading()
 						&& PassengerDirections::IsTracked(pTransport, pThis)
+						&& !PassengerDirections::IsVanillaEntering(pThis)
 						&& !PassengerDirections::IsEntryAllowedByDirection(pTransport, pThis))
 						continue;
 				}
