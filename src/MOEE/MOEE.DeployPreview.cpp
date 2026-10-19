@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 #include "MOEE.OrderUtil.h"
 
 #include <Phobos.h>
@@ -46,9 +47,15 @@ namespace MOEE::DeployPreview
 		bool HaveStart = false;
 		int StartX = 0, StartY = 0;
 
-		OU::Hotkey Key;
-		bool Initialized = false;
 		bool PrevDown = false;
+
+		// Fixed mouse button: Middle. The keyboard part is configurable in
+		// KeyboardMD.ini -> [Hotkey] (MOEE Deploy Preview, empty by default).
+		bool ComboDown()
+		{
+			const auto part = MOEE::GetKeyPart(CommandNames::DeployPreview);
+			return MOEE::KeyPartHeldExact(part) && OU::KeyDown(VK_MBUTTON);
+		}
 
 		bool Enabled()
 		{
@@ -163,26 +170,14 @@ namespace MOEE::DeployPreview
 
 	int ClaimsMiddle()
 	{
-		if (!Initialized || !Enabled() || Key.disabled)
+		if (!Enabled())
 			return 0;
 
-		if (!OU::KeyDown(Key.vk))
-			return 0;
-
-		// Only claims the bare middle button, and only with a deployable selected.
-		return FirstDeployable() != nullptr;
+		return (ComboDown() && FirstDeployable() != nullptr) ? 1 : 0;
 	}
 
 	void Poll()
 	{
-		if (!Initialized)
-		{
-			Initialized = true;
-			OU::ParseHotkey(Phobos::Config::MOEE_DeployPreview_Key, Key);
-			Log("deploypreview", "%s auto=%d", Key.disabled ? "OFF" : "ON",
-				Phobos::Config::MOEE_DeployPreview_AutoDeploy ? 1 : 0);
-		}
-
 		const int fr = Unsorted::CurrentFrame;
 
 		// Arrival tracking / auto deploy.
@@ -216,10 +211,10 @@ namespace MOEE::DeployPreview
 			}
 		}
 
-		if (Key.disabled || !Enabled())
+		if (!Enabled())
 			return;
 
-		const bool down = OU::HotkeyDown(Key);
+		const bool down = ComboDown();
 
 		if (down && !PrevDown)
 		{
@@ -233,7 +228,7 @@ namespace MOEE::DeployPreview
 			}
 		}
 
-		if (!down && PrevDown && HaveStart && ClaimsMiddle())
+		if (!down && PrevDown && HaveStart)
 		{
 			int ex = 0, ey = 0;
 
@@ -249,7 +244,7 @@ namespace MOEE::DeployPreview
 
 	void Draw()
 	{
-		if (Key.disabled || !Enabled() || !OU::HotkeyDown(Key))
+		if (!Enabled() || !ComboDown())
 			return;
 
 		void* unit = FirstDeployable();

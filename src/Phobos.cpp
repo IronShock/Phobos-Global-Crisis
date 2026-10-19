@@ -20,6 +20,7 @@
 #include <New/Entity/FilterButtonClass.h>
 #include <New/Entity/AttachmentClass.h>
 #include <Misc/PerfOverlay.h>
+#include <LoadBar/LoadBarManager.h>
 #include <GameStrings.h>
 
 #ifndef IS_RELEASE_VER
@@ -435,6 +436,8 @@ DEFINE_HOOK(0x4F4583, GScreenClass_DrawText, 0x6)
 
 	if (Phobos::UI::CinemaMode)
 		return 0;
+
+	LoadBarManager::DrawAll();
 
 	const int marginX = Phobos::Config::MessageDisplayInCenter ? 28 : 10;
 	int coordY = 0;

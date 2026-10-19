@@ -1,4 +1,5 @@
 ﻿#include "Body.h"
+#include "TransportEntry.h"
 
 #include <EventClass.h>
 #include <WarheadTypeClass.h>
@@ -354,6 +355,14 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 			&& (pThis->Target == pEntryTarget || pThis->Destination == pEntryTarget
 				|| pThis->OnBridge && pCell == pEntryTarget->GetCell()))
 		{
+			if (auto const pTransport = abstract_cast<UnitClass*>(pEntryTarget))
+			{
+				// Use the same gate as the engine entry path so the per-cell
+				// path cannot bypass the at-vehicle rule or entry interval.
+				if (!PassengerEnterDirections::TryBeginEnter(pTransport, pThis))
+					continue;
+			}
+
 			R->EDI<TechnoClass*>(pEntryTarget);
 			R->EBP<size_t>(0);
 			return TryEnterTarget;
@@ -374,6 +383,13 @@ enum class AttachCargoMode
 namespace TechnoAttachmentTemp
 {
 	AttachCargoMode currentAttachMode = AttachCargoMode::DefaultBehavior;
+
+	void SetSingleObjectAttach(bool single)
+	{
+		currentAttachMode = single
+			? AttachCargoMode::SingleObject
+			: AttachCargoMode::DefaultBehavior;
+	}
 }
 
 #define DEFINE_ATTACH_WRAPPER(mode) \

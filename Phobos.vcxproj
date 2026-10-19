@@ -108,6 +108,7 @@
     <ClCompile Include="src\Locomotion\AdvancedDriveLocomotionClass.cpp" />
 	<ClCompile Include="src\Locomotion\AttachmentLocomotionClass.cpp"/>
     <ClCompile Include="src\MOEE\MOEE.cpp" />
+    <ClCompile Include="src\MOEE\MOEE.Commands.cpp" />
     <ClCompile Include="src\MOEE\Hooks.MOEE.cpp" />
     <ClCompile Include="src\MOEE\MOEE.MegaListCap.cpp" />
     <ClCompile Include="src\MOEE\MOEE.WaypointCap.cpp" />
@@ -124,7 +125,6 @@
     <ClCompile Include="src\MOEE\MOEE.DeployPreview.cpp" />
     <ClCompile Include="src\MOEE\MOEE.MapCenter.cpp" />
     <ClCompile Include="src\MOEE\MOEE.WeaponRange.cpp" />
-    <ClCompile Include="src\MOEE\MOEE.GridView.cpp" />
     <ClCompile Include="src\MOEE\MOEE.Observer.cpp" />
     <ClCompile Include="src\MOEE\MOEE.GdiText.cpp" />
     <ClCompile Include="src\MOEE\MOEE.VecText.cpp" />
@@ -264,6 +264,9 @@
     <ClCompile Include="src\Misc\ZoomManager.Hooks.cpp" />
     <ClCompile Include="src\Misc\PerfProbe.cpp" />
     <ClCompile Include="src\Misc\PerfOverlay.cpp" />
+    <ClCompile Include="src\LoadBar\LoadBarTypeClass.cpp" />
+    <ClCompile Include="src\LoadBar\LoadBarValue.cpp" />
+    <ClCompile Include="src\LoadBar\LoadBarManager.cpp" />
     <ClCompile Include="src\Misc\LogicAILoopGuard.cpp" />
     <ClCompile Include="src\Misc\TextScale.cpp" />
     <ClCompile Include="YRpp\StaticInits.cpp" />
@@ -319,6 +322,7 @@
     <ClInclude Include="src\Locomotion\AdvancedDriveLocomotionClass.h" />
     <ClInclude Include="src\Locomotion\AttachmentLocomotionClass.h"/>
     <ClInclude Include="src\MOEE\MOEE.h" />
+    <ClInclude Include="src\MOEE\MOEE.Commands.h" />
     <ClInclude Include="src\MOEE\MOEE.OrderUtil.h" />
     <ClInclude Include="src\MOEE\MOEE.GdiText.h" />
     <ClInclude Include="src\MOEE\MOEE.VecText.h" />
@@ -331,6 +335,10 @@
     <ClInclude Include="src\Misc\ZoomManager.h" />
     <ClInclude Include="src\Misc\PerfProbe.h" />
     <ClInclude Include="src\Misc\PerfOverlay.h" />
+    <ClInclude Include="src\LoadBar\LoadBarSource.h" />
+    <ClInclude Include="src\LoadBar\LoadBarTypeClass.h" />
+    <ClInclude Include="src\LoadBar\LoadBarValue.h" />
+    <ClInclude Include="src\LoadBar\LoadBarManager.h" />
     <ClInclude Include="src\Misc\TextScale.h" />
 
     <ClInclude Include="src\New\Entity\BannerClass.h" />
@@ -367,6 +375,7 @@
     <ClInclude Include="src\Ext\Side\Body.h" />
     <ClInclude Include="src\Ext\TechnoType\Body.h" />
     <ClInclude Include="src\Ext\Techno\Body.h" />
+    <ClInclude Include="src\Ext\Techno\TransportEntry.h" />
     <ClInclude Include="src\Ext\TerrainType\Body.h" />
     <ClInclude Include="src\Ext\Tiberium\Body.h" />
     <ClInclude Include="src\Ext\VoxelAnimType\Body.h" />

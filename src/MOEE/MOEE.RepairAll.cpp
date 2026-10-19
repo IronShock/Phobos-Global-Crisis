@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 
 #include <Phobos.h>
 #include <HouseClass.h>
@@ -117,9 +118,10 @@ namespace MOEE::RepairAll
 			return mission == MISSION_CONSTRUCTION || mission == MISSION_SELLING;
 		}
 
-		bool CtrlDown()
+		bool RepairModifierDown()
 		{
-			return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+			const auto part = MOEE::GetKeyPart(CommandNames::RepairAll);
+			return !part.Empty() && MOEE::KeyPartHeldExact(part);
 		}
 
 		bool RepairKeyDown()
@@ -260,7 +262,7 @@ namespace MOEE::RepairAll
 			}
 		}
 
-		if (CtrlDown() || dbl)
+		if (RepairModifierDown() || dbl)
 		{
 			Pending = true;
 			return true;

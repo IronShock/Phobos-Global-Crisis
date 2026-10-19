@@ -300,6 +300,69 @@ Debug.PerfLog=no
 `debug\perf.csv` every 300 frames (FPS, frame/logic/render ms, building draw
 and AI time, object counts, zoom, camera position).
 
+### LoadBar
+A self-contained, client-side progress bar drawn above technos. It covers
+time-based states (AttachEffect duration, weapon cooldown, reload, superweapon
+recharge, spawn/rearm timers) and value-based states (health, shield, ammo,
+passengers, tiberium, experience, factory progress).
+
+- Independent feature: does not extend `DigitalDisplayTypeClass` or
+  `AttachEffectTypeClass`, adds no serialized fields and never touches the save
+  stream. Old saves load unchanged; new saves contain no LoadBar data.
+- Bars are defined once in `[LoadBarTypes]`, assigned per TechnoType ID in
+  `[LoadBarAssignments]`, or attached to an AttachEffect type in
+  `[LoadBarAttachEffects]`.
+- `Fill=remaining` is for durations that shrink (AE time); `Fill=elapsed` is for
+  cooldowns that fill up as the weapon becomes ready.
+- Anchors, automatic stacking, colours, segmentation, optional text,
+  per-house/per-state visibility and optional zoom scaling (`ScaleWithZoom`)
+  are all INI-configurable.
+- `Color.Gradient=yes` blends the fill colour instead of switching at
+  thresholds. Define any number of stops with `Color.Gradient.<i>.At` /
+  `Color.Gradient.<i>.Color`; consecutive pairs are scanned automatically until
+  one is missing, so there is no stop-count key. Explicit stops always apply,
+  even with `Color.Gradient=no`; the flag only controls the automatic fallback
+  derived from `Color`, `Color.ConditionYellow` and `Color.ConditionRed`. The
+  same keys in `[LoadBar]` act as global defaults for every bar.
+- `LoadBar.MaxPerFrame` caps the number of bars drawn per frame; the renderer
+  early-outs on objects that are not visible on screen.
+
+```ini
+[LoadBar]                    ; rulesmd.ini
+Enable=true
+MaxPerFrame=256
+Vehicles.Default=
+
+[LoadBarTypes]
+0=GC_AE
+1=GC_ROF
+
+[GC_AE]
+Source=AttachEffect
+MaxEntries=0                 ; one bar per matching AE instance
+Fill=remaining
+Width=24
+Height=3
+Color=64,220,64
+ShowType=selected,cursorhover
+
+[GC_ROF]
+Source=WeaponCooldown
+SourceIndex=-1               ; current weapon (-2 = all slots)
+Fill=elapsed
+Width=22
+Height=2
+Color=64,200,255
+
+[LoadBarAssignments]
+MTNK=GC_ROF
+
+[LoadBarAttachEffects]
+SomeDebuffAE=GC_AE
+```
+
+See `docs/User-Interface.md` for the full key list.
+
 ### Game timer
 Hotkey toggles the "Operation Time Elapsed" display.
 
@@ -383,6 +446,28 @@ AI vehicles turn to present frontal armor.
 AIDirectionalArmor=true
 AIDirectionalArmor.Chance=1.0
 AIDirectionalArmor.Delay=0
+```
+
+### Passenger enter directions
+Restricts which side of a transport vehicle infantry may board from. Directions
+are relative to the transport's current body facing (`front`, `frontright`,
+`right`, `backright`, `back`, `backleft`, `left`, `frontleft`). Infantry are
+redirected to the nearest allowed adjacent cell and board from there. Entry is
+gated by the infantry's actual position: it must reach the allowed cell and
+walk to within 96 leptons of the vehicle before entry. A nearby side cell
+cannot trigger entry, while the vehicle centre is always accepted. Restricted
+transports also pace entry and exit: one passenger every 4 frames when
+boarding and every 2 frames when unloading by default. `all` is the vanilla
+default and `none` makes the transport unboardable. Only infantry are
+restricted, and capacity/`BySize`/amphibious/bridge checks still apply.
+
+```ini
+[SOMEVEHICLE]                            ; VehicleType, transport
+Passengers.EnterDirections=all           ; all|none|comma-separated directions
+Passengers.EnterStaggerFrames=4          ; frames between boarding passengers; 0 = instant
+Passengers.UnloadStaggerFrames=2         ; frames between exiting passengers; 0 = instant
+; Passengers.EnterDirections=back
+; Passengers.EnterDirections=back,backleft,backright
 ```
 
 ### Per-weapon ammo pools
@@ -795,12 +880,14 @@ Ported so far (see `src/MOEE/`):
   limits (vanilla 16 per route / 128 planning) to a configurable value; the
   original branch/planning checks are reproduced through Phobos hooks and an
   in-place immediate patch, multiplayer always keeps vanilla behaviour.
-- **Custom attack-move hotkey** (`MOEE.AttackMove`) – any hotkey can issue
+- **Custom attack-move hotkey** (`MOEE.AttackMove`) – the X2 side button (plus an
+  optional keyboard part configured in `KeyboardMD.ini`) issues
   `Mission::AttackMove` (vanilla Ctrl+Shift+LMB) through the standard
   `EventClass::OutList` path; holding Z queues a planning waypoint.
-- **Repair simplification** (`MOEE.RepairAll`) – Ctrl+repair / double-click
-  repair / automatic repair of all damaged own buildings, reusing the vanilla
-  wrench trigger points and issuing standard `EventType::Repair` events.
+- **Repair simplification** (`MOEE.RepairAll`) – the configured Repair All
+  modifier + repair button / double-click repair / automatic repair of all
+  damaged own buildings, reusing the vanilla wrench trigger points and issuing
+  standard `EventType::Repair` events.
 - **Place scatter** (`MOEE.PlaceScatter`) – pushes your own ground units out of
   the footprint when placing a building (on click, or continuously while the
   ghost follows the cursor), issuing standard `Mission::Move` events.
@@ -809,26 +896,30 @@ Ported so far (see `src/MOEE/`):
   (capacity 16384) at the three vanilla "OutList full" branches. Multiplayer is
   bit-identical to vanilla. This is what makes large groups and
   `MOEE.WaypointCap=0` (unlimited waypoints) safe in single player.
-- **Tree chop** (`MOEE.TreeChop`) – Ctrl+Z+Middle: a range box follows the
-  cursor and, on release, every tree inside is force-attacked, distributed
-  round-robin across the selected ground units.
-- **Fuzzy attack** (`MOEE.FuzzyAttack`) – Ctrl+Middle: fuzzy force-attack for
-  hard-to-click targets. Scans a range box (nearest ring first), groups the
-  selection "`SquadSize` to one" and draws red unit→target lines while held.
-- **Smart order** (`MOEE.SmartOrder`) – bare Middle click: context-sensitive
-  order (attack / enter / capture, decided per unit by the engine), or a
-  point-scatter around the clicked cell on empty ground (infantry pack 3 per
-  cell). Green preview lines while held.
-- **Patrol circle** (`MOEE.PatrolCircle`) – Z+Middle: places a patrol ring for
-  the whole selection (tap = square, drag = rectangle). Every waypoint is
-  issued as a planning MegaMission, then connected (`PlanConnect`) and committed
-  (`PlanCommit`).
-- **Smart area** (`MOEE.SmartArea`) – Shift+Middle: area-context order. For each
-  unit picks the first target the engine allows (attack / enter / capture /
-  sabotage) with a per-target `SquadSize` quota; never issues move orders.
-- **Deploy preview** (`MOEE.DeployPreview`) – Middle-held footprint preview for a
-  base-deployable unit; on release it is ordered there and deployed on arrival.
-  Claims the bare middle button while such a unit is selected (SmartOrder yields).
+- **Tree chop** (`MOEE.TreeChop`) – hold the configured keyboard part (default
+  Ctrl+Z) and the middle button: a range box follows the cursor and, on release,
+  every tree inside is force-attacked, distributed round-robin across the
+  selected ground units.
+- **Fuzzy attack** (`MOEE.FuzzyAttack`) – hold the configured keyboard part
+  (default Ctrl) and the middle button: fuzzy force-attack for hard-to-click
+  targets. Scans a range box (nearest ring first), groups the selection
+  "`SquadSize` to one" and draws red unit→target lines while held.
+- **Smart order** (`MOEE.SmartOrder`) – bare Middle click (keyboard part empty by
+  default): context-sensitive order (attack / enter / capture, decided per unit
+  by the engine), or a point-scatter around the clicked cell on empty ground
+  (infantry pack 3 per cell). Green preview lines while held.
+- **Patrol circle** (`MOEE.PatrolCircle`) – hold the configured keyboard part
+  (default Shift+Z) and the middle button: places a patrol ring for the whole selection
+  (tap = square, drag = rectangle). Every waypoint is issued as a planning
+  MegaMission, then connected (`PlanConnect`) and committed (`PlanCommit`).
+- **Smart area** (`MOEE.SmartArea`) – hold the configured keyboard part (default
+  Shift) and the middle button: area-context order. For each unit picks the first
+  target the engine allows (attack / enter / capture / sabotage) with a per-target
+  `SquadSize` quota; never issues move orders.
+- **Deploy preview** (`MOEE.DeployPreview`) – middle-held (keyboard part empty by
+  default) footprint preview for a base-deployable unit; on release it is ordered
+  there and deployed on arrival. Claims the bare middle button while such a unit
+  is selected (SmartOrder yields).
 
 ### 12.1 UI / map (second group)
 
@@ -836,14 +927,9 @@ Ported so far (see `src/MOEE/`):
   (`0x6D8640`). When the viewport is larger than the map the camera is pinned to
   the map centre instead of toggling between inverted bounds, fixing the
   left/right jitter at high resolutions.
-- **Weapon range** (`MOEE.WeaponRange`) – Ctrl + a single selected unit draws the
-  current weapon's maximum range (and minimum range when non-zero) as an ellipse.
-- **Ground grid** (`MOEE.GridView`) – toggleable tactical ground grid via a
-  hotkey; cells carrying a building or terrain are drawn red.
-- **Zoom scale bar** (`MOEE.ScaleBar`) – bottom-bar scale with ticks from
-  `MinZoom` to `MaxZoom`; highlights the current level and sets `ZoomManager`'s
-  zoom when a tick is clicked. Drives the existing ZoomManager rather than a
-  second zoom pipeline.
+- **Weapon range** (`MOEE.WeaponRange`) – hold the configured keyboard part
+  (default Ctrl+Shift) with a single selected unit to draw the current weapon's
+  maximum range in yellow and minimum range (when non-zero) in red as ellipses.
 
 New `RA2MD.ini` → `[Phobos]` keys:
 
@@ -851,8 +937,7 @@ New `RA2MD.ini` → `[Phobos]` keys:
 MOEE.Observer=true          ; observer panel fix
 MOEE.MegaListCap=true       ; MegaMissionList 256 -> 4096 (single player only)
 MOEE.WaypointCap=128        ; single-player waypoint cap (0 = unlimited, max 4096; MP always vanilla 16/128)
-MOEE.AttackMove=X2          ; custom attack-move hotkey ("0"/"None" disables; e.g. X2, Middle, Ctrl+Z+Middle)
-MOEE.RepairAll=0            ; repair simplification: 0=off, 1=manual (Ctrl/double-click), 2=automatic
+MOEE.RepairAll=0            ; repair simplification: 0=off, 1=manual (configured modifier/double-click), 2=automatic
 MOEE.RepairAll.Interval=30  ; automatic rescan interval (frames, 5..600)
 MOEE.RepairAll.Batch=24     ; max Repair events per scan (1..96)
 MOEE.RepairAll.DoubleClick=true   ; also trigger on double-clicking the wrench
@@ -862,31 +947,34 @@ MOEE.PlaceScatter.Interval=30   ; Mode 2 rescan interval (frames, 5..300)
 MOEE.PlaceScatter.Batch=16      ; max Move events per trigger (1..64)
 MOEE.PlaceScatter.Dist=2        ; extra cells to push past the footprint (1..4)
 MOEE.OrderThrottle=1            ; single-player order cap removal (0=off, 1=on); multiplayer always vanilla
-MOEE.TreeChop=Ctrl+Z+Middle     ; quick tree chopping hotkey ("None"/"0" disables)
 MOEE.TreeChop.Range=4           ; scan box size in cells (2..16)
-MOEE.FuzzyAttack=Ctrl+Middle    ; fuzzy force-attack hotkey ("None"/"0" disables)
 MOEE.FuzzyAttack.Range=4        ; scan box size in cells (2..16)
 MOEE.FuzzyAttack.SquadSize=4    ; units per target (>SquadSize splits evenly; 2..16)
-MOEE.SmartOrder=Middle          ; smart middle-click hotkey ("None"/"0" disables)
 MOEE.SmartOrder.NodeStep=2      ; line-drag sampling step (reserved; 1..8)
-MOEE.PatrolCircle=Z+Middle      ; patrol ring hotkey ("None"/"0" disables)
 MOEE.PatrolCircle.Size=4        ; ring size in cells (2..16)
 MOEE.PatrolCircle.Commit=true   ; commit the plan after connecting the ring
-MOEE.SmartArea=Shift+Middle     ; area-context order hotkey ("None"/"0" disables)
 MOEE.SmartArea.Range=4          ; scan box size in cells (2..16)
 MOEE.SmartArea.SquadSize=4      ; units per target per pass (1..16)
 MOEE.DeployPreview=true         ; base-deploy footprint preview + auto deploy
 MOEE.DeployPreview.AutoDeploy=true   ; deploy automatically once the unit arrives
 MOEE.DeployPreview.Timeout=675  ; arrival tracking timeout (frames, 30..4500)
-MOEE.DeployPreview.Key=Middle   ; trigger key for the preview
 MOEE.MapCenter=true             ; pin the camera to the map centre when the viewport is larger
-MOEE.WeaponRange=true           ; Ctrl + single unit: draw the weapon range ellipse
-MOEE.Grid=Ctrl+G                ; toggle the tactical ground grid ("None"/"0" disables)
-MOEE.Grid.Radius=20             ; grid half-window in cells around the camera (8..40)
-MOEE.ScaleBar=false             ; bottom-bar zoom scale bar (requires TacticalZoom)
-MOEE.ScaleBar.X=40              ; right margin from the sidebar (pixels)
-MOEE.ScaleBar.Y=1               ; bottom margin (pixels)
-MOEE.ScaleBar.Len=250           ; bar length (pixels, 80..2000)
+MOEE.WeaponRange=true           ; draw the weapon range ellipse while the key part is held
+```
+
+The keyboard part of each mouse combo lives in `KeyboardMD.ini` → `[Hotkey]`
+(it is also editable in-game under `Options → Keyboard`, category `MOEE`). The
+mouse button itself is fixed; an empty binding means "mouse button only".
+
+```ini
+; Keyboard part only — the mouse button is fixed in code.
+MOEE Tree Chop=602          ; Ctrl+Z + middle
+MOEE Fuzzy Attack=17        ; Ctrl + middle
+MOEE Patrol Circle=346      ; Shift+Z + middle
+MOEE Smart Area=16          ; Shift + middle
+MOEE Weapon Range=768       ; Ctrl+Shift (hold)
+MOEE Repair All=1536        ; Ctrl+Alt (hold)
+; MOEE Attack Move / MOEE Smart Order / MOEE Deploy Preview: empty by default
 ```
 
 ### 12.2 Vector text (VecText)
@@ -988,6 +1076,10 @@ out the original project.
 `WaterImage.Empty`
 
 ### `rulesmd.ini` → other sections
+`[LoadBar]` (`Enable`, `MaxPerFrame`, `*.Default`),
+`[LoadBarTypes]` (`Source`, `SourceIndex`, `Fill`, anchors, colours
+including `Color.Gradient*`, text, visibility), `[LoadBarAssignments]`,
+`[LoadBarAttachEffects]`, `Passengers.EnterDirections` (VehicleType),
 `[AttachmentTypes]`, `[ArtilleryTypes]`, `[BomberTypes]`,
 `[HouseType] BattlePoints` / `BattlePoints.CanUseStandardPoints`,
 `[SuperWeaponType] BattlePoints.Amount` / `Charge*` / `LimboDelivery.Delay` /
