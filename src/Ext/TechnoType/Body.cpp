@@ -6,6 +6,7 @@
 #include <JumpjetLocomotionClass.h>
 #include <TechnoTypeClass.h>
 #include <StringTable.h>
+#include <FileSystem.h>
 
 #include <Ext/Anim/Body.h>
 #include <Ext/BuildingType/Body.h>
@@ -1165,6 +1166,44 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->Promote_EliteAnimation.Read(exINI, pSection, "Promote.EliteAnimation");
 
 	this->RadarInvisibleToHouse.Read(exINI, pSection, "RadarInvisibleToHouse");
+
+	this->RadarSignal.Read(exINI, pSection, "RadarSignal");
+
+	// Loaded by hand instead of via Nullable<SHPStruct*>.Read because the generic
+	// reader appends ".shp" case-sensitively, turning "ICON.SHP" into
+	// "ICON.SHP.shp" and silently failing for the uppercase names used in MIX files.
+	auto const loadRadarSignalShape = [&](const char* pKey) -> SHPStruct*
+	{
+		if (!exINI.ReadString(pSection, pKey))
+			return nullptr;
+
+		char* pValue = exINI.value();
+		GeneralUtils::ApplyTheaterSuffixToString(pValue);
+
+		std::string name = pValue;
+
+		if (name.size() < 4 || _stricmp(name.c_str() + name.size() - 4, ".shp") != 0)
+			name += ".shp";
+
+		if (auto const pImage = FileSystem::LoadSHPFile(name.c_str()))
+			return pImage;
+
+		Debug::Log("[RadarSignal] Failed to load %s referenced by [%s]%s\n", name.c_str(), pSection, pKey);
+		return nullptr;
+	};
+
+	if (auto const pImage = loadRadarSignalShape("RadarSignal.Image"))
+		this->RadarSignal_Image = pImage;
+
+
+	this->RadarSignal_Frame.Read(exINI, pSection, "RadarSignal.Frame");
+	this->RadarSignal_FrameCount.Read(exINI, pSection, "RadarSignal.FrameCount");
+	this->RadarSignal_AnimRate.Read(exINI, pSection, "RadarSignal.AnimRate");
+	this->RadarSignal_Blink.Read(exINI, pSection, "RadarSignal.Blink");
+	this->RadarSignal_AlwaysVisible.Read(exINI, pSection, "RadarSignal.AlwaysVisible");
+	this->RadarSignal_HideBlip.Read(exINI, pSection, "RadarSignal.HideBlip");
+	this->RadarSignal_Palette.LoadFromINI(pINI, pSection, "RadarSignal.Palette");
+
 	this->AIDirectionalArmor.Read(exINI, pSection, "AIDirectionalArmor");
 	this->AIDirectionalArmor_Chance.Read(exINI, pSection, "AIDirectionalArmor.Chance");
 	this->AIDirectionalArmor_Delay.Read(exINI, pSection, "AIDirectionalArmor.Delay");
@@ -1868,6 +1907,15 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->Promote_EliteAnimation)
 
 		.Process(this->RadarInvisibleToHouse)
+		.Process(this->RadarSignal)
+		.Process(this->RadarSignal_Image)
+		.Process(this->RadarSignal_Frame)
+		.Process(this->RadarSignal_FrameCount)
+		.Process(this->RadarSignal_AnimRate)
+		.Process(this->RadarSignal_Blink)
+		.Process(this->RadarSignal_AlwaysVisible)
+		.Process(this->RadarSignal_HideBlip)
+		.Process(this->RadarSignal_Palette)
 		.Process(this->AIDirectionalArmor)
 		.Process(this->AIDirectionalArmor_Chance)
 		.Process(this->AIDirectionalArmor_Delay)

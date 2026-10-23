@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\New\Entity\FilterButtonClass.h" />
+    <ClInclude Include="src\Ext\Techno\RadarSignal.h" />
     <ClCompile Include="src\New\Entity\FilterButtonClass.cpp" />
     <ClCompile Include="src\Ext\Infantry\Hooks.cpp" />
     <ClCompile Include="src\Ext\Infantry\Hooks.Firing.cpp" />
@@ -66,6 +67,7 @@
     <ClCompile Include="src\Commands\AutoReverseToggle.cpp" />
     <ClCompile Include="src\Commands\TacticalGear.cpp" />
     <ClCompile Include="src\Commands\TacticalPause.cpp" />
+    <ClCompile Include="src\Commands\ToggleTacticalMap.cpp" />
     <ClCompile Include="src\Commands\RightClickOrder.cpp" />
     <ClCompile Include="src\Commands\ToggleDigitalDisplay.cpp" />
     <ClCompile Include="src\Commands\SaveVariablesToFile.cpp" />
@@ -196,6 +198,7 @@
 	<ClCompile Include="src\Ext\Techno\Body.TechnoAttachment.cpp" />
     <ClCompile Include="src\Ext\Techno\WeaponHelpers.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.cpp" />
+    <ClCompile Include="src\Ext\Techno\RadarSignal.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.Cloak.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.Misc.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.Firing.cpp" />
@@ -262,6 +265,10 @@
     <ClCompile Include="src\Misc\SyncLogging.cpp" />
     <ClCompile Include="src\Misc\ZoomManager.cpp" />
     <ClCompile Include="src\Misc\ZoomManager.Hooks.cpp" />
+    <ClCompile Include="src\Misc\TacticalMap.cpp" />
+    <ClCompile Include="src\Misc\TacticalMap.Canvas.cpp" />
+    <ClCompile Include="src\Misc\TacticalMap.GdiText.cpp" />
+    <ClCompile Include="src\Misc\Hooks.TacticalMapGadget.cpp" />
     <ClCompile Include="src\Misc\PerfProbe.cpp" />
     <ClCompile Include="src\Misc\PerfOverlay.cpp" />
     <ClCompile Include="src\LoadBar\LoadBarTypeClass.cpp" />
@@ -292,6 +299,7 @@
     <ClInclude Include="src\Commands\ToggleMessageList.h" />
     <ClInclude Include="src\Commands\FrameByFrame.h" />
     <ClInclude Include="src\Commands\TacticalPause.h" />
+    <ClInclude Include="src\Commands\ToggleTacticalMap.h" />
     <ClInclude Include="src\Commands\RightClickOrder.h" />
     <ClInclude Include="src\Commands\FrameStep.h" />
     <ClInclude Include="src\Commands\NextIdleHarvester.h" />
@@ -333,6 +341,9 @@
     <ClInclude Include="src\Misc\PhobosToolTip.h" />
     <ClInclude Include="src\Misc\SyncLogging.h" />
     <ClInclude Include="src\Misc\ZoomManager.h" />
+    <ClInclude Include="src\Misc\TacticalMap.h" />
+    <ClInclude Include="src\Misc\TacticalMap.Canvas.h" />
+    <ClInclude Include="src\Misc\TacticalMap.GdiText.h" />
     <ClInclude Include="src\Misc\PerfProbe.h" />
     <ClInclude Include="src\Misc\PerfOverlay.h" />
     <ClInclude Include="src\LoadBar\LoadBarSource.h" />
@@ -512,7 +523,7 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;imm32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <ProfileGuidedDatabase>$(IntDir)$(TargetName).pgd</ProfileGuidedDatabase>
@@ -559,7 +570,7 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;imm32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <ProfileGuidedDatabase>$(IntDir)$(TargetName).pgd</ProfileGuidedDatabase>
@@ -602,7 +613,7 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;dbghelp.lib;onecore.lib;imm32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <ProfileGuidedDatabase>$(IntDir)$(TargetName).pgd</ProfileGuidedDatabase>

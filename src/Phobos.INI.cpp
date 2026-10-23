@@ -15,6 +15,7 @@
 
 #include "Misc/BlittersFix.h"
 #include "Misc/ZoomManager.h"
+#include "Misc/TacticalMap.h"
 #include "Misc/PerfProbe.h"
 #include "Misc/PerfOverlay.h"
 
@@ -257,6 +258,8 @@ static void ParseHotkeyString(const std::string& s, int& mainKey, int& modifier)
 DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 {
 	const auto phobosSection = "Phobos";
+
+	TacticalMap::LoadFromINI(&CCINIClass::INI_RA2MD);
 
 	Phobos::Config::ToolTipDescriptions = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ToolTipDescriptions", true);
 	Phobos::Config::DebugGCDiagnostics = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.GCDiagnostics", false);

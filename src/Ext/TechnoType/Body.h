@@ -420,7 +420,19 @@ public:
 		ValueableVector<AnimTypeClass*> Promote_EliteAnimation;
 
 		Nullable<AffectedHouse> RadarInvisibleToHouse;
-		
+
+		// RadarSignal: draws a custom SHP marker on the minimap instead of the
+		// engine's one-pixel blip. See Hooks.cpp, region RadarDrawing.
+		Valueable<bool> RadarSignal;
+		Nullable<SHPStruct*> RadarSignal_Image;
+		Nullable<int> RadarSignal_Frame;
+		Nullable<int> RadarSignal_FrameCount;
+		Nullable<int> RadarSignal_AnimRate;
+		Nullable<int> RadarSignal_Blink;
+		Valueable<bool> RadarSignal_AlwaysVisible;
+		Valueable<bool> RadarSignal_HideBlip;
+		CustomPalette RadarSignal_Palette;
+
 		Valueable<int> AttachmentTopLayerMinHeight;
 		Valueable<int> AttachmentUndergroundLayerMaxHeight;
 		
@@ -919,6 +931,15 @@ public:
 			, Promote_EliteAnimation { }
 
 			, RadarInvisibleToHouse {}
+			, RadarSignal { false }
+			, RadarSignal_Image {}
+			, RadarSignal_Frame {}
+			, RadarSignal_FrameCount {}
+			, RadarSignal_AnimRate {}
+			, RadarSignal_Blink {}
+			, RadarSignal_AlwaysVisible { false }
+			, RadarSignal_HideBlip { true }
+			, RadarSignal_Palette {}
 			, AIDirectionalArmor {}
 			, AIDirectionalArmor_Chance {}
 			, AIDirectionalArmor_Delay {}

@@ -275,6 +275,141 @@ RightClickCommands.Debug=false
 ### Cinema mode
 Hotkey that hides the message list, superweapon timers and custom sidebar widgets.
 
+### Tactical map overlay
+Company of Heroes-style enlarged minimap. The hotkey (`Tactical Map`, default
+`Ctrl+M`, configurable in Options -> Keyboard -> Interface) opens a full-screen
+overlay that shows the sidebar minimap scaled up in the middle of the tactical
+viewport, with the background dimmed. The content is copied straight from the
+minimap, so terrain, unit dots, the view rectangle, radar events and the offline
+state always match the sidebar by construction. Left or right clicking the
+enlarged map moves the camera to that spot, exactly like clicking the minimap;
+no orders are issued. While it is open, map clicks and HUD buttons are blocked so
+nothing underneath can be triggered by accident. `ESC` closes it again.
+
+The overlay is client-side only (safe in multiplayer), is disabled in Cinema mode
+(there is no minimap to copy) and follows resolution changes automatically. While
+it is open the camera is pinned, so edge scrolling (and keyboard scrolling) can no
+longer drag the view away; clicking the enlarged map is the only way to move it.
+
+```ini
+[TacticalMap.ini]               ; next to gamemd.exe
+[Settings]
+Enabled=true
+Scale=0                         ; 0 = auto-fit, 1-8 = fixed multiplier
+FitPercent=90                   ; auto-fit limit, percent of the viewport
+Filter=nearest                  ; nearest|linear (linear = 2x2 box filter)
+BackdropOpacity=60              ; 0-100, dims the viewport behind the map
+BorderColor=220,220,220
+```
+
+Settings and hotkeys live in `TacticalMap.ini` because the game rewrites
+`RA2MD.INI` and would drop keys it does not know.
+
+### Tactical map annotation tools
+While the tactical map overlay is open, a vertical tool panel is shown to the
+right of the enlarged map:
+
+- **Camera** (default): left/right click moves the view, exactly like the minimap.
+- **Brush**: hold the left button to draw freehand on the map. Annotations are
+  stored in map-normalised space, so they stay glued to the same map position when
+  the overlay is closed and reopened or the resolution changes.
+- **Eraser**: hold the left button to erase with a round brush.
+- **Ruler**: drag to measure a straight-line distance in game cells; the result is
+  kept as a line with a label. Right click removes the most recent measurement.
+- **Text**: click to open an inline editor at that spot and type (Chinese input
+  methods work); `Enter` commits, `Esc` cancels. Text colour follows the current
+  brush colour and its size follows the brush width (12/14/16/18/20/22/26 px).
+  Clicking an existing label with the text tool deletes it.
+- **Marker**: click to drop an inverted triangle whose tip sits on the clicked
+  point, using the current brush colour; clicking an existing marker deletes it.
+- **Colour**: opens an eight-colour palette (hotkey cycles instead).
+- **Width**: opens a width picker (hotkey cycles instead): 2/4/6/8/10/12/16 px.
+- **Clear**: removes all drawings, measurements, labels and markers (undoable).
+- **Undo**: `Ctrl+Z` by default, 50 steps covering strokes, labels, markers, ruler
+  lines and "clear".
+
+While the tactical map is open it owns the keyboard: every game hotkey is disabled
+and only the tactical map hotkeys below are active. They live in `TacticalMap.ini`
+next to the executable, because the game rewrites `RA2MD.INI` and would drop them.
+
+```ini
+[TacticalMap.ini]
+[Settings]
+Enabled=true
+Scale=0
+FitPercent=90
+Filter=nearest
+BackdropOpacity=60
+BorderColor=220,220,220
+Toolbar=true
+Brush.Color=255,240,80
+Brush.Width=2
+Eraser.Radius=12
+Ruler.Color=120,220,255
+
+[Multiplayer]
+ShareWithTeam=0
+
+[Hotkeys]
+Camera=Ctrl+V
+Brush=Ctrl+B
+Eraser=Ctrl+E
+Ruler=Ctrl+R
+Text=Ctrl+T
+Marker=Ctrl+P
+Color=Ctrl+C
+Width=Ctrl+W
+Clear=Ctrl+Delete
+Undo=Ctrl+Z
+Close=Ctrl+M
+```
+
+Hotkey syntax is `Ctrl`/`Shift`/`Alt` plus one key (letters, digits, `F1`-`F12`,
+`Delete`, `Space`, `Enter`, `Tab`, arrows). Markers use the current brush colour and
+their size follows the brush width. Ruler labels are centred on the measured line.
+
+`ESC` closes the overlay (or only cancels the text editor while typing).
+Annotations are kept until a new scenario starts, are client-side only, and never
+write game state, so they are safe in multiplayer.
+
+#### Sharing annotations with allies
+With `[Multiplayer] ShareWithTeam=1` (default off) a multiplayer game shares the
+whole annotation layer with your allies in real time: brush/eraser strokes (sent
+while the button is held, not only on release), labels, markers, ruler lines,
+"clear" and undo. Everything is broadcast through the engine's own event queue as
+a private event type, so it travels on the same reliable, frame-ordered path as
+orders; the handler only ever touches drawing state, so it cannot desync the
+simulation. Only allies apply incoming annotations, observers never send or
+receive them, and the sender's own echo is ignored. Annotations keep their
+original colour and width regardless of who is looking. If a packet is missed the
+annotation layer simply differs visually for that one element - game state is
+never involved.
+
+```ini
+[Phobos]                        ; RA2MD.INI (in addition to the keys above)
+TacticalMap.Toolbar=true
+TacticalMap.Brush.Color=255,240,80
+TacticalMap.Brush.Width=3
+TacticalMap.Eraser.Radius=12
+TacticalMap.Ruler.Color=120,220,255
+```
+
+**Localisation.** The overlay has one built-in text string, the measurement unit
+suffix. It is looked up through the game string table and defaults to English, so
+it reads correctly even without a CSF entry:
+
+| Key | English | 简体中文 |
+| --- | --- | --- |
+| `TXT_TACTICAL_MAP` | Tactical Map | 战术地图 |
+| `TXT_TACTICAL_MAP_DESC` | Open or close the enlarged minimap overlay. Click it to move the camera. | 打开或关闭放大的小地图覆盖层。点击地图可移动视角。 |
+| `TXT_TACTICAL_MAP_CELLS` | cells | 格 |
+
+The two `TXT_TACTICAL_MAP*` keys label the keyboard command (Options → Keyboard →
+Interface), and `TXT_TACTICAL_MAP_CELLS` is the unit shown next to measurement
+labels. They are shipped in `Resources/Translations/<lang>/stringtable01.csf`
+(`en` and `zh-Hans`); `TXT_TACTICAL_PAUSE` / `_DESC` follow the same pattern for
+the tactical time stop command.
+
 ### FPS counter / frame-time monitor
 Hotkey ("New FPS Counter", Options -> Keyboard -> Interface) cycles through
 `Off -> Simple -> Detailed -> Off`.
@@ -1035,6 +1170,46 @@ MOEE.VecText.BriefWidth=580      ; body width (0 = engine default)
 MOEE.VecText.BriefAdv=true       ; 1 = per-glyph advance, 0 = uniform cell width
 ```
 
+### 12.3 Minimap radar signal markers (`RadarSignal`)
+
+Attaches a custom SHP marker to any `TechnoType` (infantry / vehicle / aircraft /
+building) on the minimap, replacing the engine's one-pixel blip. Vanilla
+visibility rules are honoured by default, and a marker can be forced visible for
+mission targets.
+
+```ini
+[GAPOWR]
+RadarSignal=yes                  ; master switch, must be yes
+RadarSignal.Image=MYICON         ; SHP name; .shp is appended when missing
+RadarSignal.Palette=myicon.pal   ; optional, defaults to sidebar.pal; ~~~ = theater suffix
+RadarSignal.Frame=0              ; first frame
+RadarSignal.FrameCount=1         ; number of frames to cycle, 1 = static
+RadarSignal.AnimRate=6           ; logic frames per animation frame
+RadarSignal.Blink=0              ; >0: toggle visibility every N frames
+RadarSignal.AlwaysVisible=no     ; yes = also shown in shroud / when radar-invisible
+RadarSignal.HideBlip=yes         ; hide the engine's coloured blip under the icon
+```
+
+- One image for both views: `Image` is drawn on the minimap at its native size
+  and enlarged on the full-screen tactical map (`Image.Width * dst.Width /
+  src.Width`), so the marker keeps the same proportion everywhere.
+- On the minimap the marker is centred on the object's radar pixel and clipped
+  to the radar rectangle; markers that would spill over the frame are skipped.
+- While the tactical map is open the minimap copy is left untouched and the map
+  draws the scaled image itself, so the marker is never painted twice.
+- Scaling uses a block-mode (majority colour) filter, so pixel art does not blur;
+  scaled frames are cached per `(image, frame, size)`.
+- Multi-frame SHPs can be animated with `FrameCount` / `AnimRate`. A blinking
+  marker can use an SHP with empty frames or `Blink`.
+- `AlwaysVisible=no` keeps the vanilla rules: hidden in shroud unless the owner
+  is the current player, and `RadarInvisible` / `RadarInvisibleToHouse` apply.
+- The minimap marker is painted on the screen-sized surface right after the
+  sidebar has been composited into it, so it stays put regardless of the
+  sidebar's dirty rectangle bookkeeping.
+- Objects sharing one radar pixel are each drawn; the last one drawn wins.
+- Localisation: the feature itself has no on-screen text; all keys and log
+  messages are English.
+
 ### Credits / 鸣谢
 
 Ported from **[MagicShiba/MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements)**
@@ -1073,7 +1248,7 @@ out the original project.
 `Weapon<n>.Ammo*`, `Attachment<n>.*`, `AdvancedDrive*`, `AIDirectionalArmor*`,
 `Armor.*Multiplier`, `AttackMove*`, `BattlePoints`, `Image.Empty`,
 `PassengersPipOffset`, `PassengersPipSize`, `PenetratesTransport*`, `PipScale`,
-`PipScale2`, `ShowMovePositionIndicator`, `SmoothMove`, `UrbanCombat`,
+`PipScale2`, `RadarSignal*`, `ShowMovePositionIndicator`, `SmoothMove`, `UrbanCombat`,
 `WaterImage.Empty`
 
 ### `rulesmd.ini` → other sections

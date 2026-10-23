@@ -20,6 +20,7 @@
 #include <New/Entity/FilterButtonClass.h>
 #include <New/Entity/AttachmentClass.h>
 #include <Misc/PerfOverlay.h>
+#include <Misc/TacticalMap.h>
 #include <LoadBar/LoadBarManager.h>
 #include <GameStrings.h>
 
@@ -276,6 +277,8 @@ DEFINE_HOOK(0x683E7F, ScenarioClass_Start_Optimizations, 0x7)
 	Debug::Log("[Phobos] MissionResult: scenario started\n");
 
 	PerfOverlay::Reset();
+	TacticalMap::Close();
+	TacticalMap::ResetCanvas();
 
 	Phobos::ApplyOptimizations();
 	RulesExt::ApplyRemoveShroudGlobally();

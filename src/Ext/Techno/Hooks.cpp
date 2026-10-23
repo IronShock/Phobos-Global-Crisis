@@ -7,6 +7,14 @@
 #include <JumpjetLocomotionClass.h>
 #include <AlphaShapeClass.h>
 #include <TacticalClass.h>
+#include <RadarClass.h>
+#include <MapClass.h>
+#include <Surface.h>
+#include <FileSystem.h>
+#include <Unsorted.h>
+#include <Phobos.h>
+
+#include <algorithm>
 
 #include <Ext/Anim/Body.h>
 #include <Ext/BuildingType/Body.h>
@@ -14,6 +22,7 @@
 #include <Ext/WarheadType/Body.h>
 #include <Ext/WeaponType/Body.h>
 #include <Ext/TechnoType/Body.h>
+#include <Ext/Techno/RadarSignal.h>
 #include <Utilities/EnumFunctions.h>
 #include <Utilities/GeneralUtils.h>
 #include <Utilities/Helpers.Alex.h>
@@ -888,20 +897,41 @@ DEFINE_HOOK(0x655DDD, RadarClass_ProcessPoint_RadarInvisible, 0x6)
 	GET_STACK(const bool, isInShrouded, STACK_OFFSET(0x40, 0x4));
 	GET(TechnoClass*, pTechno, EBP);
 
+	auto const pType = pTechno->GetTechnoType();
+	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	// Types with a RadarSignal draw a custom marker once the radar image has been
+	// composed (see the hook below). Suppress the engine's one-pixel blip so it
+	// does not show through the icon.
+	if (pTypeExt->RadarSignal && pTypeExt->RadarSignal_Image.Get() && pTypeExt->RadarSignal_HideBlip)
+		return Invisible;
+
 	if (isInShrouded && !pTechno->Owner->IsControlledByCurrentPlayer())
 		return Invisible;
 
-	auto const pType = pTechno->GetTechnoType();
-
 	if (pType->RadarInvisible)
 	{
-		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
-
 		if (EnumFunctions::CanTargetHouse(pTypeExt->RadarInvisibleToHouse.Get(AffectedHouse::Enemies), pTechno->Owner, HouseClass::CurrentPlayer))
 			return Invisible;
 	}
 
 	return GoOtherChecks;
+}
+
+// Called right after RadarClass::Render_Radar has blitted the finished radar
+// image to the sidebar (0x65764F) and before the engine draws the camera view
+// box (0x657668). This ordering makes the box render on top of the markers and
+// lets the regular sidebar -> Primary copy carry the markers to the screen.
+DEFINE_HOOK(0x657652, RadarClass_Render_Radar_DrawSignals, 0x6)
+{
+	GET(RadarClass*, pRadar, ESI);
+
+	RadarSignal::DrawToSidebar(pRadar);
+
+	// Replay the instruction replaced by the hook.
+	R->EAX(pRadar->unknown_1208);
+
+	return 0x657658;
 }
 
 #pragma endregion

@@ -21,6 +21,7 @@
 
 #include <Ext/House/Body.h>
 #include <Ext/Rules/Body.h>
+#include <Misc/TacticalMap.h>
 
 bool TacticalPauseCommandClass::IsActive = false;
 
@@ -150,6 +151,11 @@ DEFINE_HOOK(0x55E012, Game_KeyboardProcess_TacticalPauseBlock, 0x6)
 {
 	enum { SkipExecute = 0x55E018 };
 
+	// While the tactical map is open it owns the keyboard: no game command runs.
+	// (The overlay's own hotkeys are polled directly, ESC included.)
+	if (TacticalMap::Opened)
+		return SkipExecute;
+
 	GET(CommandClass* const, pCommand, ESI);
 
 	if (TacticalPauseCommandClass::IsBlockingActions() && pCommand)
@@ -199,6 +205,12 @@ static void __declspec(naked) GadgetClass_Clicked_BlockThunk()
 // re-executes them and resumes on an instruction boundary.
 DEFINE_HOOK(0x4E13F0, GadgetClass_Clicked_TacticalPauseBlock, 0xA)
 {
+	// Secondary guard for the tactical map overlay: the primary block happens in
+	// GadgetClass::ExtractGadgetAt, which also catches the widgets that override
+	// this virtual.
+	if (TacticalMap::Opened)
+		return reinterpret_cast<uintptr_t>(&GadgetClass_Clicked_BlockThunk);
+
 	if (TacticalPauseCommandClass::IsBlockingActions() && Game::SpecialDialog == 0)
 	{
 		static int s_lastGadgetLog = -100000;

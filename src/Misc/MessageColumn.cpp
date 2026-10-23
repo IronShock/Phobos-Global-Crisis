@@ -10,6 +10,7 @@
 #include <Commands/TacticalPause.h>
 
 #include <Misc/TextScale.h>
+#include <Misc/TacticalMap.h>
 
 #include <cmath>
 
@@ -1096,10 +1097,12 @@ DEFINE_HOOK(0x4F43BE, GScreenClass_GetInputAndUpdate_CheckHoverState, 0x7)
 
 DEFINE_HOOK(0x4F4589, GScreenClass_NewMessageListDraw, 0x5)
 {
-	if (Phobos::UI::CinemaMode)
-		return 0;
+	if (!Phobos::UI::CinemaMode)
+		MessageColumnClass::Instance.DrawAll();
 
-	MessageColumnClass::Instance.DrawAll();
+	// Last thing drawn into the composite before the software cursor: the
+	// tactical map overlay has to go here so it covers the HUD and the radar.
+	TacticalMap::Draw();
 
 	return 0;
 }

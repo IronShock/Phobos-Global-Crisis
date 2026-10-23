@@ -15,6 +15,7 @@
 #include "FireTacticalSW.h"
 #include "ToggleMessageList.h"
 #include "TacticalPause.h"
+#include "ToggleTacticalMap.h"
 #include "ZoomCommands.h"
 #include <New/Entity/FilterButtonClass.h>
 #include <MOEE/MOEE.Commands.h>
@@ -48,6 +49,7 @@ DEFINE_HOOK(0x533066, CommandClassCallback_Register, 0x6)
 		MakeCommand<TacticalGearCommandClass<-1>>(); // Faster (upshift)
 	}
 	MakeCommand<ToggleMessageListCommandClass>();
+	MakeCommand<ToggleTacticalMapCommandClass>();
 	MakeCommand<ToggleSWSidebar>();
 
 	// MOEE keyboard-side bindings for the mouse combos.
