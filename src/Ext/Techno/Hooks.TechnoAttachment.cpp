@@ -6,6 +6,7 @@
 
 #include <Ext/TechnoType/Body.h>
 #include <Ext/Cell/Body.h>
+#include <Ext/Unit/Footprint.h>
 
 #include <Utilities/Macro.h>
 
@@ -46,6 +47,17 @@ DEFINE_HOOK(0x6F6F20, TechnoClass_Unlimbo_UnlimboAttachments, 0x6)
 
 	TechnoExt::UnlimboAttachments(pThis);
 
+	if (pThis->WhatAmI() == AbstractType::Unit)
+	{
+		auto const pUnit = static_cast<UnitClass*>(pThis);
+
+		if (Footprint::IsMultiCell(pUnit))
+		{
+			Footprint::EnsureLocomotor(pUnit);
+			Footprint::Mark(pUnit, pUnit->Location);
+		}
+	}
+
 	return 0;
 }
 
@@ -54,6 +66,9 @@ DEFINE_HOOK(0x6F6B1C, TechnoClass_Limbo_LimboAttachments, 0x6)
 	GET(TechnoClass*, pThis, ESI);
 
 	TechnoExt::LimboAttachments(pThis);
+
+	if (pThis->WhatAmI() == AbstractType::Unit)
+		Footprint::Release(static_cast<UnitClass*>(pThis));
 
 	return 0;
 }
@@ -763,7 +778,7 @@ DEFINE_HOOK(0x736FB6, UnitClass_FiringAI_ForbidAttachmentRotation, 0x6)
 	GET(UnitClass*, pThis, ESI);
 	auto const& pExt = TechnoExt::ExtMap.Find(pThis);
 
-	return pExt->ParentAttachment
+	return (pExt->ParentAttachment || Footprint::IsMultiCell(pThis))
 		? SkipBodyRotation
 		: ContinueCheck;
 }
@@ -775,7 +790,7 @@ DEFINE_HOOK(0x736A2F, UnitClass_RotationAI_ForbidAttachmentRotation, 0x7)
 	GET(UnitClass*, pThis, ESI);
 	auto const& pExt = TechnoExt::ExtMap.Find(pThis);
 
-	return pExt->ParentAttachment
+	return (pExt->ParentAttachment || Footprint::IsMultiCell(pThis))
 		? SkipBodyRotation
 		: ContinueCheck;
 }
@@ -823,6 +838,9 @@ int __fastcall TechnoClass_SortY_Wrapper(ObjectClass* pThis)
 
 	if (pTechno)
 	{
+		if (Footprint::IsMultiCell(pTechno))
+			return Footprint::GetYSort(pTechno);
+
 		const auto pExt = TechnoExt::ExtMap.Find(pTechno);
 
 		if (pExt->ParentAttachment)

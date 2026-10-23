@@ -20,6 +20,7 @@
 #include <New/Entity/FilterButtonClass.h>
 #include <New/Entity/AttachmentClass.h>
 #include <Misc/PerfOverlay.h>
+#include <Ext/Unit/Footprint.h>
 #include <GameStrings.h>
 
 #ifndef IS_RELEASE_VER
@@ -275,6 +276,7 @@ DEFINE_HOOK(0x683E7F, ScenarioClass_Start_Optimizations, 0x7)
 	Debug::Log("[Phobos] MissionResult: scenario started\n");
 
 	PerfOverlay::Reset();
+	Footprint::ClearAll();
 
 	Phobos::ApplyOptimizations();
 	RulesExt::ApplyRemoveShroudGlobally();

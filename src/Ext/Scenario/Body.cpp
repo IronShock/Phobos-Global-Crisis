@@ -3,6 +3,8 @@
 #include <SessionClass.h>
 #include <VeinholeMonsterClass.h>
 
+#include <Ext/Unit/Footprint.h>
+
 std::unique_ptr<ScenarioExt::ExtData> ScenarioExt::Data = nullptr;
 
 bool ScenarioExt::CellParsed = false;
@@ -231,6 +233,8 @@ DEFINE_HOOK(0x689669, ScenarioClass_Load_Suffix, 0x6)
 		if (Reader.Expect(ScenarioExt::Canary) && Reader.RegisterChange(buffer))
 			buffer->LoadFromStream(Reader);
 	}
+
+	Footprint::FixupAfterLoad();
 
 	return 0;
 }

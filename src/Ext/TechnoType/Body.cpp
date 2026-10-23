@@ -7,11 +7,15 @@
 #include <TechnoTypeClass.h>
 #include <StringTable.h>
 
+#include <cstdio>
+#include <cstring>
+
 #include <Ext/Anim/Body.h>
 #include <Ext/BuildingType/Body.h>
 #include <Ext/BulletType/Body.h>
 #include <Ext/Techno/Body.h>
 #include <Ext/WeaponType/Body.h>
+#include <Locomotion/FootprintLocomotionClass.h>
 #include <New/Type/InsigniaTypeClass.h>
 
 #include <Utilities/GeneralUtils.h>
@@ -1163,6 +1167,91 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->Promote_EliteAnimation.Read(exINI, pSection, "Promote.EliteAnimation");
 
 	this->RadarInvisibleToHouse.Read(exINI, pSection, "RadarInvisibleToHouse");
+
+	// Multi-cell units. Restricted to VehicleTypes: buildings already use
+	// Foundation= for their own foundation and must not be reinterpreted.
+	if (this->OwnerObject()->WhatAmI() == AbstractType::UnitType)
+	{
+		if (exINI.ReadString(pSection, "Foundation"))
+		{
+			int length = 0;
+			int width = 0;
+			const char* value = exINI.value();
+
+			if ((std::sscanf(value, "%dx%d", &length, &width) == 2
+				|| std::sscanf(value, "%d,%d", &length, &width) == 2)
+				&& length > 0 && width > 0 && length <= 15 && width <= 15)
+			{
+				this->MultiCell.Length = length;
+				this->MultiCell.Width = width;
+				this->MultiCell.Enabled = (length > 1 || width > 1);
+			}
+			else
+			{
+				Debug::INIParseFailed(pSection, "Foundation", value, "Expected LengthxWidth, e.g. 3x1");
+			}
+		}
+
+		int foundationLength = this->MultiCell.Length;
+		int foundationWidth = this->MultiCell.Width;
+
+		if (exINI.ReadInteger(pSection, "Foundation.Length", &foundationLength))
+			this->MultiCell.Length = foundationLength;
+
+		if (exINI.ReadInteger(pSection, "Foundation.Width", &foundationWidth))
+			this->MultiCell.Width = foundationWidth;
+
+		if (this->MultiCell.Length > 0 && this->MultiCell.Width > 0)
+			this->MultiCell.Enabled = (this->MultiCell.Length > 1 || this->MultiCell.Width > 1);
+
+		bool rotates = this->MultiCell.Rotates;
+		bool turnAssist = this->MultiCell.TurnAssist;
+		bool crush = this->MultiCell.Crush;
+		int fireArc = this->MultiCell.FireArc;
+
+		if (exINI.ReadBool(pSection, "Foundation.Rotates", &rotates))
+			this->MultiCell.Rotates = rotates;
+
+		if (exINI.ReadBool(pSection, "Foundation.TurnAssist", &turnAssist))
+			this->MultiCell.TurnAssist = turnAssist;
+
+		if (exINI.ReadBool(pSection, "Foundation.Crush", &crush))
+			this->MultiCell.Crush = crush;
+
+		if (exINI.ReadInteger(pSection, "Foundation.FireArc", &fireArc))
+			this->MultiCell.FireArc = fireArc;
+
+		if (exINI.ReadString(pSection, "Foundation.TurnMode"))
+		{
+			const char* mode = exINI.value();
+
+			if (_stricmp(mode, "pivot") == 0)
+				this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
+			else if (_stricmp(mode, "radius") == 0)
+				this->MultiCell.TurnMode = FootprintTurnMode::Radius;
+			else
+				Debug::INIParseFailed(pSection, "Foundation.TurnMode", mode, "Expected pivot or radius");
+		}
+
+		if (exINI.ReadString(pSection, "Foundation.Pivot"))
+		{
+			const char* pivot = exINI.value();
+
+			if (_stricmp(pivot, "center") != 0)
+				Debug::Log("[Footprint] [%s] Foundation.Pivot=%s is not supported yet; using center.\n", pSection, pivot);
+		}
+
+		if (this->MultiCell.Enabled)
+		{
+			// Multi-cell hulls cannot use the vanilla one-cell TurnTrack arcs.
+			this->OwnerObject()->Locomotor = __uuidof(FootprintLocomotionClass);
+			this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
+
+			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d, forced FootprintLocomotionClass\n",
+				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0);
+		}
+	}
+
 	this->AIDirectionalArmor.Read(exINI, pSection, "AIDirectionalArmor");
 	this->AIDirectionalArmor_Chance.Read(exINI, pSection, "AIDirectionalArmor.Chance");
 	this->AIDirectionalArmor_Delay.Read(exINI, pSection, "AIDirectionalArmor.Delay");

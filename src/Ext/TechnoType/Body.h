@@ -19,6 +19,8 @@
 #include <New/Type/Affiliated/CreateUnitTypeClass.h>
 #include <New/Type/AttachmentTypeClass.h>
 
+#include <Ext/Unit/Footprint.h>
+
 class Matrix3D;
 class ParticleSystemTypeClass;
 
@@ -415,6 +417,11 @@ public:
 		ValueableVector<AnimTypeClass*> Promote_EliteAnimation;
 
 		Nullable<AffectedHouse> RadarInvisibleToHouse;
+
+		// Multi-cell footprint. Foundation=Length x Width (length along the
+		// facing direction). Only read for VehicleTypes; buildings keep using
+		// their own Foundation key.
+		FootprintConfig MultiCell;
 		
 		Valueable<int> AttachmentTopLayerMinHeight;
 		Valueable<int> AttachmentUndergroundLayerMaxHeight;
@@ -911,6 +918,7 @@ public:
 			, Promote_EliteAnimation { }
 
 			, RadarInvisibleToHouse {}
+			, MultiCell {}
 			, AIDirectionalArmor {}
 			, AIDirectionalArmor_Chance {}
 			, AIDirectionalArmor_Delay {}

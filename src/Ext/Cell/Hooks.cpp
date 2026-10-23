@@ -2,6 +2,7 @@
 
 #include <Ext/Rules/Body.h>
 #include <Ext/Techno/Body.h>
+#include <Ext/Unit/Footprint.h>
 
 // because 🦅💣 takes over, we have to do reimpl even more of the func and replicate Ares code
 
@@ -9,6 +10,28 @@ void __fastcall UnitClass_SetOccupyBit_Reimpl(UnitClass* pThis, void*, CoordStru
 {
 	if (TechnoExt::DoesntOccupyCellAsChild(pThis))
 		return;
+
+	if (Footprint::IsMultiCell(pThis))
+	{
+		Footprint::Mark(pThis, *pCrd);
+
+		// Keep the vanilla "moving into" tracker on the anchor cell so other
+		// units still see the hull while it is crossing the cell boundary.
+		CellClass* pCell = MapClass::Instance.GetCellAt(*pCrd);
+		auto pCellExt = CellExt::ExtMap.Find(pCell);
+		int height = MapClass::Instance.GetCellFloorHeight(*pCrd) + CellClass::BridgeHeight;
+		bool alt = (pCrd->Z >= height && pCell->ContainsBridge());
+
+		auto pExt = TechnoExt::ExtMap.Find(pThis);
+		pExt->AltOccupation = alt;
+
+		if (alt)
+			pCellExt->IncomingUnitAlt = pThis;
+		else
+			pCellExt->IncomingUnit = pThis;
+
+		return;
+	}
 
 	CellClass* pCell = MapClass::Instance.GetCellAt(*pCrd);
 	auto pCellExt = CellExt::ExtMap.Find(pCell);
@@ -39,6 +62,23 @@ void __fastcall UnitClass_ClearOccupyBit_Reimpl(UnitClass* pThis, void*, CoordSt
 {
 	if (TechnoExt::DoesntOccupyCellAsChild(pThis))
 		return;
+
+	if (Footprint::IsMultiCell(pThis))
+	{
+		Footprint::Unmark(pThis);
+
+		CellClass* pCell = MapClass::Instance.GetCellAt(*pCrd);
+		auto pCellExt = CellExt::ExtMap.Find(pCell);
+
+		if (pCellExt->IncomingUnit == pThis)
+			pCellExt->IncomingUnit = nullptr;
+
+		if (pCellExt->IncomingUnitAlt == pThis)
+			pCellExt->IncomingUnitAlt = nullptr;
+
+		TechnoExt::ExtMap.Find(pThis)->AltOccupation.reset();
+		return;
+	}
 
 	enum { obNormal = 1, obAlt = 2 };
 

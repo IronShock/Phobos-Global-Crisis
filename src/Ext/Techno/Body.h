@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <Ext/TechnoType/Body.h>
+#include <Ext/Unit/Footprint.h>
 #include <Helpers/Macro.h>
 #include <Utilities/Container.h>
 #include <Utilities/TemplateDef.h>
@@ -121,6 +122,7 @@ public:
 		bool IsBeingChronoSphered;             // Set to true on units currently being ChronoSphered, does not apply to Ares-ChronoSphere'd buildings or Chrono reinforcements.
 		bool KeepTargetOnMove;
 		CellStruct LastSensorsMapCoords;
+		FootprintState Footprint;
 		CDTimerClass TiberiumEater_Timer;
 		bool DelayedFireSequencePaused;
 		int DelayedFireWeaponIndex;

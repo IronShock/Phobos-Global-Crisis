@@ -107,6 +107,7 @@
     <ClCompile Include="src\Locomotion\TestLocomotionClass.cpp" />
     <ClCompile Include="src\Locomotion\AdvancedDriveLocomotionClass.cpp" />
 	<ClCompile Include="src\Locomotion\AttachmentLocomotionClass.cpp"/>
+    <ClCompile Include="src\Locomotion\FootprintLocomotionClass.cpp" />
     <ClCompile Include="src\MOEE\MOEE.cpp" />
     <ClCompile Include="src\MOEE\Hooks.MOEE.cpp" />
     <ClCompile Include="src\MOEE\MOEE.MegaListCap.cpp" />
@@ -210,6 +211,8 @@
     <ClCompile Include="src\Ext\Unit\Hooks.DisallowMoving.cpp" />
     <ClCompile Include="src\Ext\Unit\Hooks.DeploysInto.cpp" />
     <ClCompile Include="src\Ext\Unit\Hooks.Jumpjet.cpp" />
+    <ClCompile Include="src\Ext\Unit\Footprint.cpp" />
+    <ClCompile Include="src\Ext\Unit\Hooks.Footprint.cpp" />
     <ClCompile Include="src\Ext\WarheadType\Detonate.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.WeaponEffects.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.Tint.cpp" />
@@ -262,6 +265,7 @@
     <ClCompile Include="src\Misc\SyncLogging.cpp" />
     <ClCompile Include="src\Misc\ZoomManager.cpp" />
     <ClCompile Include="src\Misc\ZoomManager.Hooks.cpp" />
+    <ClCompile Include="src\Misc\FootprintPathfinder.cpp" />
     <ClCompile Include="src\Misc\PerfProbe.cpp" />
     <ClCompile Include="src\Misc\PerfOverlay.cpp" />
     <ClCompile Include="src\Misc\LogicAILoopGuard.cpp" />
@@ -307,6 +311,7 @@
     <ClInclude Include="src\Ext\Bullet\Trajectories\StraightTrajectory.h" />
     <ClInclude Include="src\Ext\Bullet\Trajectories\ParabolaTrajectory.h" />
     <ClInclude Include="src\Ext\OverlayType\Body.h" />
+    <ClInclude Include="src\Ext\Unit\Footprint.h" />
     <ClInclude Include="src\Ext\ParticleType\Body.h" />
     <ClInclude Include="src\Ext\Sidebar\Body.h" />
     <ClInclude Include="src\Ext\Anim\Body.h" />
@@ -318,6 +323,7 @@
     <ClInclude Include="src\Locomotion\TestLocomotionClass.h"/>
     <ClInclude Include="src\Locomotion\AdvancedDriveLocomotionClass.h" />
     <ClInclude Include="src\Locomotion\AttachmentLocomotionClass.h"/>
+    <ClInclude Include="src\Locomotion\FootprintLocomotionClass.h" />
     <ClInclude Include="src\MOEE\MOEE.h" />
     <ClInclude Include="src\MOEE\MOEE.OrderUtil.h" />
     <ClInclude Include="src\MOEE\MOEE.GdiText.h" />
@@ -329,6 +335,7 @@
     <ClInclude Include="src\Misc\PhobosToolTip.h" />
     <ClInclude Include="src\Misc\SyncLogging.h" />
     <ClInclude Include="src\Misc\ZoomManager.h" />
+    <ClInclude Include="src\Misc\FootprintPathfinder.h" />
     <ClInclude Include="src\Misc\PerfProbe.h" />
     <ClInclude Include="src\Misc\PerfOverlay.h" />
     <ClInclude Include="src\Misc\TextScale.h" />
