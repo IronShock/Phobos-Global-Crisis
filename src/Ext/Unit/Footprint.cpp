@@ -72,7 +72,26 @@ namespace
 		const double lateralX = std::cos(angle);
 		const double lateralY = std::sin(angle);
 
-		const double halfLength = config.Length * 0.5;
+		// A cell-centre sample of a 5x1 hull at 45 degrees only finds three
+		// diagonal cells (±2.5 half-length vs ±2.828 cell centres). Add just
+		// enough length margin for diagonal buckets to preserve the cell count,
+		// while leaving cardinal spans exactly as long as the hull.
+		double normalizedAngle = std::fmod(angleDeg, 360.0);
+
+		if (normalizedAngle < 0.0)
+			normalizedAngle += 360.0;
+
+		const double diagonalPhase = std::fmod(normalizedAngle, 90.0);
+		double lengthMargin = 0.0;
+
+		if (std::abs(diagonalPhase - 45.0) < 1.0e-6)
+		{
+			lengthMargin = std::max(
+				0.0,
+				(config.Length - 1) / std::sqrt(2.0) - config.Length * 0.5);
+		}
+
+		const double halfLength = config.Length * 0.5 + lengthMargin;
 		const double halfWidth = config.Width * 0.5;
 		const double radius = std::sqrt(halfLength * halfLength + halfWidth * halfWidth) + margin + 1.0;
 		const int range = static_cast<int>(std::ceil(radius));

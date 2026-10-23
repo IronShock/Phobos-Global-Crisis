@@ -92,3 +92,28 @@ DEFINE_HOOK(0x736BE2, UnitClass_UpdateRotation_FootprintAim, 0x6)
 
 	DEFINE_FUNCTION_JUMP(LJMP, 0x47EBA0, CellClass_GetUnit_Reimpl);
 
+	// Safe counterpart for mouse selection and cell-targeted attacks. The hook
+	// covers exactly one 5-byte instruction (`mov al, [0xA8E9A0]`), so it cannot
+	// corrupt the following branch the way the old 2-byte hook did. It only reads
+	// the footprint table; nothing is inserted into the cell's object list.
+	DEFINE_HOOK(0x47C5E1, CellClass_GetSomeObject_FootprintFallback, 0x5)
+	{
+		enum { ReturnObject = 0x47C609, Continue = 0x47C5E6 };
+
+		GET(CellClass*, pCell, EDI);
+
+		if (auto const pOwner = Footprint::OwnerAt(pCell, false))
+		{
+			R->EAX(pOwner);
+			return ReturnObject;
+		}
+
+		if (auto const pOwner = Footprint::OwnerAt(pCell, true))
+		{
+			R->EAX(pOwner);
+			return ReturnObject;
+		}
+
+		return Continue;
+	}
+

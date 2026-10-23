@@ -31,6 +31,20 @@ namespace
 	{
 		return CellClass::Coord2Cell(left) == CellClass::Coord2Cell(right);
 	}
+
+	int DirectionFromDelta(int dx, int dy)
+	{
+		static const int dirX[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+		static const int dirY[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
+
+		for (int dir = 0; dir < 8; ++dir)
+		{
+			if (dirX[dir] == dx && dirY[dir] == dy)
+				return dir;
+		}
+
+		return -1;
+	}
 }
 
 HRESULT FootprintLocomotionClass::Load(IStream* pStm)
@@ -161,8 +175,19 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	if (this->Moving && this->TargetCoord == to)
 		return;
 
-	const CellStruct start = pLinked->GetMapCoords();
+	auto const pState = Footprint::GetState(pUnit);
+	const CellStruct start = pState && pState->Initialized
+		? pState->Anchor
+		: pLinked->GetMapCoords();
 	const CellStruct goal = CellClass::Coord2Cell(to);
+
+	// Our custom mover does not consume the vanilla PathDirections/Waypoint
+	// fields. Clearing them prevents FootClass::UpdatePosition(End) from applying
+	// a stale waypoint delta and shifting the hull sideways when it reaches a
+	// cell centre.
+	pLinked->PathDirections[0] = -1;
+	pLinked->WaypointCell = CellStruct { -1, -1 };
+	pLinked->WaypointNearbyAccessibleCellDelta = CellStruct { -1, -1 };
 
 	Debug::Log("[FootprintMove] %s Move_To (%d,%d) from cell (%d,%d)\n",
 		pLinked->GetTechnoType()->ID, to.X, to.Y, start.X, start.Y);
@@ -175,7 +200,6 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	}
 
 	std::vector<FootprintPathStep> path;
-	auto const pState = Footprint::GetState(pUnit);
 	const int startBucket = pState && pState->Initialized
 		? pState->Bucket
 		: Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
@@ -401,6 +425,31 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 
 	const int bucket = pState->Initialized ? pState->Bucket : Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
 	const CellStruct next = step.Cell;
+	const int dx = next.X - anchor.X;
+	const int dy = next.Y - anchor.Y;
+	const int direction = DirectionFromDelta(dx, dy);
+	const bool forward = direction == bucket;
+	const bool reverse = direction == ((bucket + 4) & 7);
+
+	if (step.Bucket != bucket || direction < 0 || (!forward && !reverse))
+	{
+		Debug::Log("[FootprintStep] %s invalid step from=(%d,%d) bucket=%d next=(%d,%d) dir=%d stepBucket=%d\n",
+			pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
+			next.X, next.Y, direction, step.Bucket);
+
+		return false;
+	}
+
+	if (step.Reverse != reverse)
+	{
+		Debug::Log("[FootprintStep] %s reverse flag mismatch from=(%d,%d) bucket=%d next=(%d,%d) flag=%d actual=%d\n",
+			pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
+			next.X, next.Y, step.Reverse ? 1 : 0, reverse ? 1 : 0);
+	}
+
+	Debug::Log("[FootprintStep] %s from=(%d,%d) bucket=%d next=(%d,%d) %s\n",
+		pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
+		next.X, next.Y, forward ? "forward" : "reverse");
 
 	if (pState->ReconcileActive)
 	{
@@ -493,6 +542,9 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 	{
 		pLinked->LastMapCoords = pState->Anchor;
 		pLinked->CurrentMapCoords = this->MoveTargetCell;
+		pLinked->PathDirections[0] = -1;
+		pLinked->WaypointCell = CellStruct { -1, -1 };
+		pLinked->WaypointNearbyAccessibleCellDelta = CellStruct { -1, -1 };
 		pLinked->UpdatePosition(PCPType::End);
 
 		const auto nextSpan = Footprint::GetSpan(pUnit, this->MoveTargetCell, pState->Bucket);
