@@ -74,7 +74,10 @@ Move FootprintLocomotionClass::Can_Enter_Cell(CellStruct cell)
 	if (!pUnit)
 		return Move::No;
 
-	const int bucket = Footprint::BucketFromFacing(pUnit->PrimaryFacing.Current());
+	const auto pState = Footprint::GetState(pUnit);
+	const int bucket = pState && pState->Initialized
+		? pState->Bucket
+		: Footprint::BucketFromFacing(pUnit->PrimaryFacing.Current());
 	const auto span = Footprint::GetSpan(pUnit, cell, bucket);
 
 	return Footprint::CanOccupy(pUnit, span, pUnit->OnBridge, cell) ? Move::OK : Move::No;
@@ -172,7 +175,10 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	}
 
 	std::vector<FootprintPathStep> path;
-	const int startBucket = Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
+	auto const pState = Footprint::GetState(pUnit);
+	const int startBucket = pState && pState->Initialized
+		? pState->Bucket
+		: Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
 
 	if (!FootprintPathfinder::FindPath(pUnit, start, goal, startBucket, path))
 	{

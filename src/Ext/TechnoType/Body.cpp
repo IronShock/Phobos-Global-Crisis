@@ -1247,8 +1247,12 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			this->OwnerObject()->Locomotor = __uuidof(FootprintLocomotionClass);
 			this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
 
-			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d, forced FootprintLocomotionClass\n",
-				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0);
+			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d, forced FootprintLocomotionClass\n",
+				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0,
+				static_cast<int>(this->OwnerObject()->SpeedType),
+				static_cast<int>(this->OwnerObject()->MovementZone),
+				this->OwnerObject()->Speed,
+				this->OwnerObject()->ROT);
 		}
 	}
 

@@ -91,9 +91,48 @@ namespace
 		return result;
 	}
 
-	std::vector<CellStruct> MakeSweepArc(const FootprintConfig& config, double fromDeg, double toDeg, bool clockwise)
+	void LogBlockedOccupy(UnitClass* pUnit, CellClass* pCell, const CellStruct& cell,
+		const char* reason, int level, bool bridge, bool alt)
 	{
-		std::set<std::pair<int, int>> cells;
+		static int lastFrame = -100;
+		static int count = 0;
+
+		if (Unsorted::CurrentFrame != lastFrame)
+		{
+			lastFrame = Unsorted::CurrentFrame;
+			count = 0;
+		}
+
+		if (count++ >= 8)
+			return;
+
+		const auto pType = pUnit ? pUnit->GetTechnoType() : nullptr;
+		const auto pUnitContent = pCell ? pCell->GetUnit(alt) : nullptr;
+		const auto pBuilding = pCell ? pCell->GetBuilding() : nullptr;
+		const auto pTerrain = pCell ? pCell->GetTerrain(false) : nullptr;
+
+		Debug::Log("[FootprintBlock] %s cell=(%d,%d) reason=%s"
+			" type(SpeedType=%d MoveZone=%d) anchorLevel=%d/%d"
+			" cell(level=%d bridge=%d land=%d pass=%d flags=%08X/%08X)"
+			" unit=%s building=%s terrain=%s\n",
+			pType ? pType->ID : "?",
+			cell.X, cell.Y, reason,
+			pType ? static_cast<int>(pType->SpeedType) : -1,
+			pType ? static_cast<int>(pType->MovementZone) : -1,
+			level, bridge ? 1 : 0,
+			pCell ? pCell->GetLevel() : -1,
+			pCell && pCell->ContainsBridge() ? 1 : 0,
+			pCell ? static_cast<int>(pCell->LandType) : -1,
+			pCell ? static_cast<int>(pCell->Passability) : -1,
+			pCell ? pCell->OccupationFlags : 0,
+			pCell ? pCell->AltOccupationFlags : 0,
+			pUnitContent ? pUnitContent->GetTechnoType()->ID : "-",
+			pBuilding ? pBuilding->Type->ID : "-",
+			pTerrain ? pTerrain->Type->ID : "-");
+	}
+
+	std::vector<CellStruct> MakeSweepArc(const FootprintConfig& config, double fromDeg, double toDeg, bool clockwise)
+	{		std::set<std::pair<int, int>> cells;
 
 		double end = toDeg;
 
@@ -388,12 +427,24 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 	const int level = pAnchorCell->GetLevel();
 	const bool bridge = pAnchorCell->ContainsBridge();
 
+	// [CDEST] relies on inherited MovementZone; if a hull uses Float but inherited
+	// Normal/None, treat it as Water instead of rejecting every water cell.
+	auto movementZone = pType->MovementZone;
+
+	if (pType->SpeedType == SpeedType::Float
+		&& (movementZone == MovementZone::None || movementZone == MovementZone::Normal))
+	{
+		movementZone = MovementZone::Water;
+	}
+
 	for (const auto& cell : span)
 	{
 		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
 
 		if (!pCell)
 		{
+			LogBlockedOccupy(pThis, nullptr, cell, "outside-map", level, bridge, alt);
+
 			if (pBlocked)
 				*pBlocked = cell;
 
@@ -402,6 +453,8 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 
 		if (pCell->GetLevel() != level || pCell->ContainsBridge() != bridge)
 		{
+			LogBlockedOccupy(pThis, pCell, cell, "level-bridge", level, bridge, alt);
+
 			if (pBlocked)
 				*pBlocked = cell;
 
@@ -411,8 +464,10 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 		// Ignore infantry and vehicles here; vehicles are checked below so that
 		// the unit's own footprint cells stay passable, and infantry is handled
 		// by the crush setting.
-		if (!pCell->IsClearToMove(pType->SpeedType, true, true, -1, pType->MovementZone, level, bridge))
+		if (!pCell->IsClearToMove(pType->SpeedType, true, true, -1, movementZone, level, bridge))
 		{
+			LogBlockedOccupy(pThis, pCell, cell, "clear-to-move", level, bridge, alt);
+
 			if (pBlocked)
 				*pBlocked = cell;
 
@@ -421,6 +476,8 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 
 		if (pCell->GetBuilding())
 		{
+			LogBlockedOccupy(pThis, pCell, cell, "building", level, bridge, alt);
+
 			if (pBlocked)
 				*pBlocked = cell;
 
@@ -431,6 +488,8 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 		{
 			if (!TerrainTypeExt::ExtMap.Find(pTerrain->Type)->IsPassable)
 			{
+				LogBlockedOccupy(pThis, pCell, cell, "terrain", level, bridge, alt);
+
 				if (pBlocked)
 					*pBlocked = cell;
 
@@ -442,6 +501,8 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 		{
 			if (pUnit != pThis)
 			{
+				LogBlockedOccupy(pThis, pCell, cell, "unit", level, bridge, alt);
+
 				if (pBlocked)
 					*pBlocked = cell;
 
@@ -453,6 +514,8 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 			// A vehicle bit without a matching object is either a stale
 			// footprint or a vanilla unit whose cell lookup is unavailable;
 			// either way it must not be treated as free.
+			LogBlockedOccupy(pThis, pCell, cell, "stale-flag", level, bridge, alt);
+
 			if (pBlocked)
 				*pBlocked = cell;
 
@@ -461,6 +524,8 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 
 		if (!config.Crush && pCell->GetInfantry(false))
 		{
+			LogBlockedOccupy(pThis, pCell, cell, "infantry", level, bridge, alt);
+
 			if (pBlocked)
 				*pBlocked = cell;
 
@@ -473,6 +538,8 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 
 			if (pOverlay && pOverlay->Wall)
 			{
+				LogBlockedOccupy(pThis, pCell, cell, "wall", level, bridge, alt);
+
 				if (pBlocked)
 					*pBlocked = cell;
 
@@ -499,12 +566,57 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	if (pState->Locked)
 		return true;
 
+	const bool wasInitialized = pState->Initialized;
 	const auto anchor = AnchorFromCoords(coords);
-	const int bucket = BucketFromFacing(pThis->PrimaryFacing.Current());
-	const auto span = GetSpan(pThis, anchor, bucket);
+	int bucket = wasInitialized
+		? pState->Bucket
+		: BucketFromFacing(pThis->PrimaryFacing.Current());
+	auto span = GetSpan(pThis, anchor, bucket);
 	const auto pAnchorCell = MapClass::Instance.GetCellAt(anchor);
 	const int height = MapClass::Instance.GetCellFloorHeight(coords) + CellClass::BridgeHeight;
 	const bool alt = (coords.Z >= height && pAnchorCell->ContainsBridge());
+
+	// A map-placed 1x1 ship may not have room for a 3-cell hull in its spawn
+	// orientation. Try every facing before giving up; this keeps campaign
+	// placements usable without editing every map.
+	if (!wasInitialized)
+	{
+		CellStruct blocked { 0, 0 };
+
+		if (!CanOccupy(pThis, span, alt, anchor, &blocked))
+		{
+			bool found = false;
+
+			for (int candidate = 0; candidate < 8; ++candidate)
+			{
+				if (candidate == bucket)
+					continue;
+
+				auto candidateSpan = GetSpan(pThis, anchor, candidate);
+
+				if (CanOccupy(pThis, candidateSpan, alt, anchor, &blocked))
+				{
+					bucket = candidate;
+					span = std::move(candidateSpan);
+					found = true;
+					break;
+				}
+			}
+
+			if (found)
+			{
+				pThis->PrimaryFacing.SetCurrent(DirStruct(bucket * 0x2000));
+
+				Debug::Log("[Footprint] spawn reorient %s anchor=(%d,%d) bucket=%d\n",
+					pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket);
+			}
+			else
+			{
+				Debug::Log("[Footprint] spawn invalid %s anchor=(%d,%d): no facing fits, blocked=(%d,%d)\n",
+					pThis->GetTechnoType()->ID, anchor.X, anchor.Y, blocked.X, blocked.Y);
+			}
+		}
+	}
 
 	if (pState->Initialized
 		&& pState->Anchor == anchor
@@ -514,8 +626,6 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	{
 		return true;
 	}
-
-	const bool wasInitialized = pState->Initialized;
 
 	if (wasInitialized)
 		Unmark(pThis);
@@ -541,12 +651,10 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	pState->Alt = alt;
 	pState->Span = span;
 
-	if (!wasInitialized)
-	{
-		Debug::Log("[Footprint] mark %s anchor=(%d,%d) bucket=%d cells=%d alt=%d\n",
-			pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
-			static_cast<int>(span.size()), alt ? 1 : 0);
-	}
+	Debug::Log("[Footprint] span %s anchor=(%d,%d) bucket=%d cells=%d alt=%d%s\n",
+		pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
+		static_cast<int>(span.size()), alt ? 1 : 0,
+		wasInitialized ? "" : " (initial)");
 
 	return true;
 }
