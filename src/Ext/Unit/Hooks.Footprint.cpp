@@ -66,7 +66,17 @@ DEFINE_HOOK(0x7353C4, UnitClass_Constructor_ForceFootprintLocomotion, 0x5)
 			pObject = pObject->NextObject;
 		}
 
-		return Footprint::OwnerAt(pThis, alt);
+		if (auto const pOwner = Footprint::OwnerAt(pThis, alt))
+			return pOwner;
+
+		// Self-heal a grid that was cleared or loaded out of sync: the cell still
+		// carries the vehicle bit, so find the hull whose span contains it.
+		const DWORD flags = alt ? pThis->AltOccupationFlags : pThis->OccupationFlags;
+
+		if (flags & 0x20)
+			return Footprint::FindOwnerByScan(pThis->MapCoords, alt);
+
+		return nullptr;
 	}
 
 	DEFINE_FUNCTION_JUMP(LJMP, 0x47EBA0, CellClass_GetUnit_Reimpl);

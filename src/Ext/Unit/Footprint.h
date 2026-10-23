@@ -78,6 +78,7 @@ public:
 
 	static UnitClass* OwnerAt(const CellStruct& cell, bool alt);
 	static UnitClass* OwnerAt(const CellClass* pCell, bool alt);
+	static UnitClass* FindOwnerByScan(const CellStruct& cell, bool alt);
 	static void SetOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
 	static void ClearOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
 

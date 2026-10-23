@@ -771,6 +771,21 @@ DEFINE_HOOK(0x51D0DD, InfantryClass_Scatter_CheckAttachments, 0x6)
 }
 
 
+static bool ShouldSkipMultiCellBodyRotation(UnitClass* pThis)
+{
+	if (!Footprint::IsMultiCell(pThis))
+		return false;
+
+	const auto pType = pThis->GetTechnoType();
+	const bool hasTurret = pType->Turret || pType->TurretCount > 0;
+	const bool moving = pThis->Locomotor && pThis->Locomotor->Is_Moving_Now();
+
+	// A turreted hull aims with the turret, and a moving hull's body is owned by
+	// the footprint locomotor. A stationary turretless hull must be allowed to
+	// rotate its body to aim, otherwise it can never fire.
+	return hasTurret || moving;
+}
+
 DEFINE_HOOK(0x736FB6, UnitClass_FiringAI_ForbidAttachmentRotation, 0x6)
 {
 	enum { SkipBodyRotation = 0x737063, ContinueCheck = 0x0 };
@@ -778,7 +793,7 @@ DEFINE_HOOK(0x736FB6, UnitClass_FiringAI_ForbidAttachmentRotation, 0x6)
 	GET(UnitClass*, pThis, ESI);
 	auto const& pExt = TechnoExt::ExtMap.Find(pThis);
 
-	return (pExt->ParentAttachment || Footprint::IsMultiCell(pThis))
+	return (pExt->ParentAttachment || ShouldSkipMultiCellBodyRotation(pThis))
 		? SkipBodyRotation
 		: ContinueCheck;
 }
@@ -790,7 +805,7 @@ DEFINE_HOOK(0x736A2F, UnitClass_RotationAI_ForbidAttachmentRotation, 0x7)
 	GET(UnitClass*, pThis, ESI);
 	auto const& pExt = TechnoExt::ExtMap.Find(pThis);
 
-	return (pExt->ParentAttachment || Footprint::IsMultiCell(pThis))
+	return (pExt->ParentAttachment || ShouldSkipMultiCellBodyRotation(pThis))
 		? SkipBodyRotation
 		: ContinueCheck;
 }

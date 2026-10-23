@@ -377,6 +377,28 @@ UnitClass* Footprint::OwnerAt(const CellClass* pCell, bool alt)
 	return pCell ? OwnerAt(pCell->MapCoords, alt) : nullptr;
 }
 
+UnitClass* Footprint::FindOwnerByScan(const CellStruct& cell, bool alt)
+{
+	for (auto const pUnit : UnitClass::Array)
+	{
+		if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo)
+			continue;
+
+		const auto pState = GetState(pUnit);
+
+		if (!pState || !pState->Initialized || pState->Alt != alt)
+			continue;
+
+		if (std::find(pState->Span.begin(), pState->Span.end(), cell) != pState->Span.end())
+		{
+			SetOwner(cell, alt, pUnit);
+			return pUnit;
+		}
+	}
+
+	return nullptr;
+}
+
 void Footprint::SetOwner(const CellStruct& cell, bool alt, UnitClass* pOwner)
 {
 	EnsureGrid();
@@ -778,6 +800,23 @@ void Footprint::ClearAll()
 	EnsureGrid();
 	std::fill(s_ownerNormal.begin(), s_ownerNormal.end(), nullptr);
 	std::fill(s_ownerAlt.begin(), s_ownerAlt.end(), nullptr);
+
+	// Scenario start can run after map units have already been marked. Clearing
+	// only the owner grid would leave their 0x20 flags orphaned and make the
+	// hull reject its own bow/stern cells. Rebuild from the live units instead.
+	for (auto const pUnit : UnitClass::Array)
+	{
+		if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo || !IsMultiCell(pUnit))
+			continue;
+
+		if (auto const pState = GetState(pUnit))
+		{
+			pState->Initialized = false;
+			pState->Locked = false;
+		}
+
+		Mark(pUnit, pUnit->Location);
+	}
 }
 
 void Footprint::FixupAfterLoad()
