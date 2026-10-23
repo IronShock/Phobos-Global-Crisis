@@ -812,6 +812,26 @@ DEFINE_HOOK(0x736A2F, UnitClass_RotationAI_ForbidAttachmentRotation, 0x7)
 
 Action __fastcall UnitClass_MouseOverCell_Wrapper(UnitClass* pThis, void*, CellStruct const* pCell, bool checkFog, bool ignoreForce)
 {
+	// A hull cell other than the anchor has no object in the cell list. Route the
+	// cursor/action query through the anchor cell so left-click selects, right-
+	// click moves, and enemy hulls show the attack cursor instead of Move.
+	if (pCell && Footprint::IsMultiCell(pThis))
+	{
+		const auto pState = Footprint::GetState(pThis);
+
+		if (pState && pState->Initialized)
+		{
+			const bool ownCell = Footprint::OwnerAt(*pCell, false) == pThis
+				|| Footprint::OwnerAt(*pCell, true) == pThis;
+
+			if (ownCell && *pCell != pState->Anchor)
+			{
+				CellStruct anchor = pState->Anchor;
+				return pThis->UnitClass::MouseOverCell(&anchor, checkFog, ignoreForce);
+			}
+		}
+	}
+
 	Action result = pThis->UnitClass::MouseOverCell(pCell, checkFog, ignoreForce);
 
 	auto const pExt = TechnoExt::ExtMap.TryFind(pThis);

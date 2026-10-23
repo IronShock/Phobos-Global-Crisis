@@ -2281,6 +2281,28 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 	return CheckNextCell;
 }
 
+DEFINE_HOOK(0x489470, DamageArea_FootprintCellDistance, 0x5)
+{
+	enum { Continue = 0x489475 };
+
+	auto const pObject = reinterpret_cast<TechnoClass*>(R->EBX());
+	auto const pCell = DamageAreaTemp::CheckingCell;
+
+	if (pObject && pCell && Footprint::IsMultiCell(pObject))
+	{
+		const bool alt = DamageAreaTemp::CheckingCellAlt;
+
+		if (Footprint::OwnerAt(pCell, alt) == pObject)
+		{
+			const auto cellCenter = pCell->GetCenterCoords();
+			const auto coords = reinterpret_cast<CoordStruct*>(R->EDI());
+			R->EAX(static_cast<int>(cellCenter.DistanceFrom(*coords)));
+		}
+	}
+
+	return Continue;
+}
+
 DEFINE_HOOK(0x4899B3, DamageArea_DamageItemsFix2, 0x5)
 {
 	enum { CheckNextCell = 0x4899BE, CheckThisObject = 0x4896DD };
