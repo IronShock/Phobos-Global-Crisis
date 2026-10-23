@@ -85,7 +85,7 @@ namespace
 		pSurface->DrawLine(&start, &end, color);
 	}
 
-	void DrawCell(Surface* pSurface, const CellClass* pCell, COLORREF color)
+	void DrawCell(Surface* pSurface, const CellClass* pCell, COLORREF color, bool thick)
 	{
 		const int x = pCell->MapCoords.X;
 		const int y = pCell->MapCoords.Y;
@@ -105,10 +105,20 @@ namespace
 			return;
 		}
 
-		DrawThickLine(pSurface, c00, c10, color);
-		DrawThickLine(pSurface, c10, c11, color);
-		DrawThickLine(pSurface, c11, c01, color);
-		DrawThickLine(pSurface, c01, c00, color);
+		if (thick)
+		{
+			DrawThickLine(pSurface, c00, c10, color);
+			DrawThickLine(pSurface, c10, c11, color);
+			DrawThickLine(pSurface, c11, c01, color);
+			DrawThickLine(pSurface, c01, c00, color);
+		}
+		else
+		{
+			pSurface->DrawLine(&c00, &c10, color);
+			pSurface->DrawLine(&c10, &c11, color);
+			pSurface->DrawLine(&c11, &c01, color);
+			pSurface->DrawLine(&c01, &c00, color);
+		}
 	}
 
 	void DrawAnchor(Surface* pSurface, const FootprintState* pState)
@@ -165,7 +175,26 @@ void FootprintDebug::Draw()
 		for (const auto& cell : pState->Span)
 		{
 			if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
-				DrawCell(pSurface, pCell, color);
+				DrawCell(pSurface, pCell, color, true);
+		}
+
+		for (const auto& cell : pState->BarrierSpan)
+		{
+			if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
+				DrawCell(pSurface, pCell, RGB(255, 140, 0), false);
+		}
+
+		const int visualBucket = Footprint::BucketFromFacing(pUnit->PrimaryFacing.Current());
+
+		if (visualBucket != pState->Bucket)
+		{
+			const auto visualSpan = Footprint::GetSpan(pUnit, pState->Anchor, visualBucket);
+
+			for (const auto& cell : visualSpan)
+			{
+				if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
+					DrawCell(pSurface, pCell, RGB(255, 0, 255), false);
+			}
 		}
 
 		DrawAnchor(pSurface, pState);

@@ -59,6 +59,13 @@ struct FootprintState
 	CellStruct Anchor { 0, 0 };
 	bool Alt = false;
 	std::vector<CellStruct> Span;
+	std::vector<CellStruct> BarrierSpan;
+
+	// Aim reconciliation: the visual hull rotated past a bucket boundary while
+	// the unit was stationary. The swept area is reserved until the rotation
+	// reaches ReconcileTarget.
+	bool ReconcileActive = false;
+	int ReconcileTarget = -1;
 };
 
 class Footprint
@@ -79,6 +86,11 @@ public:
 	static UnitClass* OwnerAt(const CellStruct& cell, bool alt);
 	static UnitClass* OwnerAt(const CellClass* pCell, bool alt);
 	static UnitClass* FindOwnerByScan(const CellStruct& cell, bool alt);
+	static UnitClass* BarrierOwnerAt(const CellStruct& cell, bool alt);
+	static UnitClass* BarrierOwnerAt(const CellClass* pCell, bool alt);
+	static void SetBarrierOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
+	static void ClearBarrierOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
+	static std::vector<CellStruct> ComputeBarriers(const std::vector<CellStruct>& span);
 	static void SetOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
 	static void ClearOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
 
@@ -91,6 +103,7 @@ public:
 	static void ClearAll();
 	static void FixupAfterLoad();
 	static void EnsureLocomotor(UnitClass* pThis);
+	static void ReconcileFacing(UnitClass* pThis);
 
 	static int GetYSort(TechnoClass* pThis);
 	static bool IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt);

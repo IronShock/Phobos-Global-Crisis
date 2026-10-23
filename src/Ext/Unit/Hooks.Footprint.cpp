@@ -27,6 +27,17 @@ DEFINE_HOOK(0x7353C4, UnitClass_Constructor_ForceFootprintLocomotion, 0x5)
 	return 0;
 }
 
+// After UnitClass::UpdateRotation has updated the body/turret facing, keep the
+// collision footprint in sync with a stationary hull turning to aim.
+DEFINE_HOOK(0x736BE2, UnitClass_UpdateRotation_FootprintAim, 0x6)
+{
+	GET(UnitClass*, pThis, ESI);
+
+	Footprint::ReconcileFacing(pThis);
+
+	return 0;
+}
+
 // The engine reads the vehicle occupation bit from the cell's
 	// OccupationFlags. For a multi-cell unit every hull cell has 0x20 set but
 	// only the anchor cell contains the object, so IsCellOccupied would reject

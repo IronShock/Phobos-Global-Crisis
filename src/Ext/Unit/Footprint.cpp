@@ -30,6 +30,8 @@ namespace
 
 	std::vector<UnitClass*> s_ownerNormal;
 	std::vector<UnitClass*> s_ownerAlt;
+	std::vector<UnitClass*> s_barrierNormal;
+	std::vector<UnitClass*> s_barrierAlt;
 	bool s_gridReady = false;
 
 	std::unordered_map<TechnoTypeClass*, FootprintGeometry> s_geometries;
@@ -41,6 +43,8 @@ namespace
 
 		s_ownerNormal.assign(kMaxCells, nullptr);
 		s_ownerAlt.assign(kMaxCells, nullptr);
+		s_barrierNormal.assign(kMaxCells, nullptr);
+		s_barrierAlt.assign(kMaxCells, nullptr);
 		s_gridReady = true;
 	}
 
@@ -426,9 +430,106 @@ void Footprint::ClearOwner(const CellStruct& cell, bool alt, UnitClass* pOwner)
 		owner = nullptr;
 }
 
+UnitClass* Footprint::BarrierOwnerAt(const CellStruct& cell, bool alt)
+{
+	EnsureGrid();
+
+	const int index = CellIndex(cell);
+
+	if (index < 0)
+		return nullptr;
+
+	return alt ? s_barrierAlt[index] : s_barrierNormal[index];
+}
+
+UnitClass* Footprint::BarrierOwnerAt(const CellClass* pCell, bool alt)
+{
+	return pCell ? BarrierOwnerAt(pCell->MapCoords, alt) : nullptr;
+}
+
+void Footprint::SetBarrierOwner(const CellStruct& cell, bool alt, UnitClass* pOwner)
+{
+	EnsureGrid();
+
+	const int index = CellIndex(cell);
+
+	if (index < 0)
+		return;
+
+	(alt ? s_barrierAlt : s_barrierNormal)[index] = pOwner;
+}
+
+void Footprint::ClearBarrierOwner(const CellStruct& cell, bool alt, UnitClass* pOwner)
+{
+	EnsureGrid();
+
+	const int index = CellIndex(cell);
+
+	if (index < 0)
+		return;
+
+	auto& owner = (alt ? s_barrierAlt : s_barrierNormal)[index];
+
+	if (owner == pOwner)
+		owner = nullptr;
+}
+
+std::vector<CellStruct> Footprint::ComputeBarriers(const std::vector<CellStruct>& span)
+{
+	std::set<std::pair<int, int>> hull;
+	std::set<std::pair<int, int>> barriers;
+
+	for (const auto& cell : span)
+		hull.emplace(cell.X, cell.Y);
+
+	for (const auto& cell : span)
+	{
+		for (int dx : { -1, 1 })
+		{
+			for (int dy : { -1, 1 })
+			{
+				if (hull.find({ cell.X + dx, cell.Y + dy }) == hull.end())
+					continue;
+
+				const std::pair<int, int> sideA { cell.X + dx, cell.Y };
+				const std::pair<int, int> sideB { cell.X, cell.Y + dy };
+
+				if (hull.find(sideA) == hull.end())
+					barriers.insert(sideA);
+
+				if (hull.find(sideB) == hull.end())
+					barriers.insert(sideB);
+			}
+		}
+	}
+
+	std::vector<CellStruct> result;
+	result.reserve(barriers.size());
+
+	for (const auto& cell : barriers)
+	{
+		result.push_back(CellStruct
+		{
+			static_cast<short>(cell.first),
+			static_cast<short>(cell.second)
+		});
+	}
+
+	return result;
+}
+
 bool Footprint::IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt)
 {
-	return pThis && pCell && OwnerAt(pCell, alt) == pThis;
+	if (!pThis || !pCell)
+		return false;
+
+	if (OwnerAt(pCell, alt) == pThis)
+		return true;
+
+	if (BarrierOwnerAt(pCell, alt) == pThis)
+		return true;
+
+	return false;
 }
 
 bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, CellStruct* pBlocked)
@@ -466,6 +567,18 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 		if (!pCell)
 		{
 			LogBlockedOccupy(pThis, nullptr, cell, "outside-map", level, bridge, alt);
+
+			if (pBlocked)
+				*pBlocked = cell;
+
+			return false;
+		}
+
+		const auto pBarrierOwner = BarrierOwnerAt(cell, alt);
+
+		if (pBarrierOwner && pBarrierOwner != pThis)
+		{
+			LogBlockedOccupy(pThis, pCell, cell, "barrier", level, bridge, alt);
 
 			if (pBlocked)
 				*pBlocked = cell;
@@ -534,14 +647,17 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 		else if ((alt ? pCell->AltOccupationFlags : pCell->OccupationFlags) & 0x20)
 		{
 			// A vehicle bit without a matching object is either a stale
-			// footprint or a vanilla unit whose cell lookup is unavailable;
-			// either way it must not be treated as free.
-			LogBlockedOccupy(pThis, pCell, cell, "stale-flag", level, bridge, alt);
+			// footprint, a barrier cell, or a vanilla unit whose cell lookup is
+			// unavailable. Own barriers are passable for the hull itself.
+			if (!pBarrierOwner || pBarrierOwner != pThis)
+			{
+				LogBlockedOccupy(pThis, pCell, cell, "stale-flag", level, bridge, alt);
 
-			if (pBlocked)
-				*pBlocked = cell;
+				if (pBlocked)
+					*pBlocked = cell;
 
-			return false;
+				return false;
+			}
 		}
 
 		if (!config.Crush && pCell->GetInfantry(false))
@@ -640,11 +756,14 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 		}
 	}
 
+	const auto barriers = ComputeBarriers(span);
+
 	if (pState->Initialized
 		&& pState->Anchor == anchor
 		&& pState->Bucket == bucket
 		&& pState->Alt == alt
-		&& pState->Span == span)
+		&& pState->Span == span
+		&& pState->BarrierSpan == barriers)
 	{
 		return true;
 	}
@@ -667,15 +786,38 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 		SetOwner(cell, alt, pThis);
 	}
 
+	for (const auto& cell : barriers)
+	{
+		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+		if (!pCell)
+			continue;
+
+		// Never overwrite another hull or another unit's barrier.
+		if (const auto pOwner = OwnerAt(cell, alt); pOwner && pOwner != pThis)
+			continue;
+
+		if (const auto pBarrier = BarrierOwnerAt(cell, alt); pBarrier && pBarrier != pThis)
+			continue;
+
+		if (alt)
+			pCell->AltOccupationFlags |= 0x20;
+		else
+			pCell->OccupationFlags |= 0x20;
+
+		SetBarrierOwner(cell, alt, pThis);
+	}
+
 	pState->Initialized = true;
 	pState->Anchor = anchor;
 	pState->Bucket = bucket;
 	pState->Alt = alt;
 	pState->Span = span;
+	pState->BarrierSpan = barriers;
 
-	Debug::Log("[Footprint] span %s anchor=(%d,%d) bucket=%d cells=%d alt=%d%s\n",
+	Debug::Log("[Footprint] span %s anchor=(%d,%d) bucket=%d cells=%d barriers=%d alt=%d%s\n",
 		pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
-		static_cast<int>(span.size()), alt ? 1 : 0,
+		static_cast<int>(span.size()), static_cast<int>(barriers.size()), alt ? 1 : 0,
 		wasInitialized ? "" : " (initial)");
 
 	return true;
@@ -726,8 +868,31 @@ bool Footprint::Unmark(UnitClass* pThis)
 		}
 	}
 
+	for (const auto& cell : pState->BarrierSpan)
+	{
+		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+		if (!pCell)
+			continue;
+
+		if (BarrierOwnerAt(cell, false) == pThis)
+		{
+			pCell->OccupationFlags &= ~0x20;
+			ClearBarrierOwner(cell, false, pThis);
+		}
+
+		if (BarrierOwnerAt(cell, true) == pThis)
+		{
+			pCell->AltOccupationFlags &= ~0x20;
+			ClearBarrierOwner(cell, true, pThis);
+		}
+	}
+
 	pState->Initialized = false;
 	pState->Span.clear();
+	pState->BarrierSpan.clear();
+	pState->ReconcileActive = false;
+	pState->ReconcileTarget = -1;
 
 	return true;
 }
@@ -740,6 +905,8 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 		return false;
 
 	const auto& oldSpan = pState->Span;
+	const auto& oldBarriers = pState->BarrierSpan;
+	const auto newBarriers = ComputeBarriers(span);
 
 	for (const auto& cell : oldSpan)
 	{
@@ -762,6 +929,27 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 		}
 	}
 
+	for (const auto& cell : oldBarriers)
+	{
+		if (std::find(newBarriers.begin(), newBarriers.end(), cell) != newBarriers.end())
+			continue;
+
+		if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
+		{
+			if (BarrierOwnerAt(cell, false) == pThis)
+			{
+				pCell->OccupationFlags &= ~0x20;
+				ClearBarrierOwner(cell, false, pThis);
+			}
+
+			if (BarrierOwnerAt(cell, true) == pThis)
+			{
+				pCell->AltOccupationFlags &= ~0x20;
+				ClearBarrierOwner(cell, true, pThis);
+			}
+		}
+	}
+
 	for (const auto& cell : span)
 	{
 		if (std::find(oldSpan.begin(), oldSpan.end(), cell) != oldSpan.end())
@@ -778,11 +966,36 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 		}
 	}
 
+	for (const auto& cell : newBarriers)
+	{
+		if (std::find(oldBarriers.begin(), oldBarriers.end(), cell) != oldBarriers.end())
+			continue;
+
+		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+		if (!pCell)
+			continue;
+
+		if (const auto pOwner = OwnerAt(cell, alt); pOwner && pOwner != pThis)
+			continue;
+
+		if (const auto pBarrier = BarrierOwnerAt(cell, alt); pBarrier && pBarrier != pThis)
+			continue;
+
+		if (alt)
+			pCell->AltOccupationFlags |= 0x20;
+		else
+			pCell->OccupationFlags |= 0x20;
+
+		SetBarrierOwner(cell, alt, pThis);
+	}
+
 	pState->Initialized = true;
 	pState->Bucket = bucket;
 	pState->Anchor = anchor;
 	pState->Alt = alt;
 	pState->Span = span;
+	pState->BarrierSpan = newBarriers;
 
 	return true;
 }
@@ -800,6 +1013,8 @@ void Footprint::ClearAll()
 	EnsureGrid();
 	std::fill(s_ownerNormal.begin(), s_ownerNormal.end(), nullptr);
 	std::fill(s_ownerAlt.begin(), s_ownerAlt.end(), nullptr);
+	std::fill(s_barrierNormal.begin(), s_barrierNormal.end(), nullptr);
+	std::fill(s_barrierAlt.begin(), s_barrierAlt.end(), nullptr);
 
 	// Scenario start can run after map units have already been marked. Clearing
 	// only the owner grid would leave their 0x20 flags orphaned and make the
@@ -814,6 +1029,11 @@ void Footprint::ClearAll()
 		if (pState && pState->Initialized && !pState->Span.empty())
 		{
 			pState->Locked = false;
+			pState->ReconcileActive = false;
+			pState->ReconcileTarget = -1;
+
+			if (pState->BarrierSpan.empty())
+				pState->BarrierSpan = ComputeBarriers(pState->Span);
 
 			for (const auto& cell : pState->Span)
 			{
@@ -828,6 +1048,24 @@ void Footprint::ClearAll()
 					pCell->OccupationFlags |= 0x20;
 
 				SetOwner(cell, pState->Alt, pUnit);
+			}
+
+			for (const auto& cell : pState->BarrierSpan)
+			{
+				const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+				if (!pCell)
+					continue;
+
+				if (const auto pOwner = OwnerAt(cell, pState->Alt); pOwner && pOwner != pUnit)
+					continue;
+
+				if (pState->Alt)
+					pCell->AltOccupationFlags |= 0x20;
+				else
+					pCell->OccupationFlags |= 0x20;
+
+				SetBarrierOwner(cell, pState->Alt, pUnit);
 			}
 		}
 		else
@@ -891,4 +1129,117 @@ int Footprint::GetYSort(TechnoClass* pThis)
 		maxY = std::max<short>(maxY, offset.Y);
 
 	return base + (maxY - pState->Anchor.Y) * Unsorted::LeptonsPerCell;
+}
+
+void Footprint::ReconcileFacing(UnitClass* pThis)
+{
+	if (!pThis || !IsMultiCell(pThis))
+		return;
+
+	const auto pState = GetState(pThis);
+
+	if (!pState || !pState->Initialized)
+		return;
+
+	// The locomotor owns the hull while it is moving or executing its own turn.
+	if (pThis->Locomotor && pThis->Locomotor->Is_Moving_Now())
+		return;
+
+	if (pState->Locked && !pState->ReconcileActive)
+		return;
+
+	const int currentBucket = BucketFromFacing(pThis->PrimaryFacing.Current());
+
+	if (pState->ReconcileActive)
+	{
+		if (currentBucket == pState->ReconcileTarget)
+		{
+			const auto targetSpan = GetSpan(pThis, pState->Anchor, pState->ReconcileTarget);
+			CommitSpan(pThis, targetSpan, pState->ReconcileTarget, pState->Alt, pState->Anchor);
+			pState->Locked = false;
+			pState->ReconcileActive = false;
+			pState->ReconcileTarget = -1;
+
+			Debug::Log("[FootprintAim] %s finished bucket %d at (%d,%d)\n",
+				pThis->GetTechnoType()->ID, currentBucket,
+				pState->Anchor.X, pState->Anchor.Y);
+		}
+		else if (!pThis->PrimaryFacing.IsRotating())
+		{
+			// The desired direction changed (or the rotation was interrupted)
+			// and the old target will never be reached. Commit whatever bucket
+			// the hull actually reached and release the sweep.
+			const auto currentSpan = GetSpan(pThis, pState->Anchor, currentBucket);
+			CommitSpan(pThis, currentSpan, currentBucket, pState->Alt, pState->Anchor);
+			pState->Locked = false;
+			pState->ReconcileActive = false;
+			pState->ReconcileTarget = -1;
+
+			Debug::Log("[FootprintAim] %s interrupted, committed bucket %d at (%d,%d)\n",
+				pThis->GetTechnoType()->ID, currentBucket,
+				pState->Anchor.X, pState->Anchor.Y);
+		}
+
+		return;
+	}
+
+	if (currentBucket == pState->Bucket)
+		return;
+
+	const int from = pState->Bucket;
+	const int desiredBucket = BucketFromFacing(pThis->PrimaryFacing.Desired());
+	int target = desiredBucket != from ? desiredBucket : currentBucket;
+
+	if (target == from)
+		return;
+
+	const int delta = (target - from + 8) & 7;
+	const bool tryClockwise = delta <= 4;
+	const bool tryCounterClockwise = delta >= 4;
+
+	auto tryDirection = [&](bool clockwise) -> bool
+	{
+		const auto sweep = GetSweepAt(pThis, pState->Anchor, from, target, clockwise);
+
+		if (sweep.empty()
+			|| !CanOccupy(pThis, sweep, pState->Alt, pState->Anchor))
+		{
+			return false;
+		}
+
+		CommitSpan(pThis, sweep, from, pState->Alt, pState->Anchor);
+		pState->Locked = true;
+		pState->ReconcileActive = true;
+		pState->ReconcileTarget = target;
+
+		Debug::Log("[FootprintAim] %s bucket %d -> %d (%s) at (%d,%d), sweep=%d barriers=%d\n",
+			pThis->GetTechnoType()->ID, from, target,
+			clockwise ? "cw" : "ccw",
+			pState->Anchor.X, pState->Anchor.Y,
+			static_cast<int>(sweep.size()),
+			static_cast<int>(pState->BarrierSpan.size()));
+
+		return true;
+	};
+
+	if (tryClockwise && tryDirection(true))
+		return;
+
+	if (tryCounterClockwise && tryDirection(false))
+		return;
+
+	// The hull cannot sweep to the aim direction. Keep the visual hull aligned
+	// with the collision footprint instead of showing a turn that never happens.
+	pThis->PrimaryFacing.SetCurrent(DirStruct(from * 0x2000));
+
+	static int lastLogFrame = -1000;
+
+	if (Unsorted::CurrentFrame - lastLogFrame >= 30)
+	{
+		lastLogFrame = Unsorted::CurrentFrame;
+
+		Debug::Log("[FootprintAim] %s blocked %d -> %d at (%d,%d), snapped back\n",
+			pThis->GetTechnoType()->ID, from, target,
+			pState->Anchor.X, pState->Anchor.Y);
+	}
 }

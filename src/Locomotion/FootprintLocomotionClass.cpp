@@ -217,7 +217,11 @@ void FootprintLocomotionClass::Stop_Moving()
 	if (auto const pUnit = abstract_cast<UnitClass*>(pLinked))
 	{
 		if (auto const pState = Footprint::GetState(pUnit))
+		{
 			pState->Locked = false;
+			pState->ReconcileActive = false;
+			pState->ReconcileTarget = -1;
+		}
 
 		Footprint::Mark(pUnit, pLinked->Location);
 	}
@@ -294,6 +298,15 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 
 	if (!pUnit || !pState)
 		return false;
+
+	if (pState->ReconcileActive)
+	{
+		const auto currentSpan = Footprint::GetSpan(pUnit, pState->Anchor, pState->Bucket);
+		Footprint::CommitSpan(pUnit, currentSpan, pState->Bucket, pState->Alt, pState->Anchor);
+		pState->ReconcileActive = false;
+		pState->ReconcileTarget = -1;
+		pState->Locked = false;
+	}
 
 	const int from = pState->Initialized ? pState->Bucket : Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
 	const int to = targetBucket & 7;
@@ -389,8 +402,18 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 	const int bucket = pState->Initialized ? pState->Bucket : Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
 	const CellStruct next = step.Cell;
 
-	if (pState->Locked)
+	if (pState->ReconcileActive)
+	{
+		const auto currentSpan = Footprint::GetSpan(pUnit, pState->Anchor, pState->Bucket);
+		Footprint::CommitSpan(pUnit, currentSpan, pState->Bucket, pState->Alt, pState->Anchor);
+		pState->ReconcileActive = false;
+		pState->ReconcileTarget = -1;
 		pState->Locked = false;
+	}
+	else if (pState->Locked)
+	{
+		pState->Locked = false;
+	}
 
 	const auto nextSpan = Footprint::GetSpan(pUnit, next, bucket);
 
