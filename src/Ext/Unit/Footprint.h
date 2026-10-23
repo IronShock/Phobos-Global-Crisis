@@ -33,9 +33,10 @@ struct FootprintConfig
 	int FireArc = 0;      // 0 = keep the vanilla firing arc
 
 	// Offset of the rectangle centre from the anchor cell, in cells, along the
-	// hull's local axes. Reserved for even-sized hulls (e.g. 7x2); 0 for now.
-	int PivotForward = 0;
-	int PivotLateral = 0;
+	// hull's local axes. Useful for even-sized hulls or art whose origin is not
+	// the geometric centre.
+	double PivotForward = 0.0;
+	double PivotLateral = 0.0;
 };
 
 struct FootprintGeometry
@@ -97,7 +98,7 @@ public:
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, CellStruct* pBlocked = nullptr);
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, const CellStruct& anchor, CellStruct* pBlocked = nullptr);
 	static bool Mark(UnitClass* pThis, const CoordStruct& coords);
-	static bool Unmark(UnitClass* pThis);
+	static bool Unmark(UnitClass* pThis, const CoordStruct* pCoords = nullptr);
 	static bool CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span, int bucket, bool alt, const CellStruct& anchor);
 	static void Release(UnitClass* pThis);
 	static void ClearAll();
@@ -107,4 +108,5 @@ public:
 
 	static int GetYSort(TechnoClass* pThis);
 	static bool IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt);
+	static bool HasObstacleNear(TechnoClass* pThis, int radius);
 };

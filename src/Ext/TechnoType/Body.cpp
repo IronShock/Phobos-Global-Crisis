@@ -1238,8 +1238,17 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			const char* pivot = exINI.value();
 
 			if (_stricmp(pivot, "center") != 0)
-				Debug::Log("[Footprint] [%s] Foundation.Pivot=%s is not supported yet; using center.\n", pSection, pivot);
+				Debug::Log("[Footprint] [%s] Foundation.Pivot=%s is not supported; use PivotForward/PivotLateral.\n", pSection, pivot);
 		}
+
+		double pivotForward = this->MultiCell.PivotForward;
+		double pivotLateral = this->MultiCell.PivotLateral;
+
+		if (exINI.ReadDouble(pSection, "Foundation.PivotForward", &pivotForward))
+			this->MultiCell.PivotForward = pivotForward;
+
+		if (exINI.ReadDouble(pSection, "Foundation.PivotLateral", &pivotLateral))
+			this->MultiCell.PivotLateral = pivotLateral;
 
 		if (this->MultiCell.Enabled)
 		{
@@ -1247,14 +1256,16 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			this->OwnerObject()->Locomotor = __uuidof(FootprintLocomotionClass);
 			this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
 
-			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d, forced FootprintLocomotionClass\n",
+			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f, forced FootprintLocomotionClass\n",
 				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0,
 				static_cast<int>(this->OwnerObject()->SpeedType),
 				static_cast<int>(this->OwnerObject()->MovementZone),
 				this->OwnerObject()->Speed,
 				this->OwnerObject()->ROT,
 				this->OwnerObject()->Turret ? 1 : 0,
-				this->OwnerObject()->TurretCount);
+				this->OwnerObject()->TurretCount,
+				this->MultiCell.PivotForward,
+				this->MultiCell.PivotLateral);
 		}
 	}
 

@@ -8,6 +8,7 @@
 #include <Ext/Rules/Body.h>
 #include <Ext/Techno/Body.h>
 #include <Ext/TechnoType/Body.h>
+#include <Ext/Unit/Footprint.h>
 
 // Pathfinding failure throttle: a foot that keeps failing to reach its
 // destination would otherwise re-run the full A* (the whole-map "A* without HS"
@@ -37,14 +38,23 @@ void TechnoExt::ClearPathfindingCaches()
 	s_straightCache.clear();
 }
 
+static int PathFailCooldownFrames(FootClass* pThis)
+{
+	// Dynamic multi-cell hulls and barrier cells appear/disappear while the ship
+	// moves. Do not freeze nearby units for the full 90-frame throttle; give
+	// them a short retry window so they can re-plan around the hull.
+	return Footprint::HasObstacleNear(pThis, 8) ? 15 : 90;
+}
+
 static bool PathFailCooldownActive(FootClass* pThis, int frame)
 {
 	auto& track = s_pathFail[pThis];
+	const int cooldown = PathFailCooldownFrames(pThis);
 
-	if (frame - track.second >= 90)
+	if (frame - track.second >= cooldown)
 		track.first = 0; // cooldown expired, allow retries
 
-	return track.first >= 3 && frame - track.second < 90;
+	return track.first >= 3 && frame - track.second < cooldown;
 }
 
 static void PathFailPrune(int frame)
@@ -103,11 +113,12 @@ DEFINE_HOOK(0x4D3989, FootClass_FindPath_FailureTrack, 0xA)
 	GET(FootClass* const, pThis, EBP);
 
 	auto& track = s_pathFail[pThis];
+	const int cooldown = PathFailCooldownFrames(pThis);
 
 	// While already in the cooldown, do not re-stamp the timestamp, otherwise
-	// `frame - track.second < 90` never becomes false and the cooldown would
-	// never expire, leaving the unit permanently unable to pathfind.
-	if (track.first >= 3 && Unsorted::CurrentFrame - track.second < 90)
+	// `frame - track.second < cooldown` never becomes false and the cooldown
+	// would never expire, leaving the unit permanently unable to pathfind.
+	if (track.first >= 3 && Unsorted::CurrentFrame - track.second < cooldown)
 		return 0;
 
 	track.first = track.first < 3 ? track.first + 1 : 3;

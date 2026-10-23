@@ -65,7 +65,7 @@ void __fastcall UnitClass_ClearOccupyBit_Reimpl(UnitClass* pThis, void*, CoordSt
 
 	if (Footprint::IsMultiCell(pThis))
 	{
-		Footprint::Unmark(pThis);
+		Footprint::Unmark(pThis, pCrd);
 
 		CellClass* pCell = MapClass::Instance.GetCellAt(*pCrd);
 		auto pCellExt = CellExt::ExtMap.Find(pCell);

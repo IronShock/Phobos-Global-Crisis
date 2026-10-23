@@ -532,6 +532,40 @@ bool Footprint::IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt)
 	return false;
 }
 
+bool Footprint::HasObstacleNear(TechnoClass* pThis, int radius)
+{
+	if (!pThis || radius <= 0)
+		return false;
+
+	const auto center = pThis->GetMapCoords();
+
+	for (int dy = -radius; dy <= radius; ++dy)
+	{
+		for (int dx = -radius; dx <= radius; ++dx)
+		{
+			const CellStruct cell
+			{
+				static_cast<short>(center.X + dx),
+				static_cast<short>(center.Y + dy)
+			};
+
+			if (const auto pOwner = OwnerAt(cell, false); pOwner && pOwner != pThis)
+				return true;
+
+			if (const auto pBarrier = BarrierOwnerAt(cell, false); pBarrier && pBarrier != pThis)
+				return true;
+
+			if (const auto pOwner = OwnerAt(cell, true); pOwner && pOwner != pThis)
+				return true;
+
+			if (const auto pBarrier = BarrierOwnerAt(cell, true); pBarrier && pBarrier != pThis)
+				return true;
+		}
+	}
+
+	return false;
+}
+
 bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, CellStruct* pBlocked)
 {
 	return pThis
@@ -823,7 +857,7 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	return true;
 }
 
-bool Footprint::Unmark(UnitClass* pThis)
+bool Footprint::Unmark(UnitClass* pThis, const CoordStruct* pCoords)
 {
 	const auto pState = GetState(pThis);
 
@@ -833,6 +867,18 @@ bool Footprint::Unmark(UnitClass* pThis)
 	// A locked hull is mid-turn; the sweep is released by the turn controller.
 	if (pState->Locked)
 		return true;
+
+	// The engine routinely unmarks and re-marks a stationary unit every frame.
+	// Clearing the footprint here would make the hull and its barriers flicker,
+	// so other units would plan through a momentarily free cell and then stall.
+	// Only a real relocation (different anchor) or Limbo/Release force-clears.
+	if (pCoords && pThis->IsAlive && !pThis->InLimbo)
+	{
+		const auto coordsAnchor = AnchorFromCoords(*pCoords);
+
+		if (pState->Anchor == coordsAnchor)
+			return true;
+	}
 
 	auto span = pState->Span;
 
