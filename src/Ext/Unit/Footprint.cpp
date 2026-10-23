@@ -809,13 +809,31 @@ void Footprint::ClearAll()
 		if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo || !IsMultiCell(pUnit))
 			continue;
 
-		if (auto const pState = GetState(pUnit))
-		{
-			pState->Initialized = false;
-			pState->Locked = false;
-		}
+		const auto pState = GetState(pUnit);
 
-		Mark(pUnit, pUnit->Location);
+		if (pState && pState->Initialized && !pState->Span.empty())
+		{
+			pState->Locked = false;
+
+			for (const auto& cell : pState->Span)
+			{
+				const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+				if (!pCell)
+					continue;
+
+				if (pState->Alt)
+					pCell->AltOccupationFlags |= 0x20;
+				else
+					pCell->OccupationFlags |= 0x20;
+
+				SetOwner(cell, pState->Alt, pUnit);
+			}
+		}
+		else
+		{
+			Mark(pUnit, pUnit->Location);
+		}
 	}
 }
 
