@@ -35,6 +35,8 @@
 #include <Utilities/Debug.h>
 #include <Utilities/TemplateDef.h>
 
+#include <unordered_set>
+
 /*
 	Allow usage of TileSet of 255 and above without making NE-SW broken bridges unrepairable
 
@@ -2199,6 +2201,15 @@ namespace DamageAreaTemp
 {
 	const CellClass* CheckingCell = nullptr;
 	bool CheckingCellAlt = false;
+	std::unordered_set<UnitClass*> FootprintOwners;
+}
+
+// A damage pass visits every hull cell of a multi-cell unit. Keep one entry per
+// hull per pass so the owner receives the warhead exactly once.
+DEFINE_HOOK(0x48928C, DamageArea_ClearFootprintDedupe, 0x5)
+{
+	DamageAreaTemp::FootprintOwners.clear();
+	return 0;
 }
 
 // Skip useless alt check, so it will only start checking from the cell's FirstObject
@@ -2237,6 +2248,9 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	if (pObject)
 	{
+		if (!DamageAreaTemp::FootprintOwners.insert(static_cast<UnitClass*>(pObject)).second)
+			return CheckNextCell;
+
 		DamageAreaTemp::CheckingCellAlt = false;
 		R->ESI(pObject);
 		return CheckThisObject;
@@ -2246,6 +2260,9 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	if (pObject)
 	{
+		if (!DamageAreaTemp::FootprintOwners.insert(static_cast<UnitClass*>(pObject)).second)
+			return CheckNextCell;
+
 		DamageAreaTemp::CheckingCellAlt = true;
 		R->ESI(pObject);
 		return CheckThisObject;
