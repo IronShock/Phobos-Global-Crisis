@@ -161,6 +161,9 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	const CellStruct start = pLinked->GetMapCoords();
 	const CellStruct goal = CellClass::Coord2Cell(to);
 
+	Debug::Log("[FootprintMove] %s Move_To (%d,%d) from cell (%d,%d)\n",
+		pLinked->GetTechnoType()->ID, to.X, to.Y, start.X, start.Y);
+
 	if (!MapClass::Instance.CellExists(goal))
 	{
 		this->ClearPath();
@@ -206,7 +209,12 @@ void FootprintLocomotionClass::Stop_Moving()
 	pLinked->SetSpeedPercentage(0.0);
 
 	if (auto const pUnit = abstract_cast<UnitClass*>(pLinked))
+	{
+		if (auto const pState = Footprint::GetState(pUnit))
+			pState->Locked = false;
+
 		Footprint::Mark(pUnit, pLinked->Location);
+	}
 }
 
 void FootprintLocomotionClass::Do_Turn(DirStruct dir)
@@ -305,6 +313,7 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 		}
 
 		Footprint::CommitSpan(pUnit, sweep, from, pState->Alt, anchor);
+		pState->Locked = true;
 		pLinked->PrimaryFacing.SetDesired(DirStruct(to * 0x2000));
 		pLinked->SetSpeedPercentage(0.0);
 
@@ -347,6 +356,7 @@ void FootprintLocomotionClass::FinishTurn(const CellStruct& anchor)
 	{
 		const auto span = Footprint::GetSpan(pUnit, anchor, this->TurnTargetBucket);
 		Footprint::CommitSpan(pUnit, span, this->TurnTargetBucket, pState->Alt, anchor);
+		pState->Locked = false;
 	}
 
 	this->Turning = false;
@@ -372,6 +382,10 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 
 	const int bucket = pState->Initialized ? pState->Bucket : Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
 	const CellStruct next = step.Cell;
+
+	if (pState->Locked)
+		pState->Locked = false;
+
 	const auto nextSpan = Footprint::GetSpan(pUnit, next, bucket);
 
 	if (!Footprint::CanOccupy(pUnit, nextSpan, pState->Alt, next))

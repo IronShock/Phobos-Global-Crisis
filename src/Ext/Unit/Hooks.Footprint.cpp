@@ -71,29 +71,3 @@ DEFINE_HOOK(0x7353C4, UnitClass_Constructor_ForceFootprintLocomotion, 0x5)
 
 	DEFINE_FUNCTION_JUMP(LJMP, 0x47EBA0, CellClass_GetUnit_Reimpl);
 
-	// GetSomeObject is used by mouse picking. Fall back to the footprint owner
-	// when the cell itself contains no object. The test+jne at the hook site is
-	// replaced with the equivalent branches.
-	DEFINE_HOOK(0x47C5DD, CellClass_GetSomeObject_FootprintFallback, 0x2)
-	{
-		enum { ReturnObject = 0x47C609, CheckTerrain = 0x47C5E1 };
-
-		if (R->EAX() != 0)
-			return ReturnObject;
-
-		auto* const pCell = reinterpret_cast<CellClass*>(R->EDI());
-
-		if (auto const pOwner = Footprint::OwnerAt(pCell, false))
-		{
-			R->EAX(pOwner);
-			return ReturnObject;
-		}
-
-		if (auto const pOwner = Footprint::OwnerAt(pCell, true))
-		{
-			R->EAX(pOwner);
-			return ReturnObject;
-		}
-
-		return CheckTerrain;
-	}

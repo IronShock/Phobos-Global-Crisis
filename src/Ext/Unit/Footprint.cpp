@@ -494,6 +494,11 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	if (!pState)
 		return false;
 
+	// While the turn controller owns the hull, the reserved sweep must not be
+	// replaced by the engine's mid-rotation footprint updates.
+	if (pState->Locked)
+		return true;
+
 	const auto anchor = AnchorFromCoords(coords);
 	const int bucket = BucketFromFacing(pThis->PrimaryFacing.Current());
 	const auto span = GetSpan(pThis, anchor, bucket);
@@ -552,6 +557,10 @@ bool Footprint::Unmark(UnitClass* pThis)
 
 	if (!pThis || !pState || !pState->Initialized)
 		return false;
+
+	// A locked hull is mid-turn; the sweep is released by the turn controller.
+	if (pState->Locked)
+		return true;
 
 	auto span = pState->Span;
 
@@ -650,6 +659,9 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 
 void Footprint::Release(UnitClass* pThis)
 {
+	if (auto const pState = GetState(pThis))
+		pState->Locked = false;
+
 	Unmark(pThis);
 }
 

@@ -54,6 +54,7 @@ struct FootprintGeometry
 struct FootprintState
 {
 	bool Initialized = false;
+	bool Locked = false;
 	int Bucket = 0;
 	CellStruct Anchor { 0, 0 };
 	bool Alt = false;
