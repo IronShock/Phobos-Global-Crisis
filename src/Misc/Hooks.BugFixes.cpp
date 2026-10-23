@@ -2253,6 +2253,11 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 		DamageAreaTemp::CheckingCellAlt = false;
 		R->ESI(pObject);
+
+		Debug::Log("[FootprintDamage] cell=(%d,%d) owner=%s\n",
+			pCell->MapCoords.X, pCell->MapCoords.Y,
+			static_cast<UnitClass*>(pObject)->Type->ID);
+
 		return CheckThisObject;
 	}
 
@@ -2265,6 +2270,11 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 		DamageAreaTemp::CheckingCellAlt = true;
 		R->ESI(pObject);
+
+		Debug::Log("[FootprintDamage] cell=(%d,%d) owner=%s (alt)\n",
+			pCell->MapCoords.X, pCell->MapCoords.Y,
+			static_cast<UnitClass*>(pObject)->Type->ID);
+
 		return CheckThisObject;
 	}
 

@@ -923,6 +923,12 @@ DEFINE_HOOK(0x6DA4FB, TacticalClass_SelectAt_TransparentToMouse_OccupierPtr, 0x6
 
 		if (!pFoundObject)
 			pFoundObject = Footprint::OwnerAt(pCell, true);
+
+		if (auto const pOwnerUnit = abstract_cast<UnitClass*>(pFoundObject))
+		{
+			Debug::Log("[FootprintSelect] cell=(%d,%d) owner=%s\n",
+				pCell->MapCoords.X, pCell->MapCoords.Y, pOwnerUnit->Type->ID);
+		}
 	}
 
 	R->EAX<ObjectClass*>(pFoundObject);
