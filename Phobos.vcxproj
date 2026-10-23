@@ -213,6 +213,7 @@
     <ClCompile Include="src\Ext\Unit\Hooks.Jumpjet.cpp" />
     <ClCompile Include="src\Ext\Unit\Footprint.cpp" />
     <ClCompile Include="src\Ext\Unit\Hooks.Footprint.cpp" />
+    <ClCompile Include="src\Ext\Unit\FootprintDebug.cpp" />
     <ClCompile Include="src\Ext\WarheadType\Detonate.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.WeaponEffects.cpp" />
     <ClCompile Include="src\Ext\Techno\Hooks.Tint.cpp" />
@@ -312,6 +313,7 @@
     <ClInclude Include="src\Ext\Bullet\Trajectories\ParabolaTrajectory.h" />
     <ClInclude Include="src\Ext\OverlayType\Body.h" />
     <ClInclude Include="src\Ext\Unit\Footprint.h" />
+    <ClInclude Include="src\Ext\Unit\FootprintDebug.h" />
     <ClInclude Include="src\Ext\ParticleType\Body.h" />
     <ClInclude Include="src\Ext\Sidebar\Body.h" />
     <ClInclude Include="src\Ext\Anim\Body.h" />

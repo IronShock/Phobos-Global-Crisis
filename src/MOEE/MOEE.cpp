@@ -3,6 +3,7 @@
 #include <Phobos.h>
 #include <SessionClass.h>
 #include <Unsorted.h>
+#include <Ext/Unit/FootprintDebug.h>
 #include <Utilities/Debug.h>
 
 #include <cstdarg>
@@ -104,5 +105,6 @@ namespace MOEE
 		DeployPreview::Draw();
 		WeaponRange::Draw();
 		GridView::Draw();
+		FootprintDebug::Draw();
 	}
 }
