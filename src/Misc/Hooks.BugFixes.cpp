@@ -29,6 +29,7 @@
 #include <Ext/AnimType/Body.h>
 #include <Ext/SWType/Body.h>
 #include <Ext/WarheadType/Body.h>
+#include <Ext/Unit/Footprint.h>
 
 #include <Utilities/Macro.h>
 #include <Utilities/Debug.h>
@@ -2221,13 +2222,36 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	pObject = pCell->AltObject;
 
-	if (!pObject)
-		return CheckNextCell;
+	if (pObject)
+	{
+		DamageAreaTemp::CheckingCellAlt = true;
+		R->ESI(pObject);
+		return CheckThisObject;
+	}
 
-	DamageAreaTemp::CheckingCellAlt = true;
+	// A multi-cell hull keeps only its anchor object in the cell list. When the
+	// damage pass reaches one of its other hull cells, feed the footprint owner
+	// through the normal DistanceArea path. This is a read-only lookup; nothing
+	// is inserted into FirstObject/AltObject.
+	pObject = Footprint::OwnerAt(pCell, false);
 
-	R->ESI(pObject);
-	return CheckThisObject;
+	if (pObject)
+	{
+		DamageAreaTemp::CheckingCellAlt = false;
+		R->ESI(pObject);
+		return CheckThisObject;
+	}
+
+	pObject = Footprint::OwnerAt(pCell, true);
+
+	if (pObject)
+	{
+		DamageAreaTemp::CheckingCellAlt = true;
+		R->ESI(pObject);
+		return CheckThisObject;
+	}
+
+	return CheckNextCell;
 }
 
 DEFINE_HOOK(0x4899B3, DamageArea_DamageItemsFix2, 0x5)

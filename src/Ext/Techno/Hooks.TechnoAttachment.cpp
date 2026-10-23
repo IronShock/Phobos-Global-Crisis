@@ -917,6 +917,14 @@ DEFINE_HOOK(0x6DA4FB, TacticalClass_SelectAt_TransparentToMouse_OccupierPtr, 0x6
 		break;
 	}
 
+	if (!pFoundObject)
+	{
+		pFoundObject = Footprint::OwnerAt(pCell, false);
+
+		if (!pFoundObject)
+			pFoundObject = Footprint::OwnerAt(pCell, true);
+	}
+
 	R->EAX<ObjectClass*>(pFoundObject);
 	return 0x6DA501;
 }
