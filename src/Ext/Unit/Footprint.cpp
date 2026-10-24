@@ -629,6 +629,7 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 	const auto pAnchorCell = MapClass::Instance.GetCellAt(anchor);
 	const int level = pAnchorCell->GetLevel();
 	const bool bridge = pAnchorCell->ContainsBridge();
+	const int maxClimb = std::max(0, config.MaxClimb);
 
 	// [CDEST] relies on inherited MovementZone; if a hull uses Float but inherited
 	// Normal/None, treat it as Water instead of rejecting every water cell.
@@ -666,9 +667,21 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 			return false;
 		}
 
-		if (pCell->GetLevel() != level || pCell->ContainsBridge() != bridge)
+		if (pCell->ContainsBridge() != bridge)
 		{
 			LogBlockedOccupy(pThis, pCell, cell, "level-bridge", level, bridge, alt);
+
+			if (pBlocked)
+				*pBlocked = cell;
+
+			return false;
+		}
+
+		const int cellLevel = pCell->GetLevel();
+
+		if (std::abs(cellLevel - level) > maxClimb)
+		{
+			LogBlockedOccupy(pThis, pCell, cell, "slope", level, bridge, alt);
 
 			if (pBlocked)
 				*pBlocked = cell;
@@ -679,7 +692,7 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 		// Ignore infantry and vehicles here; vehicles are checked below so that
 		// the unit's own footprint cells stay passable, and infantry is handled
 		// by the crush setting.
-		if (!pCell->IsClearToMove(pType->SpeedType, true, true, -1, movementZone, level, bridge))
+		if (!pCell->IsClearToMove(pType->SpeedType, true, true, -1, movementZone, cellLevel, bridge))
 		{
 			LogBlockedOccupy(pThis, pCell, cell, "clear-to-move", level, bridge, alt);
 
@@ -767,6 +780,21 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 	}
 
 	return true;
+}
+
+bool Footprint::IsClimbAllowed(UnitClass* pThis, const CellStruct& from, const CellStruct& to)
+{
+	if (!pThis)
+		return false;
+
+	const auto pFromCell = MapClass::Instance.TryGetCellAt(from);
+	const auto pToCell = MapClass::Instance.TryGetCellAt(to);
+
+	if (!pFromCell || !pToCell || pFromCell->ContainsBridge() != pToCell->ContainsBridge())
+		return false;
+
+	const auto& config = GetConfig(pThis->GetTechnoType());
+	return std::abs(pToCell->GetLevel() - pFromCell->GetLevel()) <= std::max(0, config.MaxClimb);
 }
 
 bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)

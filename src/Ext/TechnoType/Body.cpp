@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 #include <Ext/Anim/Body.h>
 #include <Ext/BuildingType/Body.h>
@@ -1221,6 +1222,11 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 		if (exINI.ReadInteger(pSection, "Foundation.FireArc", &fireArc))
 			this->MultiCell.FireArc = fireArc;
 
+		int maxClimb = this->MultiCell.MaxClimb;
+
+		if (exINI.ReadInteger(pSection, "Foundation.MaxClimb", &maxClimb))
+			this->MultiCell.MaxClimb = std::clamp(maxClimb, 0, 15);
+
 		if (exINI.ReadString(pSection, "Foundation.TurnMode"))
 		{
 			const char* mode = exINI.value();
@@ -1256,7 +1262,7 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			this->OwnerObject()->Locomotor = __uuidof(FootprintLocomotionClass);
 			this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
 
-			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f, forced FootprintLocomotionClass\n",
+			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f MaxClimb=%d, forced FootprintLocomotionClass\n",
 				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0,
 				static_cast<int>(this->OwnerObject()->SpeedType),
 				static_cast<int>(this->OwnerObject()->MovementZone),
@@ -1265,7 +1271,8 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 				this->OwnerObject()->Turret ? 1 : 0,
 				this->OwnerObject()->TurretCount,
 				this->MultiCell.PivotForward,
-				this->MultiCell.PivotLateral);
+				this->MultiCell.PivotLateral,
+				this->MultiCell.MaxClimb);
 		}
 	}
 

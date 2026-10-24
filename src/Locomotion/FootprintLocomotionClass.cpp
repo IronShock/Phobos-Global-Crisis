@@ -485,6 +485,12 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 
 	const auto nextSpan = Footprint::GetSpan(pUnit, next, bucket);
 
+	if (!Footprint::IsClimbAllowed(pUnit, anchor, next))
+	{
+		this->LogBlocked("slope", next);
+		return false;
+	}
+
 	if (!Footprint::CanOccupy(pUnit, nextSpan, pState->Alt, next))
 	{
 		this->LogBlocked("move", next);
@@ -494,8 +500,13 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 	const auto currentSpan = Footprint::GetSpan(pUnit, anchor, bucket);
 	Footprint::CommitSpan(pUnit, UnionSpans(currentSpan, nextSpan), bucket, pState->Alt, anchor);
 
+	const auto pNextCell = MapClass::Instance.TryGetCellAt(next);
+	const int nextZ = pNextCell
+		? (pState->Alt ? pNextCell->GetCoordsWithBridge().Z : pNextCell->GetCoords().Z)
+		: pLinked->Location.Z;
+
 	this->MoveTargetCell = next;
-	this->HeadToCoord = CellClass::Cell2Coord(next, pLinked->Location.Z);
+	this->HeadToCoord = CellClass::Cell2Coord(next, nextZ);
 	pLinked->SetSpeedPercentage(1.0);
 
 	return true;

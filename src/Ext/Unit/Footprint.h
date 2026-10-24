@@ -31,6 +31,9 @@ struct FootprintConfig
 	bool TurnAssist = true;
 	bool Crush = true;
 	int FireArc = 0;      // 0 = keep the vanilla firing arc
+	// Maximum height-level difference allowed inside the footprint and between
+	// consecutive movement cells. 0 keeps the old strict flat-footprint rule.
+	int MaxClimb = 1;
 
 	// Offset of the rectangle centre from the anchor cell, in cells, along the
 	// hull's local axes. Useful for even-sized hulls or art whose origin is not
@@ -100,6 +103,7 @@ public:
 
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, CellStruct* pBlocked = nullptr);
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, const CellStruct& anchor, CellStruct* pBlocked = nullptr);
+	static bool IsClimbAllowed(UnitClass* pThis, const CellStruct& from, const CellStruct& to);
 	static bool Mark(UnitClass* pThis, const CoordStruct& coords);
 	static bool Unmark(UnitClass* pThis, const CoordStruct* pCoords = nullptr);
 	static bool CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span, int bucket, bool alt, const CellStruct& anchor);

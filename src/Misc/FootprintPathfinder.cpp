@@ -207,6 +207,10 @@ bool FootprintPathfinder::FindPath(
 				continue;
 
 			const CellStruct next { static_cast<short>(nx), static_cast<short>(ny) };
+
+			if (!Footprint::IsClimbAllowed(pUnit, cell, next))
+				continue;
+
 			const auto span = Footprint::GetSpan(pUnit, next, bucket);
 
 			if (!Footprint::CanOccupy(pUnit, span, alt, next))
