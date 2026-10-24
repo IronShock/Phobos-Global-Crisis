@@ -2310,6 +2310,11 @@ DEFINE_HOOK(0x489A9E, DamageArea_FootprintApplyDedupe, 0x6)
 {
 	enum { Continue = 0x489AA4, SkipEntry = 0x489AC1 };
 
+	// The original instruction at this address loads the vtable into EDX and the
+	// damage call at 0x489AB6 uses EDX. A C++ hook may clobber caller-saved
+	// registers, so preserve it explicitly.
+	auto const vtable = R->EDX();
+
 	GET(ObjectClass*, pObject, ESI);
 
 	if (const auto pUnit = abstract_cast<UnitClass*>(pObject);
@@ -2319,6 +2324,7 @@ DEFINE_HOOK(0x489A9E, DamageArea_FootprintApplyDedupe, 0x6)
 			return SkipEntry;
 	}
 
+	R->EDX(vtable);
 	return Continue;
 }
 

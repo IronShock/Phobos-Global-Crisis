@@ -92,14 +92,8 @@ public:
 			{ pRect->Left, pRect->Top + pRect->Bottom }
 		};
 
-		for (const auto& offset : pState->Span)
+		for (const auto& cell : pState->Span)
 		{
-			const CellStruct cell
-			{
-				static_cast<short>(pState->Anchor.X + offset.X),
-				static_cast<short>(pState->Anchor.Y + offset.Y)
-			};
-
 			const auto pCell = MapClass::Instance.TryGetCellAt(cell);
 
 			if (!pCell)
