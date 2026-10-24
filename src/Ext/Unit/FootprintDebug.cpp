@@ -1,5 +1,7 @@
 #include "FootprintDebug.h"
 
+#include <algorithm>
+
 #include <CellClass.h>
 #include <CCINIClass.h>
 #include <HouseClass.h>
@@ -141,6 +143,44 @@ namespace
 
 		pSurface->FillRect(&rect, RGB(255, 255, 255));
 	}
+
+	void DrawReservationOutline(Surface* pSurface, const FootprintState* pState)
+	{
+		if (pState->ReservedSpan.empty())
+			return;
+
+		short minX = pState->ReservedSpan.front().X;
+		short maxX = minX;
+		short minY = pState->ReservedSpan.front().Y;
+		short maxY = minY;
+
+		for (const auto& cell : pState->ReservedSpan)
+		{
+			minX = std::min(minX, cell.X);
+			maxX = std::max(maxX, cell.X);
+			minY = std::min(minY, cell.Y);
+			maxY = std::max(maxY, cell.Y);
+		}
+
+		const auto pAnchorCell = MapClass::Instance.TryGetCellAt(pState->Anchor);
+		const int z = pAnchorCell ? pAnchorCell->GetCoordsWithBridge().Z : 0;
+
+		Point2D p0, p1, p2, p3;
+
+		if (!ProjectCorner(minX, minY, z, p0)
+			|| !ProjectCorner(maxX + 1, minY, z, p1)
+			|| !ProjectCorner(maxX + 1, maxY + 1, z, p2)
+			|| !ProjectCorner(minX, maxY + 1, z, p3))
+		{
+			return;
+		}
+
+		const COLORREF color = RGB(255, 255, 0);
+		DrawThickLine(pSurface, p0, p1, color);
+		DrawThickLine(pSurface, p1, p2, color);
+		DrawThickLine(pSurface, p2, p3, color);
+		DrawThickLine(pSurface, p3, p0, color);
+	}
 }
 
 void FootprintDebug::Draw()
@@ -168,6 +208,23 @@ void FootprintDebug::Draw()
 
 		const bool own = !pUnit->Owner || pUnit->Owner == HouseClass::CurrentPlayer;
 		const COLORREF color = GetColor(pUnit, pState, own);
+		const bool turning = pState->Locked || pState->ReconcileActive;
+
+		if (turning)
+		{
+			// The reservation is a stable rectangle for the whole turn. Draw only
+			// its outline; drawing every reserved cell produces a dense, flickering
+			// grid together with the hull and the per-bucket barrier cells.
+			DrawReservationOutline(pSurface, pState);
+		}
+		else
+		{
+			for (const auto& cell : pState->BarrierSpan)
+			{
+				if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
+					DrawCell(pSurface, pCell, RGB(255, 140, 0), false);
+			}
+		}
 
 		for (const auto& cell : pState->Span)
 		{
@@ -175,28 +232,19 @@ void FootprintDebug::Draw()
 				DrawCell(pSurface, pCell, color, true);
 		}
 
-		for (const auto& cell : pState->BarrierSpan)
+		if (!turning)
 		{
-			if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
-				DrawCell(pSurface, pCell, RGB(255, 140, 0), false);
-		}
+			const int visualBucket = Footprint::BucketFromFacing(pUnit->PrimaryFacing.Current());
 
-		for (const auto& cell : pState->ReservedSpan)
-		{
-			if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
-				DrawCell(pSurface, pCell, RGB(255, 255, 0), false);
-		}
-
-		const int visualBucket = Footprint::BucketFromFacing(pUnit->PrimaryFacing.Current());
-
-		if (visualBucket != pState->Bucket)
-		{
-			const auto visualSpan = Footprint::GetSpan(pUnit, pState->Anchor, visualBucket);
-
-			for (const auto& cell : visualSpan)
+			if (visualBucket != pState->Bucket)
 			{
-				if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
-					DrawCell(pSurface, pCell, RGB(255, 0, 255), false);
+				const auto visualSpan = Footprint::GetSpan(pUnit, pState->Anchor, visualBucket);
+
+				for (const auto& cell : visualSpan)
+				{
+					if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
+						DrawCell(pSurface, pCell, RGB(255, 0, 255), false);
+				}
 			}
 		}
 
