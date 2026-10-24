@@ -2281,11 +2281,11 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 	return CheckNextCell;
 }
 
-// The cell loop computes the candidate distance from the object's anchor before
-// the radius check. Inserted footprint owners must use the current hull cell's
-// center instead, otherwise a hit on a peripheral cell is rejected because the
-// anchor lies outside the warhead radius.
-DEFINE_HOOK(0x489922, DamageArea_FootprintCellDistance, 0x5)
+// The original conversion at 0x489922 (call 0x7C5F00) still has a double on
+// the x87 stack. Calling DistanceFrom there corrupts the FPU stack and later
+// crashes inside Detonate. Hook after the conversion/store instead and write
+// the corrected distance into the candidate entry at [EBX+4].
+DEFINE_HOOK(0x48992A, DamageArea_FootprintCellDistance, 0x5)
 {
 	auto const pObject = reinterpret_cast<TechnoClass*>(R->ESI());
 	auto const pCell = DamageAreaTemp::CheckingCell;
@@ -2295,7 +2295,8 @@ DEFINE_HOOK(0x489922, DamageArea_FootprintCellDistance, 0x5)
 	{
 		const auto cellCenter = pCell->GetCoordsWithBridge();
 		const auto coords = reinterpret_cast<CoordStruct*>(R->EDI());
-		R->EAX(static_cast<int>(cellCenter.DistanceFrom(*coords)));
+		*reinterpret_cast<int*>(R->EBX() + 4) =
+			static_cast<int>(cellCenter.DistanceFrom(*coords));
 	}
 
 	return 0;
