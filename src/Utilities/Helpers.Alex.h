@@ -39,7 +39,6 @@
 #include <BuildingTypeClass.h>
 #include <CellSpread.h>
 #include <Unsorted.h>
-#include <Ext/Unit/Footprint.h>
 #include <Helpers/Iterators.h>
 #include <Helpers/Enumerators.h>
 
@@ -187,14 +186,11 @@ namespace Helpers
 				}
 
 				// Multi-cell units keep only the anchor object in the cell content.
-				// The other hull cells are represented by the footprint owner table;
-				// include the owner so a hit on any hull cell can apply damage. The
-				// distinct collector collapses the five cells into one hit.
-				if (auto const pFootprintOwner = Footprint::OwnerAt(pCell, pCell->ContainsBridge()))
-					set.insert(pFootprintOwner);
+				// The other hull cells are represented by the footprint owner table,
+				// but injecting those owners here feeds them into the custom
+				// Detonate target set. Base damage is already handled by
+				// MapClass::DamageArea, so keep this path untouched.
 
-				if (auto const pFootprintOwnerAlt = Footprint::OwnerAt(pCell, !pCell->ContainsBridge()))
-					set.insert(pFootprintOwnerAlt);
 			}
 
 			// flying objects are not included normally

@@ -2202,7 +2202,6 @@ namespace DamageAreaTemp
 	const CellClass* CheckingCell = nullptr;
 	bool CheckingCellAlt = false;
 	std::unordered_set<UnitClass*> FootprintOwners;
-	std::unordered_set<UnitClass*> AppliedFootprintOwners;
 }
 
 // A damage pass visits every hull cell of a multi-cell unit. Keep one entry per
@@ -2210,7 +2209,6 @@ namespace DamageAreaTemp
 DEFINE_HOOK(0x48928C, DamageArea_ClearFootprintDedupe, 0x5)
 {
 	DamageAreaTemp::FootprintOwners.clear();
-	DamageAreaTemp::AppliedFootprintOwners.clear();
 	return 0;
 }
 
@@ -2301,31 +2299,6 @@ DEFINE_HOOK(0x489922, DamageArea_FootprintCellDistance, 0x5)
 	}
 
 	return 0;
-}
-
-// Both the normal anchor entry and the per-hull-cell injection can put the same
-// owner into the candidate list. Collapse those entries after the radius check
-// but before ReceiveDamage, so one damage pass deals damage exactly once.
-DEFINE_HOOK(0x489A9E, DamageArea_FootprintApplyDedupe, 0x6)
-{
-	enum { Continue = 0x489AA4, SkipEntry = 0x489AC1 };
-
-	// The original instruction at this address loads the vtable into EDX and the
-	// damage call at 0x489AB6 uses EDX. A C++ hook may clobber caller-saved
-	// registers, so preserve it explicitly.
-	auto const vtable = R->EDX();
-
-	GET(ObjectClass*, pObject, ESI);
-
-	if (const auto pUnit = abstract_cast<UnitClass*>(pObject);
-		pUnit && Footprint::IsMultiCell(pUnit))
-	{
-		if (!DamageAreaTemp::AppliedFootprintOwners.insert(pUnit).second)
-			return SkipEntry;
-	}
-
-	R->EDX(vtable);
-	return Continue;
 }
 
 DEFINE_HOOK(0x4899B3, DamageArea_DamageItemsFix2, 0x5)
