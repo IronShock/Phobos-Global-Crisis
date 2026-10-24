@@ -31,6 +31,9 @@ struct FootprintConfig
 	bool TurnAssist = true;
 	bool Crush = true;
 	int FireArc = 0;      // 0 = keep the vanilla firing arc
+	// Damage each occupied hull cell independently instead of collapsing the
+	// owner into one hit per damage pass.
+	bool PerCellDamage = false;
 	// Maximum height-level difference allowed inside the footprint and between
 	// consecutive movement cells. 0 keeps the old strict flat-footprint rule.
 	int MaxClimb = 1;

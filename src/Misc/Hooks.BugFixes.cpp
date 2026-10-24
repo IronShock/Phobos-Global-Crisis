@@ -2248,7 +2248,10 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	if (pObject)
 	{
-		if (!DamageAreaTemp::FootprintOwners.insert(static_cast<UnitClass*>(pObject)).second)
+		auto const pUnit = static_cast<UnitClass*>(pObject);
+		const bool perCellDamage = Footprint::GetConfig(pUnit->GetTechnoType()).PerCellDamage;
+
+		if (!perCellDamage && !DamageAreaTemp::FootprintOwners.insert(pUnit).second)
 			return CheckNextCell;
 
 		DamageAreaTemp::CheckingCellAlt = false;
@@ -2256,7 +2259,7 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 		Debug::Log("[FootprintDamage] cell=(%d,%d) owner=%s\n",
 			pCell->MapCoords.X, pCell->MapCoords.Y,
-			static_cast<UnitClass*>(pObject)->Type->ID);
+			pUnit->Type->ID);
 
 		return CheckThisObject;
 	}
@@ -2265,7 +2268,10 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	if (pObject)
 	{
-		if (!DamageAreaTemp::FootprintOwners.insert(static_cast<UnitClass*>(pObject)).second)
+		auto const pUnit = static_cast<UnitClass*>(pObject);
+		const bool perCellDamage = Footprint::GetConfig(pUnit->GetTechnoType()).PerCellDamage;
+
+		if (!perCellDamage && !DamageAreaTemp::FootprintOwners.insert(pUnit).second)
 			return CheckNextCell;
 
 		DamageAreaTemp::CheckingCellAlt = true;
@@ -2273,7 +2279,7 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 		Debug::Log("[FootprintDamage] cell=(%d,%d) owner=%s (alt)\n",
 			pCell->MapCoords.X, pCell->MapCoords.Y,
-			static_cast<UnitClass*>(pObject)->Type->ID);
+			pUnit->Type->ID);
 
 		return CheckThisObject;
 	}
