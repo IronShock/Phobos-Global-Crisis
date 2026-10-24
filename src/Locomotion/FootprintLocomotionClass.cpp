@@ -118,6 +118,17 @@ bool FootprintLocomotionClass::Process()
 
 	if (this->Turning)
 	{
+		if (pState->Initialized)
+		{
+			const int currentBucket = Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
+
+			if (currentBucket != pState->Bucket)
+			{
+				const auto hull = Footprint::GetSpan(pUnit, pState->Anchor, currentBucket);
+				Footprint::CommitSpan(pUnit, hull, currentBucket, pState->Alt, pState->Anchor);
+			}
+		}
+
 		if (pLinked->PrimaryFacing.IsRotating())
 			return true;
 
@@ -247,6 +258,7 @@ void FootprintLocomotionClass::Stop_Moving()
 			pState->ReconcileTarget = -1;
 		}
 
+		Footprint::ReleaseReservation(pUnit);
 		Footprint::Mark(pUnit, pLinked->Location);
 	}
 }
@@ -355,7 +367,11 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 			return false;
 		}
 
-		Footprint::CommitSpan(pUnit, sweep, from, pState->Alt, anchor);
+		Footprint::ReleaseReservation(pUnit);
+
+		if (!Footprint::ReserveSweep(pUnit, sweep, pState->Alt))
+			return false;
+
 		pState->Locked = true;
 		pLinked->PrimaryFacing.SetDesired(DirStruct(to * 0x2000));
 		pLinked->SetSpeedPercentage(0.0);
@@ -399,6 +415,7 @@ void FootprintLocomotionClass::FinishTurn(const CellStruct& anchor)
 	{
 		const auto span = Footprint::GetSpan(pUnit, anchor, this->TurnTargetBucket);
 		Footprint::CommitSpan(pUnit, span, this->TurnTargetBucket, pState->Alt, anchor);
+		Footprint::ReleaseReservation(pUnit);
 		pState->Locked = false;
 	}
 
@@ -453,6 +470,7 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 
 	if (pState->ReconcileActive)
 	{
+		Footprint::ReleaseReservation(pUnit);
 		const auto currentSpan = Footprint::GetSpan(pUnit, pState->Anchor, pState->Bucket);
 		Footprint::CommitSpan(pUnit, currentSpan, pState->Bucket, pState->Alt, pState->Anchor);
 		pState->ReconcileActive = false;
@@ -461,6 +479,7 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 	}
 	else if (pState->Locked)
 	{
+		Footprint::ReleaseReservation(pUnit);
 		pState->Locked = false;
 	}
 

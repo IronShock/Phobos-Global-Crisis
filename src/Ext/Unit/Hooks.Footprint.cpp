@@ -5,6 +5,7 @@
 #include <UnitClass.h>
 #include <UnitTypeClass.h>
 #include <Unsorted.h>
+#include <HouseClass.h>
 
 #include <Locomotion/FootprintLocomotionClass.h>
 
@@ -36,6 +37,30 @@ DEFINE_HOOK(0x736BE2, UnitClass_UpdateRotation_FootprintAim, 0x6)
 	Footprint::ReconcileFacing(pThis);
 
 	return 0;
+}
+
+// DisplayClass::ProcessClickCoords applies selectability filters after the
+// tactical target has been resolved. A peripheral hull cell can pass the
+// target lookup but fail those filters because the object's own cell is the
+// anchor. Accept a controlled multi-cell unit directly; nothing is written to
+// any cell list.
+DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
+{
+	enum { Success = 0x6925F0, Continue = 0x692527 };
+
+	auto const pTarget = *reinterpret_cast<ObjectClass**>(R->EDI());
+	auto const pUnit = abstract_cast<UnitClass*>(pTarget);
+
+	if (pUnit
+		&& Footprint::IsMultiCell(pUnit)
+		&& pUnit->Owner
+		&& pUnit->Owner->IsControlledByCurrentPlayer())
+	{
+		return Success;
+	}
+
+	R->ESI(R->EAX());
+	return Continue;
 }
 
 // The engine reads the vehicle occupation bit from the cell's

@@ -114,6 +114,37 @@ namespace
 		return result;
 	}
 
+	std::vector<CellStruct> MakeDiscreteSpan(const FootprintConfig& config, int bucket)
+	{
+		static const int forwardX[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+		static const int forwardY[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
+		static const int lateralX[8] = { 1, 1, 0, -1, -1, -1, 0, 1 };
+		static const int lateralY[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+
+		const int b = bucket & 7;
+		const int fMin = (config.Length % 2 == 1) ? -(config.Length / 2) : -(config.Length / 2) + 1;
+		const int fMax = config.Length / 2;
+		const int lMin = (config.Width % 2 == 1) ? -(config.Width / 2) : -(config.Width / 2) + 1;
+		const int lMax = config.Width / 2;
+
+		std::vector<CellStruct> result;
+		result.reserve(static_cast<size_t>(config.Length * config.Width));
+
+		for (int f = fMin; f <= fMax; ++f)
+		{
+			for (int l = lMin; l <= lMax; ++l)
+			{
+				result.push_back(CellStruct
+				{
+					static_cast<short>(f * forwardX[b] + l * lateralX[b]),
+					static_cast<short>(f * forwardY[b] + l * lateralY[b])
+				});
+			}
+		}
+
+		return result;
+	}
+
 	void LogBlockedOccupy(UnitClass* pUnit, CellClass* pCell, const CellStruct& cell,
 		const char* reason, int level, bool bridge, bool alt)
 	{
@@ -154,37 +185,33 @@ namespace
 			pTerrain ? pTerrain->Type->ID : "-");
 	}
 
-	std::vector<CellStruct> MakeSweepArc(const FootprintConfig& config, double fromDeg, double toDeg, bool clockwise)
-	{		std::set<std::pair<int, int>> cells;
+	std::vector<CellStruct> MakeSweepArc(const FootprintConfig& config, int from, int to, bool clockwise)
+	{
+		if (!config.Rotates || from == to)
+			return MakeDiscreteSpan(config, from);
 
-		double end = toDeg;
+		std::set<std::pair<int, int>> cells;
+		const int target = to & 7;
+		const int step = clockwise ? 1 : -1;
+		int bucket = from & 7;
 
-		if (clockwise)
+		for (;;)
 		{
-			while (end <= fromDeg)
-				end += 360.0;
-		}
-		else
-		{
-			while (end >= fromDeg)
-				end -= 360.0;
-		}
-
-		const double step = clockwise ? 1.0 : -1.0;
-
-		for (double angle = fromDeg; clockwise ? angle <= end + 1.0e-9 : angle >= end - 1.0e-9; angle += step)
-		{
-			for (const auto& cell : MakeSpanAtAngle(config, angle, 0.0))
+			for (const auto& cell : MakeDiscreteSpan(config, bucket))
 				cells.emplace(cell.X, cell.Y);
+
+			if (bucket == target)
+				break;
+
+			bucket = (bucket + step + 8) & 7;
 		}
 
 		if (cells.empty())
 			return {};
 
-		// Use the bounding box of the exact sweep. For a 3x1 this turns the
-		// seven-cell star of a 90-degree pivot into the intuitive 3x3 turning
-		// square, while avoiding the 5x5 over-reservation a half-cell margin
-		// would produce.
+		// Reserve the bounding box of the discrete sweep. For a 6x1 hull this
+		// gives the full turning square for other units while the hull itself
+		// remains a 6x1 footprint.
 		int minX = cells.begin()->first;
 		int maxX = minX;
 		int minY = cells.begin()->second;
@@ -216,12 +243,12 @@ void FootprintGeometry::Build(const FootprintConfig& config)
 	if (Built)
 		return;
 
-	const auto primary = MakeSpanAtAngle(config, 0.0, 0.0);
+	const auto primary = MakeDiscreteSpan(config, 0);
 
 	for (int bucket = 0; bucket < 8; ++bucket)
 	{
 		Span[bucket] = config.Rotates
-			? MakeSpanAtAngle(config, bucket * 45.0, 0.0)
+			? MakeDiscreteSpan(config, bucket)
 			: primary;
 
 		CellStruct min { 0, 0 };
@@ -252,8 +279,8 @@ void FootprintGeometry::Build(const FootprintConfig& config)
 				continue;
 			}
 
-			SweepCW[index] = MakeSweepArc(config, from * 45.0, to * 45.0, true);
-			SweepCCW[index] = MakeSweepArc(config, from * 45.0, to * 45.0, false);
+			SweepCW[index] = MakeSweepArc(config, from, to, true);
+			SweepCCW[index] = MakeSweepArc(config, from, to, false);
 		}
 	}
 
@@ -887,6 +914,9 @@ bool Footprint::Unmark(UnitClass* pThis, const CoordStruct* pCoords)
 	if (pState->Locked)
 		return true;
 
+	if (!pState->ReservedSpan.empty())
+		ReleaseReservation(pThis);
+
 	// The engine routinely unmarks and re-marks a stationary unit every frame.
 	// Clearing the footprint here would make the hull and its barriers flicker,
 	// so other units would plan through a momentarily free cell and then stall.
@@ -999,6 +1029,12 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 		if (std::find(newBarriers.begin(), newBarriers.end(), cell) != newBarriers.end())
 			continue;
 
+		// A cell that is part of the active turn reservation must stay blocked
+		// until the reservation is released, even if it is no longer a gap
+		// barrier of the current hull bucket.
+		if (std::find(pState->ReservedSpan.begin(), pState->ReservedSpan.end(), cell) != pState->ReservedSpan.end())
+			continue;
+
 		if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
 		{
 			if (BarrierOwnerAt(cell, false) == pThis)
@@ -1065,11 +1101,93 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 	return true;
 }
 
+bool Footprint::ReserveSweep(UnitClass* pThis, const std::vector<CellStruct>& sweep, bool alt)
+{
+	const auto pState = GetState(pThis);
+
+	if (!pThis || !pState)
+		return false;
+
+	for (const auto& cell : sweep)
+	{
+		if (std::find(pState->Span.begin(), pState->Span.end(), cell) != pState->Span.end())
+			continue;
+
+		if (std::find(pState->ReservedSpan.begin(), pState->ReservedSpan.end(), cell) != pState->ReservedSpan.end())
+			continue;
+
+		if (const auto pOwner = OwnerAt(cell, alt); pOwner && pOwner != pThis)
+			return false;
+
+		if (const auto pBarrier = BarrierOwnerAt(cell, alt); pBarrier && pBarrier != pThis)
+			return false;
+
+		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+		if (!pCell)
+			continue;
+
+		if (alt)
+			pCell->AltOccupationFlags |= 0x20;
+		else
+			pCell->OccupationFlags |= 0x20;
+
+		SetBarrierOwner(cell, alt, pThis);
+		pState->ReservedSpan.push_back(cell);
+	}
+
+	return true;
+}
+
+void Footprint::ReleaseReservation(UnitClass* pThis)
+{
+	const auto pState = GetState(pThis);
+
+	if (!pThis || !pState || pState->ReservedSpan.empty())
+		return;
+
+	for (const auto& cell : pState->ReservedSpan)
+	{
+		const bool inHull = std::find(pState->Span.begin(), pState->Span.end(), cell) != pState->Span.end();
+		const bool inBarrier = std::find(pState->BarrierSpan.begin(), pState->BarrierSpan.end(), cell) != pState->BarrierSpan.end();
+
+		if (inHull || inBarrier)
+		{
+			// The hull keeps its own 0x20; a reservation marker on a hull cell is
+			// redundant and should not linger as a barrier owner.
+			if (inHull && !inBarrier)
+				ClearBarrierOwner(cell, pState->Alt, pThis);
+
+			continue;
+		}
+
+		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+		if (!pCell)
+			continue;
+
+		if (BarrierOwnerAt(cell, false) == pThis)
+		{
+			pCell->OccupationFlags &= ~0x20;
+			ClearBarrierOwner(cell, false, pThis);
+		}
+
+		if (BarrierOwnerAt(cell, true) == pThis)
+		{
+			pCell->AltOccupationFlags &= ~0x20;
+			ClearBarrierOwner(cell, true, pThis);
+		}
+	}
+
+	pState->ReservedSpan.clear();
+}
+
 void Footprint::Release(UnitClass* pThis)
 {
 	if (auto const pState = GetState(pThis))
 		pState->Locked = false;
 
+	ReleaseReservation(pThis);
 	Unmark(pThis);
 }
 
@@ -1117,6 +1235,27 @@ void Footprint::ClearAll()
 
 			for (const auto& cell : pState->BarrierSpan)
 			{
+				const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+				if (!pCell)
+					continue;
+
+				if (const auto pOwner = OwnerAt(cell, pState->Alt); pOwner && pOwner != pUnit)
+					continue;
+
+				if (pState->Alt)
+					pCell->AltOccupationFlags |= 0x20;
+				else
+					pCell->OccupationFlags |= 0x20;
+
+				SetBarrierOwner(cell, pState->Alt, pUnit);
+			}
+
+			for (const auto& cell : pState->ReservedSpan)
+			{
+				if (std::find(pState->Span.begin(), pState->Span.end(), cell) != pState->Span.end())
+					continue;
+
 				const auto pCell = MapClass::Instance.TryGetCellAt(cell);
 
 				if (!pCell)
@@ -1217,10 +1356,17 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 
 	if (pState->ReconcileActive)
 	{
+		if (currentBucket != pState->Bucket)
+		{
+			const auto currentHull = GetSpan(pThis, pState->Anchor, currentBucket);
+			CommitSpan(pThis, currentHull, currentBucket, pState->Alt, pState->Anchor);
+		}
+
 		if (currentBucket == pState->ReconcileTarget)
 		{
 			const auto targetSpan = GetSpan(pThis, pState->Anchor, pState->ReconcileTarget);
 			CommitSpan(pThis, targetSpan, pState->ReconcileTarget, pState->Alt, pState->Anchor);
+			ReleaseReservation(pThis);
 			pState->Locked = false;
 			pState->ReconcileActive = false;
 			pState->ReconcileTarget = -1;
@@ -1236,6 +1382,7 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 			// the hull actually reached and release the sweep.
 			const auto currentSpan = GetSpan(pThis, pState->Anchor, currentBucket);
 			CommitSpan(pThis, currentSpan, currentBucket, pState->Alt, pState->Anchor);
+			ReleaseReservation(pThis);
 			pState->Locked = false;
 			pState->ReconcileActive = false;
 			pState->ReconcileTarget = -1;
@@ -1272,17 +1419,21 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 			return false;
 		}
 
-		CommitSpan(pThis, sweep, from, pState->Alt, pState->Anchor);
+		ReleaseReservation(pThis);
+
+		if (!ReserveSweep(pThis, sweep, pState->Alt))
+			return false;
+
 		pState->Locked = true;
 		pState->ReconcileActive = true;
 		pState->ReconcileTarget = target;
 
-		Debug::Log("[FootprintAim] %s bucket %d -> %d (%s) at (%d,%d), sweep=%d barriers=%d\n",
+		Debug::Log("[FootprintAim] %s bucket %d -> %d (%s) at (%d,%d), sweep=%d reserved=%d\n",
 			pThis->GetTechnoType()->ID, from, target,
 			clockwise ? "cw" : "ccw",
 			pState->Anchor.X, pState->Anchor.Y,
 			static_cast<int>(sweep.size()),
-			static_cast<int>(pState->BarrierSpan.size()));
+			static_cast<int>(pState->ReservedSpan.size()));
 
 		return true;
 	};

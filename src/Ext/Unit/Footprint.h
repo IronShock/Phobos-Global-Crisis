@@ -61,6 +61,9 @@ struct FootprintState
 	bool Alt = false;
 	std::vector<CellStruct> Span;
 	std::vector<CellStruct> BarrierSpan;
+	// Transient no-pass cells for a pivot/aim turn: the swept area minus the
+	// actual hull. They block other units but are never selectable/damageable.
+	std::vector<CellStruct> ReservedSpan;
 
 	// Aim reconciliation: the visual hull rotated past a bucket boundary while
 	// the unit was stationary. The swept area is reserved until the rotation
@@ -100,6 +103,8 @@ public:
 	static bool Mark(UnitClass* pThis, const CoordStruct& coords);
 	static bool Unmark(UnitClass* pThis, const CoordStruct* pCoords = nullptr);
 	static bool CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span, int bucket, bool alt, const CellStruct& anchor);
+	static bool ReserveSweep(UnitClass* pThis, const std::vector<CellStruct>& sweep, bool alt);
+	static void ReleaseReservation(UnitClass* pThis);
 	static void Release(UnitClass* pThis);
 	static void ClearAll();
 	static void FixupAfterLoad();

@@ -62,9 +62,6 @@ namespace
 		if (!own)
 			return RGB(255, 80, 80);
 
-		if (pState->Locked)
-			return RGB(255, 255, 0);
-
 		if (pState->Alt)
 			return RGB(0, 255, 255);
 
@@ -182,6 +179,12 @@ void FootprintDebug::Draw()
 		{
 			if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
 				DrawCell(pSurface, pCell, RGB(255, 140, 0), false);
+		}
+
+		for (const auto& cell : pState->ReservedSpan)
+		{
+			if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
+				DrawCell(pSurface, pCell, RGB(255, 255, 0), false);
 		}
 
 		const int visualBucket = Footprint::BucketFromFacing(pUnit->PrimaryFacing.Current());
