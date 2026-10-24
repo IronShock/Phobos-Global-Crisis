@@ -2285,7 +2285,7 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 // the x87 stack. Calling DistanceFrom there corrupts the FPU stack and later
 // crashes inside Detonate. Hook after the conversion/store instead and write
 // the corrected distance into the candidate entry at [EBX+4].
-DEFINE_HOOK(0x48992A, DamageArea_FootprintCellDistance, 0x5)
+DEFINE_HOOK(0x48992A, DamageArea_FootprintCellDistance, 0x6)
 {
 	auto const pObject = reinterpret_cast<TechnoClass*>(R->ESI());
 	auto const pCell = DamageAreaTemp::CheckingCell;
