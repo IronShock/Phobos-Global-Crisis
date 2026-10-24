@@ -2202,6 +2202,7 @@ namespace DamageAreaTemp
 	const CellClass* CheckingCell = nullptr;
 	bool CheckingCellAlt = false;
 	std::unordered_set<UnitClass*> FootprintOwners;
+	std::unordered_set<UnitClass*> AppliedFootprintOwners;
 }
 
 // A damage pass visits every hull cell of a multi-cell unit. Keep one entry per
@@ -2209,6 +2210,7 @@ namespace DamageAreaTemp
 DEFINE_HOOK(0x48928C, DamageArea_ClearFootprintDedupe, 0x5)
 {
 	DamageAreaTemp::FootprintOwners.clear();
+	DamageAreaTemp::AppliedFootprintOwners.clear();
 	return 0;
 }
 
@@ -2281,23 +2283,40 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 	return CheckNextCell;
 }
 
-DEFINE_HOOK(0x489470, DamageArea_FootprintCellDistance, 0x5)
+// The cell loop computes the candidate distance from the object's anchor before
+// the radius check. Inserted footprint owners must use the current hull cell's
+// center instead, otherwise a hit on a peripheral cell is rejected because the
+// anchor lies outside the warhead radius.
+DEFINE_HOOK(0x489922, DamageArea_FootprintCellDistance, 0x5)
 {
-	enum { Continue = 0x489475 };
-
-	auto const pObject = reinterpret_cast<TechnoClass*>(R->EBX());
+	auto const pObject = reinterpret_cast<TechnoClass*>(R->ESI());
 	auto const pCell = DamageAreaTemp::CheckingCell;
 
-	if (pObject && pCell && Footprint::IsMultiCell(pObject))
+	if (pObject && pCell && Footprint::IsMultiCell(pObject)
+		&& Footprint::OwnerAt(pCell, DamageAreaTemp::CheckingCellAlt) == pObject)
 	{
-		const bool alt = DamageAreaTemp::CheckingCellAlt;
+		const auto cellCenter = pCell->GetCoordsWithBridge();
+		const auto coords = reinterpret_cast<CoordStruct*>(R->EDI());
+		R->EAX(static_cast<int>(cellCenter.DistanceFrom(*coords)));
+	}
 
-		if (Footprint::OwnerAt(pCell, alt) == pObject)
-		{
-			const auto cellCenter = pCell->GetCenterCoords();
-			const auto coords = reinterpret_cast<CoordStruct*>(R->EDI());
-			R->EAX(static_cast<int>(cellCenter.DistanceFrom(*coords)));
-		}
+	return 0;
+}
+
+// Both the normal anchor entry and the per-hull-cell injection can put the same
+// owner into the candidate list. Collapse those entries after the radius check
+// but before ReceiveDamage, so one damage pass deals damage exactly once.
+DEFINE_HOOK(0x489A9E, DamageArea_FootprintApplyDedupe, 0x6)
+{
+	enum { Continue = 0x489AA4, SkipEntry = 0x489AC1 };
+
+	GET(ObjectClass*, pObject, ESI);
+
+	if (const auto pUnit = abstract_cast<UnitClass*>(pObject);
+		pUnit && Footprint::IsMultiCell(pUnit))
+	{
+		if (!DamageAreaTemp::AppliedFootprintOwners.insert(pUnit).second)
+			return SkipEntry;
 	}
 
 	return Continue;

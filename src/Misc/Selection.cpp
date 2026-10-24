@@ -2,9 +2,13 @@
 #include "Utilities/Macro.h"
 #include "Ext/Techno/Body.h"
 #include "Ext/TechnoType/Body.h"
+#include "Ext/Unit/Footprint.h"
 
+#include <CellClass.h>
+#include <MapClass.h>
 #include <TacticalClass.h>
 #include <HouseClass.h>
+#include <UnitClass.h>
 #include <Unsorted.h>
 
 class ExtSelection
@@ -40,11 +44,125 @@ public:
 			&& !pThis->InLimbo;
 	}
 
+	static bool Tactical_PointInRect(const LTRBStruct& rect, const Point2D& point)
+	{
+		return point.X >= rect.Left && point.X < rect.Left + rect.Right
+			&& point.Y >= rect.Top && point.Y < rect.Top + rect.Bottom;
+	}
+
+	static bool Tactical_PointInQuad(const Point2D& point, const Point2D (&quad)[4])
+	{
+		int sign = 0;
+
+		for (int i = 0; i < 4; ++i)
+		{
+			const auto& a = quad[i];
+			const auto& b = quad[(i + 1) & 3];
+			const long long cross = static_cast<long long>(b.X - a.X) * (point.Y - a.Y)
+				- static_cast<long long>(b.Y - a.Y) * (point.X - a.X);
+
+			if (cross == 0)
+				continue;
+
+			const int current = cross > 0 ? 1 : -1;
+
+			if (sign && current != sign)
+				return false;
+
+			sign = current;
+		}
+
+		return true;
+	}
+
+	// Drag selection normally tests a single screen point per unit. For a
+	// multi-cell unit a box can cover a hull cell without covering its anchor,
+	// so test every authoritative footprint cell instead. Cells are projected
+	// into the same client-space rectangle used by Tactical::MakeSelection.
+	static bool Tactical_FootprintInSelectionRect(TacticalClass* pThis, LTRBStruct* pRect,
+		const FootprintState* pState)
+	{
+		static constexpr int leptonsPerCell = 256;
+
+		const Point2D rectCorners[4]
+		{
+			{ pRect->Left, pRect->Top },
+			{ pRect->Left + pRect->Right, pRect->Top },
+			{ pRect->Left + pRect->Right, pRect->Top + pRect->Bottom },
+			{ pRect->Left, pRect->Top + pRect->Bottom }
+		};
+
+		for (const auto& offset : pState->Span)
+		{
+			const CellStruct cell
+			{
+				static_cast<short>(pState->Anchor.X + offset.X),
+				static_cast<short>(pState->Anchor.Y + offset.Y)
+			};
+
+			const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+			if (!pCell)
+				continue;
+
+			const auto center = pCell->GetCoordsWithBridge();
+			const int z = center.Z;
+			const int x = cell.X * leptonsPerCell;
+			const int y = cell.Y * leptonsPerCell;
+
+			const CoordStruct corners[4]
+			{
+				{ x, y, z },
+				{ x + leptonsPerCell, y, z },
+				{ x + leptonsPerCell, y + leptonsPerCell, z },
+				{ x, y + leptonsPerCell, z }
+			};
+
+			Point2D quad[4];
+
+			for (int i = 0; i < 4; ++i)
+				quad[i] = pThis->CoordsToClient(corners[i]).first;
+
+			const auto centerPoint = pThis->CoordsToClient(center).first;
+
+			if (Tactical_PointInRect(*pRect, centerPoint))
+				return true;
+
+			for (const auto& point : quad)
+			{
+				if (Tactical_PointInRect(*pRect, point))
+					return true;
+			}
+
+			// A narrow band can cut through a cell without containing any of its
+			// corners. The reverse test catches that case as well.
+			for (const auto& point : rectCorners)
+			{
+				if (Tactical_PointInQuad(point, quad))
+					return true;
+			}
+		}
+
+		return false;
+	}
+
 	// Reversed from Tactical::Select
 	static bool Tactical_IsInSelectionRect(TacticalClass* pThis, LTRBStruct* pRect, const TacticalSelectableStruct& selectable)
 	{
 		if (selectable.Object && selectable.Object->IsAlive)
 		{
+			if (const auto pUnit = abstract_cast<UnitClass*>(selectable.Object))
+			{
+				if (Footprint::IsMultiCell(pUnit))
+				{
+					if (const auto pState = Footprint::GetState(pUnit);
+						pState && pState->Initialized)
+					{
+						return Tactical_FootprintInSelectionRect(pThis, pRect, pState);
+					}
+				}
+			}
+
 			const int nLocalX = selectable.X - pThis->TacticalPos.X;
 			const int nLocalY = selectable.Y - pThis->TacticalPos.Y;
 

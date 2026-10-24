@@ -195,7 +195,7 @@ void FootprintDebug::Draw()
 
 	for (auto const pUnit : UnitClass::Array)
 	{
-		if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo)
+		if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo || !pUnit->IsSelected)
 			continue;
 
 		if (!Footprint::IsMultiCell(pUnit))
