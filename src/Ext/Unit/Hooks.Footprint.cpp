@@ -48,15 +48,33 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 {
 	enum { Success = 0x6925F0, Continue = 0x692527 };
 
-	auto const pTarget = *reinterpret_cast<ObjectClass**>(R->EDI());
-	auto const pUnit = abstract_cast<UnitClass*>(pTarget);
+	auto const ppTarget = reinterpret_cast<ObjectClass**>(R->EDI());
+	auto const pTarget = *ppTarget;
 
-	if (pUnit
-		&& Footprint::IsMultiCell(pUnit)
-		&& pUnit->Owner
-		&& pUnit->Owner->IsControlledByCurrentPlayer())
+	if (pTarget)
 	{
-		return Success;
+		auto const pTechno = abstract_cast<TechnoClass*>(pTarget);
+
+		// Terrain and other non-Techno objects do not have a TechnoType. The
+		// vanilla filter would dereference GetTechnoType() unconditionally and
+		// crash (C0000005 at 0x692575). Drop such targets here.
+		if (!pTechno || !pTechno->GetTechnoType())
+		{
+			*ppTarget = nullptr;
+			return Success;
+		}
+
+		auto const pUnit = abstract_cast<UnitClass*>(pTechno);
+
+		if (pUnit
+			&& pUnit->IsAlive
+			&& !pUnit->InLimbo
+			&& Footprint::IsMultiCell(pUnit)
+			&& pUnit->Owner
+			&& pUnit->Owner->IsControlledByCurrentPlayer())
+		{
+			return Success;
+		}
 	}
 
 	R->ESI(R->EAX());
