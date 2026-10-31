@@ -34,6 +34,9 @@ struct FootprintConfig
 	// Damage each occupied hull cell independently instead of collapsing the
 	// owner into one hit per damage pass.
 	bool PerCellDamage = false;
+	// Once any actual hull cell is hit, force every actual hull cell through
+	// independent damage calculation, even outside the warhead's CellSpread.
+	bool HitAllCells = false;
 	// Maximum height-level difference allowed inside the footprint and between
 	// consecutive movement cells. 0 keeps the old strict flat-footprint rule.
 	int MaxClimb = 1;

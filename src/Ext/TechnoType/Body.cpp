@@ -1232,6 +1232,11 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 		if (exINI.ReadBool(pSection, "Foundation.PerCellDamage", &perCellDamage))
 			this->MultiCell.PerCellDamage = perCellDamage;
 
+		bool hitAllCells = this->MultiCell.HitAllCells;
+
+		if (exINI.ReadBool(pSection, "Foundation.HitAllCells", &hitAllCells))
+			this->MultiCell.HitAllCells = hitAllCells;
+
 		if (exINI.ReadString(pSection, "Foundation.TurnMode"))
 		{
 			const char* mode = exINI.value();
@@ -1267,7 +1272,7 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			this->OwnerObject()->Locomotor = __uuidof(FootprintLocomotionClass);
 			this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
 
-			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f MaxClimb=%d PerCellDamage=%d, forced FootprintLocomotionClass\n",
+			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f MaxClimb=%d PerCellDamage=%d HitAllCells=%d, forced FootprintLocomotionClass\n",
 				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0,
 				static_cast<int>(this->OwnerObject()->SpeedType),
 				static_cast<int>(this->OwnerObject()->MovementZone),
@@ -1278,7 +1283,8 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 				this->MultiCell.PivotForward,
 				this->MultiCell.PivotLateral,
 				this->MultiCell.MaxClimb,
-				this->MultiCell.PerCellDamage ? 1 : 0);
+				this->MultiCell.PerCellDamage ? 1 : 0,
+				this->MultiCell.HitAllCells ? 1 : 0);
 		}
 	}
 

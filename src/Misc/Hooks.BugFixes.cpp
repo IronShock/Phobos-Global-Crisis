@@ -2201,7 +2201,66 @@ namespace DamageAreaTemp
 {
 	const CellClass* CheckingCell = nullptr;
 	bool CheckingCellAlt = false;
+	int BaseDamage = 0;
 	std::unordered_set<UnitClass*> FootprintOwners;
+	std::unordered_set<UnitClass*> FullFootprintApplied;
+
+	bool TryApplyFullFootprintDamage(UnitClass* pUnit, REGISTERS* R)
+	{
+		if (!pUnit)
+			return false;
+
+		const auto& config = Footprint::GetConfig(pUnit->GetTechnoType());
+
+		if (!config.HitAllCells)
+			return false;
+
+		if (!FullFootprintApplied.insert(pUnit).second)
+			return true;
+
+		if (!pUnit->IsAlive || pUnit->InLimbo)
+			return true;
+
+		const auto pState = Footprint::GetState(pUnit);
+
+		if (!pState || !pState->Initialized || pState->Span.empty())
+			return true;
+
+		const auto pWH = *reinterpret_cast<WarheadTypeClass**>(R->EBP() + 0xC);
+		const auto pSource = *reinterpret_cast<TechnoClass**>(R->EBP() + 0x8);
+		const auto pSourceHouse = *reinterpret_cast<HouseClass**>(R->EBP() + 0x14);
+		const auto pCoords = reinterpret_cast<CoordStruct*>(R->EDI());
+
+		if (!pWH || !pCoords || BaseDamage == 0)
+			return true;
+
+		const int baseDamage = BaseDamage;
+
+		Debug::Log("[FullFootprint] owner=%s cells=%d baseDamage=%d wh=%s\n",
+			pUnit->Type->ID, static_cast<int>(pState->Span.size()),
+			baseDamage, pWH->ID);
+
+		for (const auto& cell : pState->Span)
+		{
+			const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+			if (!pCell)
+				continue;
+
+			const auto center = pState->Alt
+				? pCell->GetCoordsWithBridge()
+				: pCell->GetCoords();
+			const int distance = static_cast<int>(center.DistanceFrom(*pCoords));
+			int damage = baseDamage;
+
+			pUnit->ReceiveDamage(&damage, distance, pWH, pSource, false, false, pSourceHouse);
+
+			if (!pUnit->IsAlive || pUnit->InLimbo)
+				break;
+		}
+
+		return true;
+	}
 }
 
 // A damage pass visits every hull cell of a multi-cell unit. Keep one entry per
@@ -2209,6 +2268,16 @@ namespace DamageAreaTemp
 DEFINE_HOOK(0x48928C, DamageArea_ClearFootprintDedupe, 0x5)
 {
 	DamageAreaTemp::FootprintOwners.clear();
+	DamageAreaTemp::FullFootprintApplied.clear();
+	DamageAreaTemp::BaseDamage = 0;
+	return 0;
+}
+
+// Preserve the original DamageArea damage before it is transformed for the
+// cell loop. The two original stores at this address are 4 + 4 bytes long.
+DEFINE_HOOK(0x48929B, DamageArea_CaptureBaseDamage, 0x8)
+{
+	DamageAreaTemp::BaseDamage = static_cast<int>(R->ESI());
 	return 0;
 }
 
@@ -2225,8 +2294,19 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 	DamageAreaTemp::CheckingCell = pCell;
 	auto pObject = pCell->FirstObject;
 
+	auto const tryFullFootprint = [&](ObjectClass* pCandidate) -> bool
+	{
+		if (const auto pUnit = abstract_cast<UnitClass*>(pCandidate))
+			return DamageAreaTemp::TryApplyFullFootprintDamage(pUnit, R);
+
+		return false;
+	};
+
 	if (pObject)
 	{
+		if (tryFullFootprint(pObject))
+			return CheckNextCell;
+
 		R->ESI(pObject);
 		return CheckThisObject;
 	}
@@ -2235,6 +2315,9 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	if (pObject)
 	{
+		if (tryFullFootprint(pObject))
+			return CheckNextCell;
+
 		DamageAreaTemp::CheckingCellAlt = true;
 		R->ESI(pObject);
 		return CheckThisObject;
@@ -2248,6 +2331,9 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	if (pObject)
 	{
+		if (tryFullFootprint(pObject))
+			return CheckNextCell;
+
 		auto const pUnit = static_cast<UnitClass*>(pObject);
 		const bool perCellDamage = Footprint::GetConfig(pUnit->GetTechnoType()).PerCellDamage;
 
@@ -2268,6 +2354,9 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 
 	if (pObject)
 	{
+		if (tryFullFootprint(pObject))
+			return CheckNextCell;
+
 		auto const pUnit = static_cast<UnitClass*>(pObject);
 		const bool perCellDamage = Footprint::GetConfig(pUnit->GetTechnoType()).PerCellDamage;
 
