@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 #include "MOEE.OrderUtil.h"
 
 #include <Phobos.h>
@@ -22,7 +23,7 @@
 
 // Port of MO_ExperienceEnhancements/src/PatrolCircle.cpp (simplified).
 //
-// Z+Middle: place a patrol ring for the whole selection.
+// Shift+Z+Middle: place a patrol ring for the whole selection.
 //   - Tap (or a short drag): a Size x Size square ring centred on the release
 //     cell. Longer drags expand the start..end bounding box by Size/2 into a
 //     rectangular ring.
@@ -49,11 +50,24 @@ namespace MOEE::PatrolCircle
 
 		struct Pend { void* unit; short x; short y; bool connect; };
 
-		OU::Hotkey Key;
-		bool Initialized = false;
 		bool PrevDown = false;
 		bool HaveStart = false;
 		int StartX = 0, StartY = 0;
+
+		// Fixed mouse button: Middle. The keyboard part is configurable in
+		// KeyboardMD.ini -> [Hotkey] (MOEE Patrol Circle, default Shift+Z).
+		bool ComboDown()
+		{
+			const auto part = MOEE::GetKeyPart(CommandNames::PatrolCircle);
+
+			if (part.Empty())
+				return false;
+
+			if (MOEE::MouseComboClaimed(CommandNames::PatrolCircle))
+				return false;
+
+			return MOEE::KeyPartHeldExact(part) && OU::KeyDown(VK_MBUTTON);
+		}
 
 		static Pend Pending[PEND_CAP];
 		int PendCount = 0;
@@ -264,17 +278,7 @@ namespace MOEE::PatrolCircle
 
 	void Poll()
 	{
-		if (!Initialized)
-		{
-			Initialized = true;
-			OU::ParseHotkey(Phobos::Config::MOEE_PatrolCircle, Key);
-			Log("pcircle", "%s size=%d", Key.disabled ? "OFF" : "ON", Size());
-		}
-
-		if (Key.disabled)
-			return;
-
-		const bool down = OU::HotkeyDown(Key);
+		const bool down = ComboDown();
 		const int fr = Unsorted::CurrentFrame;
 
 		if (down && !PrevDown)
@@ -369,7 +373,7 @@ namespace MOEE::PatrolCircle
 	{
 		LineCount = 0;
 
-		if (Key.disabled || !OU::HotkeyDown(Key))
+		if (!ComboDown())
 			return;
 
 		auto pSurface = DSurface::Temp;

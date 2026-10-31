@@ -2050,6 +2050,30 @@ AmphibiousEnter=         ; boolean, default to [General] -> AmphibiousEnter
 AmphibiousUnload=        ; boolean, default to [General] -> AmphibiousUnload
 ```
 
+### Passenger enter directions
+
+- By default infantry can board a transport vehicle from any side. `Passengers.EnterDirections` restricts boarding to the listed sides of the transport.
+- Directions are relative to the transport's **current body facing**: `front`, `frontright`, `right`, `backright`, `back`, `backleft`, `left`, `frontleft`.
+  - `all` (default) restores vanilla behaviour.
+  - `none` blocks boarding; the transport can still unload.
+- When an infantry is ordered to enter, it walks to an allowed adjacent cell and only boards after reaching it. It is never removed from a distance.
+- If the transport rotates or moves so that the assigned cell is no longer allowed, the infantry is re-routed to another allowed cell.
+- Every passenger that reaches the vehicle in the same frame boards in that frame, so a group can board together instead of waiting in a queue. `Passengers.EnterStaggerFrames` can delay hand-offs per transport when a paced animation is preferred; it never drops a passenger.
+- Unloading is restricted to the same sides. If no allowed exit cell is free, the transport keeps the passenger on board and retries instead of ejecting it into water, a wall or a blocked cell.
+- Only infantry are restricted. Vehicle passengers keep vanilla behaviour.
+- Capacity, `Passengers.BySize`, `AmphibiousEnter` and bridge checks still apply.
+
+In `rulesmd.ini`:
+```ini
+[SOMEVEHICLE]                            ; VehicleType, transport
+Passengers.EnterDirections=all           ; all|none|comma-separated direction list
+Passengers.EnterStaggerFrames=0          ; integer, frames between hand-offs; 0 = same-frame/parallel
+Passengers.UnloadStaggerFrames=2         ; integer, frames between passengers; 0 = instant
+; Passengers.EnterDirections=back
+; Passengers.EnterDirections=back,backleft,backright
+; Passengers.EnterDirections=left,right
+```
+
 ### Automatic deploy and blocking deploying based on ammo
 
 - It is now possible for deployable vehicles (`DeploysInto`, `DeployFire`, `IsSimpleDeployer` and those that have passengers) to automatically deploy or prevent deploying based on their current ammo.
@@ -2109,7 +2133,8 @@ Note that the referenced types had to be defined under their respective type lis
 
 ### Fast access vehicle
 
-- Now you can let infantry or vehicle passengers quickly enter or leave the transport vehicles without queuing.
+- Now you can let infantry or vehicle passengers enter or leave transport vehicles without queuing.
+- Passengers still walk to the vehicle: the fast hand-off only happens within 96 leptons of the transport, so they are no longer removed from a distance. Multiple passengers reach the vehicle independently and can board in parallel.
 
 In `rulesmd.ini`:
 ```ini

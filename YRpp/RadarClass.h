@@ -2,6 +2,7 @@
 
 #include <DisplayClass.h>
 struct RadarTrackingStruct;
+class DSurface;
 class NOVTABLE RadarClass : public DisplayClass
 {
 public:
@@ -64,8 +65,11 @@ public:
 	DWORD unknown_1204;
 	DWORD unknown_1208;
 	RectangleStruct unknown_rect_120C;
-	DWORD unknown_121C;
-	DWORD unknown_1220;
+	// Radar image the engine composites: object blips and cell colours are
+	// written here and the result is blitted to the sidebar.
+	DSurface* RadarSurface;
+	// Untouched copy of the radar image, used to restore the background.
+	DSurface* EmptyRadarSurface;
 	DynamicVectorClass<CellStruct> unknown_cells_1124;
 	DWORD unknown_123C;
 	DWORD unknown_1240;

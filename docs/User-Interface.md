@@ -21,6 +21,7 @@ You can use the improved vanilla font which can be found on [Phobos supplementar
 - You can now specify which soundtrack themes would play on win or lose.
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMESIDE]             ; Side
 IngameScore.WinTheme=  ; Soundtrack theme ID
@@ -35,53 +36,68 @@ IngameScore.LoseTheme= ; Soundtrack theme ID
 *Default configuration of digital display using example shapes from [Phobos supplementaries](https://github.com/Phobos-developers/PhobosSupplementaries).*
 
 - You can now configure various types of numerical counters to be displayed over Techno to represent its attributes, such as health points or shield points and can be turned on or off via a [new hotkey](#toggle-digital-display).
+  
   - `InfoIndex` defines the specific `InfoType`.
+    
     - In `InfoType=Spawns`,
       - 0 - alive spawns,
       - 1 - docked spawns,
       - 2 - launching spawns.
-      <br><br>
+        <br><br>
     - In `InfoType=Tiberium`,
       - 0 - all,
       - 1 - the first tiberium,
       - 2 - the second tiberium,
-      <br>...
+        <br>...
     - In `InfoType=SpawnTimer`,
       - 0 - the fastest spawnee,
       - 1 - the first spawnee,
       - 2 - the second spawnee,
-      <br>...
+        <br>...
     - In `InfoType=SuperWeapon`,
       - 0 - the first SW of all,
       - 1 - `[BuildingType] -> SuperWeapon`,
       - 2 - `[BuildingType] -> SuperWeapon2`,
       - 3 - the first SW in `[BuildingType] -> SuperWeapons`,
-      <br>...
+        <br>...
     - In `InfoType=FactoryProcess`,
       - 0 - the first factory in production,
       - 1 - primary factory,
       - 2 - secondary factory.
-      <br><br>
+        <br><br>
+  
   - `Anchor.Horizontal` and `Anchor.Vertical` set the anchor point from which the display is drawn (depending on `Align`) relative to unit's center/selection box. For buildings, `Anchor.Building` is used instead.
+    
     - `Offset` and `Offset.ShieldDelta` (the latter applied when a shield is active) can be used to further modify the position.
+  
   - By default, values are displayed in `current/maximum` format (i.e. `20/40`).
+    
     - `HideMaxValue=yes` will make the counter show only the current value (i.e. `20`), default to whether the techno is infantry or not.
     - `Percentage=yes` changes the format to `percent%` (i.e. `50%`).
     - `ValueAsTimer` controls whether the value will be displayed in the form of a timer (i.e. `0:30`, `5:00` or `1:00:00`).
+  
   - `VisibleToHouses` and `VisibleToHouses.Observer` can limit visibility to specific players.
+    
     - `VisibleInSpecialState` controls whether this display type will show when the owner is in ironcurtain or is attacked by a temporal weapon.
+  
   - The digits can be either a custom shape (.shp) or text drawn using the game font. This depends on whether `Shape` is set.
+    
     - `Text.Color`, `Text.Color.ConditionYellow` and `Text.Color.ConditionRed` allow customization of the font color. `Text.Background=yes` will additionally draw a black rectangle background.
     - When using shapes, a custom palette can be specified with `Palette`. `Shape.Spacing` controls pixel buffer between characters. If `Shape.PercentageFrame` set to true, it will only draw one frame that corresponds to total frames by percentage.
     - Frames 0-9 will be used as digits when the owner's health bar is green, 10-19 when yellow, 20-29 when red. For `/` and `%` (or `:` if set `ValueAsTimer` to true) characters, frame numbers are 30-31, 32-33, 34-35, respectively.
+  
   - Default `Offset.ShieldDelta` for `InfoType=Shield` is `0,-10`, `0,0` for others.
+  
   - Default `Shape.Spacing` for buildings is `4,-2`, `4,0` for others.
+  
   - `ValueScaleDivisor` can be used to adjust scale of displayed values. Both the current & maximum value will be divided by the integer number given, if higher than 1. Default to 1 (or 15 when set `ValueAsTimer` to true).
-
+  
   - `DigitalDisplay.Health.FakeAtDisguise`, if set to true on an InfantryType with Disguise, will use the disguised TechnoType's `Strength` value as the maximum value of health display. The current value will be displayed as the percentage of its current health multiplies the new maximum value.
+  
   - `ShowType` specifies the conditions under which it can be displayed. Note that `idle` is only available when `HealthBar.Permanent=yes`.
 
 In `rulesmd.ini`:
+
 ```ini
 [DigitalDisplayTypes]
 0=SOMEDIGITALDISPLAYTYPE
@@ -128,6 +144,7 @@ DigitalDisplay.Health.FakeAtDisguise=true      ; boolean
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 DigitalDisplay.Enable=false                    ; boolean
@@ -137,7 +154,7 @@ DigitalDisplay.Enable=false                    ; boolean
 An example shape file for digits can be found on [Phobos supplementaries repo](https://github.com/Phobos-developers/PhobosSupplementaries).
 ```
 
-````{note}
+```{note}
 `Shape.PercentageFrame` effectively provides the ultimate solution for all static data display effects: it allows mapping the current value to a specific static frame index in a shape file sequence by calculating its proportional ratio to the total value, where the concrete image on this frame is entirely user-defined.
 
 ```{hint}
@@ -150,7 +167,229 @@ The arrangement of static images on the plane is entirely up to you to draw free
 ```
 
 Of course, this is just the implementation method. To balance freedom with efficiency—that is, how to efficiently draw the patterns you need—you still need to independently explore a workflow that suits you.
-````
+```
+
+### LoadBar
+
+- A general-purpose, client-side progress bar drawn above a techno. It can show any time-based or value-based state: AttachEffect duration, weapon cooldown, reload, health, shield, superweapon recharge, factory progress and the other values supported by DigitalDisplay.
+- LoadBar is intentionally independent: it does not extend `DigitalDisplayTypeClass` or `AttachEffectTypeClass`, adds no fields to savegames and only reads existing engine/Phobos timers. Old saves load unchanged.
+- A bar definition lives in `[LoadBarTypes]`. Assign bars to a TechnoType ID in `[LoadBarAssignments]`, or let an AttachEffect type carry its own bar in `[LoadBarAttachEffects]`.
+- LoadBar has no per-object saved state. All configuration is read from the rules INI at startup; restart the game after editing it.
+
+#### `[LoadBar]` — global settings
+
+In `rulesmd.ini`:
+
+```ini
+[LoadBar]
+Enable=true                    ; boolean - master switch
+MaxPerFrame=256                ; integer - hard cap on bars drawn per frame
+Infantry.Default=              ; list of LoadBarTypes used when an InfantryType has no assignment
+Vehicles.Default=              ; list of LoadBarTypes used when a UnitType has no assignment
+Aircraft.Default=              ; list of LoadBarTypes used when an AircraftType has no assignment
+Buildings.Default=             ; list of LoadBarTypes used when a BuildingType has no assignment
+
+; Optional global colour/gradient defaults for every bar.
+; A bar section overrides only the keys it defines.
+; Color=64,220,64              ; R,G,B - fill colour above the yellow threshold
+; Color.ConditionYellow=255,220,64
+; Color.ConditionRed=255,64,64
+Color.Gradient=no              ; boolean - automatic gradient when no explicit stops exist
+; Color.Gradient.0.At=0.0      ; 0..1 - explicit stops; scanned until a pair is missing
+; Color.Gradient.0.Color=255,64,64
+; Color.Gradient.1.At=0.5
+; Color.Gradient.1.Color=255,220,64
+; Color.Gradient.2.At=1.0
+; Color.Gradient.2.Color=64,220,64
+```
+
+- `Enable` turns the whole feature on/off.
+- `MaxPerFrame` limits how many bars are collected in one frame. Lower it if a very large selection causes overhead.
+- `*.Default` lists the bar types shown for a whole category when the TechnoType has no `[LoadBarAssignments]` entry. An empty list means "no bars" for that category.
+- The colour keys are global defaults. Per-bar `Color`, `Color.ConditionYellow`, `Color.ConditionRed`, `Color.Gradient` and `Color.Gradient.<i>.*` override them.
+- `Color.Gradient` only controls the automatic gradient used when no explicit stop list exists. Explicit `Color.Gradient.<i>.At` / `.Color` stops always apply, even with `Color.Gradient=no`.
+
+#### `[LoadBarTypes]`
+
+```ini
+[LoadBarTypes]
+0=GC_AE
+1=GC_WeaponCooldown
+```
+
+Each value names a bar definition section. The section name is the bar type name used by `[LoadBarAssignments]` and `[LoadBarAttachEffects]`.
+
+#### Bar definition — source
+
+The snippets below show the default value unless the comment says otherwise.
+
+```ini
+[GC_AE]
+Source=AttachEffect            ; example; omit Source to keep the bar disabled
+SourceIndex=0
+AE.Type=                       ; comma-separated AttachEffect type names, empty = any
+AE.Group=                      ; comma-separated AttachEffect groups, empty = any
+MaxEntries=0                   ; 0 = unlimited; >0 = maximum entries for this bar
+Entry.Sort=remaining           ; remaining|total|type
+```
+
+- `Source` is case-insensitive. If it is omitted or unrecognized, the bar never appears. Accepted values:
+  - `Health`, `Shield`, `Ammo`, `MindControl`, `Spawns`, `Passengers`, `Tiberium`, `Experience`, `Occupants`, `GattlingStage`
+  - `ROF`, `Reload`, `SpawnTimer`, `GattlingTimer`, `ProduceCash`, `PassengerKill`, `AutoDeath`
+  - `SuperWeapon`, `IronCurtain`, `TemporalLife`, `FactoryProcess`
+  - `WeaponCooldown`, `AttachEffect`
+- `SourceIndex` selects a sub-value where the source supports it:
+  - `WeaponCooldown`: `-1` = current weapon, `-2` = every armed slot, `0..4` = a specific slot.
+  - `AttachEffect`: `0` = every matching AE instance, `1..N` = the N-th matching entry after sorting.
+  - `Tiberium`: `0` = total, `1..N` = a specific tiberium type.
+  - `Spawns`: `0` = alive spawns, `1` = docked spawns, `2` = launching spawns.
+  - `SuperWeapon`: `0` = first available, `1` = `SuperWeapon`, `2` = `SuperWeapon2`, `3..N` = entries from the building's `SuperWeapons` list.
+  - `FactoryProcess`: `0` = first factory, `1` = primary factory, `2` = secondary factory.
+  - Other sources use the value as documented by DigitalDisplay, or ignore it.
+- `AE.Type` and `AE.Group` only apply to `Source=AttachEffect`. A value matches if it matches any listed name/group.
+- `MaxEntries` only affects sources that can produce multiple entries (`AttachEffect`, and `WeaponCooldown` with `SourceIndex=-2`). `0` means unlimited.
+- `Entry.Sort` controls multi-entry order:
+  - `remaining` (default): smallest remaining fraction first (the entry that expires first).
+  - `total`: smallest total duration/count first.
+  - `type`: by label/type name.
+
+#### Bar definition — layout
+
+```ini
+Anchor.Horizontal=right        ; left|center|right
+Anchor.Vertical=top            ; top|center|bottom
+Anchor.Building=top            ; top|lefttop|leftbottom|bottom|rightbottom|righttop
+Align.Horizontal=right         ; left|center|right
+Align.Vertical=bottom          ; top|center|bottom
+Offset=0,0                     ; screen pixels, scaled by ScaleWithZoom
+Offset.ShieldDelta=            ; extra offset when a shield is active; unset by default
+Stack=yes                      ; automatically stack bars of the same techno
+Stack.Spacing=1                ; pixels between stacked bars
+Stack.Direction=up             ; up|down|left|right
+Priority=0                     ; higher = drawn later (on top)
+ScaleWithZoom=yes              ; scale geometry with tactical zoom
+```
+
+- `Anchor.Horizontal` / `Anchor.Vertical` pick the point on the selection bracket. Buildings use `Anchor.Building` instead of `Anchor.Vertical`.
+- `Align.Horizontal` places the bar's left/center/right edge at the anchor X.
+- `Align.Vertical=bottom` places the bar above the anchor; `top` places it below the anchor; `center` centers it on the anchor.
+- `Offset` and `Offset.ShieldDelta` are UI pixels. With `ScaleWithZoom=yes`, they are multiplied by the current world-to-window scale.
+- `Stack=yes` bars accumulate along `Stack.Direction`. The step is the scaled bar size plus `Stack.Spacing`.
+- `Priority` only affects the final cross-object draw order. Higher values are drawn later.
+- `ScaleWithZoom=yes` scales `Width`, `Height`, `Offset`, `Offset.ShieldDelta`, `Stack.Spacing`, `Segment.Spacing` and `Border.Width`. Text keeps the normal game font size.
+
+#### Bar definition — size and fill
+
+```ini
+Width=24                       ; pixels (scaled by ScaleWithZoom)
+Height=3                       ; pixels (scaled by ScaleWithZoom)
+Segments=0                     ; 0 or 1 = continuous; >1 = segmented
+Segment.Spacing=1              ; pixels between segments
+Segment.Partial=yes            ; draw a partially filled last segment
+Fill=remaining                 ; remaining|elapsed
+Direction=lefttoright          ; lefttoright|righttoleft|toptobottom|bottomtotop
+```
+
+- `Fill=remaining` draws the reported fraction as-is. Use it for durations that shrink (AttachEffect time, health, ammo).
+- `Fill=elapsed` draws `1 - fraction`. Use it for cooldowns that fill up as a weapon becomes ready.
+- `Direction` controls which edge the fill starts from.
+- `Segments>1` draws discrete cells. `Segment.Partial=no` only lights fully filled cells.
+- Segmented cells are clipped to the bar so a large segment count cannot spill outside `Width`/`Height`.
+
+#### Bar definition — colours
+
+```ini
+Color=64,220,64                ; R,G,B - above the yellow threshold
+Color.ConditionYellow=255,220,64
+Color.ConditionRed=255,64,64
+Color.Gradient=no             ; automatic gradient when no explicit stops exist
+; Optional explicit stops; consecutive pairs are scanned until one is missing:
+; Color.Gradient.0.At=0.0
+; Color.Gradient.0.Color=255,64,64
+; Color.Gradient.1.At=0.5
+; Color.Gradient.1.Color=255,220,64
+; Color.Gradient.2.At=1.0
+; Color.Gradient.2.Color=64,220,64
+```
+
+- Without explicit stops, `Color` / `Color.ConditionYellow` / `Color.ConditionRed` are applied as steps using the rules' `ConditionYellow` / `ConditionRed` thresholds.
+- `Color.Gradient=yes` blends those three colours when no explicit stop list exists.
+- Explicit stops always apply, even when `Color.Gradient=no`.
+- There is no stop-count key. Stops are read as `Color.Gradient.0.At` / `.Color`, `Color.Gradient.1.At` / `.Color`, ... until a pair is missing.
+- `At` is clamped to `0..1`; stops are sorted by `At`; duplicate positions keep the last definition. Up to 128 stops are read per bar.
+- Ratios below the first stop use the first colour; ratios above the last stop use the last colour. Between stops the colour is linearly interpolated in RGB.
+- The same colour/gradient keys in `[LoadBar]` act as global defaults.
+
+#### Bar definition — background and border
+
+```ini
+Background=0,0,0               ; R,G,B
+Background.Alpha=60            ; 0-100; 0 disables the background
+Border=0,0,0                   ; R,G,B
+Border.Width=0                 ; 0 disables the border
+```
+
+- The background covers the full bar rectangle.
+- The border is drawn underneath the fill and the fill is inset by `Border.Width`, so the border can never hide the progress.
+- If `Width` or `Height` is too small for the configured border (for example `Height=2` with `Border.Width=1`), the border is skipped and the fill uses the whole bar. A warning is written to `debug.log` at load time.
+
+#### Bar definition — text
+
+```ini
+Text=no                        ; boolean - draw text on/near the bar
+Text.Color=255,255,255         ; R,G,B
+Text.Align=center              ; left|center|right
+Text.Percentage=no             ; show the displayed fraction as a percentage
+Text.AsTimer=no                ; show the remaining value as M:SS / H:MM:SS
+Text.HideMaxValue=no           ; show only the current value instead of value/total
+Text.Label=no                  ; prefix the AttachEffect type name / bar label
+```
+
+- `Text.AsTimer` converts logic frames to seconds at 15 frames/second.
+- `Text.Percentage` uses the displayed fraction (after `Fill` is applied).
+- If the bar is shorter than the font, the text is drawn just above the bar.
+- Text uses the normal game font size and does not scale with `ScaleWithZoom`.
+
+#### Bar definition — visibility
+
+```ini
+ShowType=selected,cursorhover  ; cursorhover|selected|idle|all
+VisibleToHouses=all            ; none|owner/self|allies/ally|enemies/enemy|team|others|all
+VisibleToHouses.Observer=yes   ; boolean - show to observers
+VisibleInSpecialState=yes      ; boolean - show while iron-curtained / temporally warped
+HideWhenFull=no                ; hide when the displayed fraction is 1
+HideWhenEmpty=no               ; hide when the displayed fraction is 0
+HideWhenIndefinite=yes         ; hide indefinite AttachEffects (duration <= 0)
+```
+
+- `ShowType` is a comma-separated combination. `idle` works independently of a permanent health bar.
+- `VisibleToHouses` controls which players see the bar; it accepts the same house flags as DigitalDisplay.
+- `VisibleInSpecialState=no` hides the bar while the owner is iron-curtained or temporally warped.
+- `HideWhenFull` / `HideWhenEmpty` use the **displayed** fraction after `Fill` inversion.
+- `HideWhenIndefinite` only applies to `Source=AttachEffect`.
+
+#### `[LoadBarAssignments]`
+
+```ini
+[LoadBarAssignments]
+MTNK=GC_WeaponCooldown         ; comma-separated list of LoadBarTypes
+E1=GC_Health,GC_Ammo
+```
+
+- Keys are TechnoType IDs. Values are comma-separated bar type names.
+- An assignment overrides the category `*.Default` list for that TechnoType.
+- An empty value means "no bars" for that TechnoType.
+
+#### `[LoadBarAttachEffects]`
+
+```ini
+[LoadBarAttachEffects]
+SomeDebuffAE=GC_AE             ; AttachEffect type ID -> LoadBarType
+```
+
+- Keys are AttachEffect type IDs. The first value is used as the bar type.
+- The bar appears on any techno while that AttachEffect instance is active.
+- This is independent of `[LoadBarAssignments]`; a techno does not need an assignment to show an AE-owned bar.
 
 ### Flashing Technos on selecting
 
@@ -158,12 +397,14 @@ Of course, this is just the implementation method. To balance freedom with effic
   - The feature can be toggled on/off by user if enabled in mod via `ShowFlashOnSelecting` setting in `RA2MD.INI`.
 
 In `rulesmd.ini`:
+
 ```ini
 [AudioVisual]
 SelectionFlashDuration=0    ; integer, number of frames
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ShowFlashOnSelecting=false  ; boolean
@@ -180,6 +421,7 @@ ShowFlashOnSelecting=false  ; boolean
   - `HealthBar.Permanent.PipScale` will always display additional pips and group numbers.
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMENAME]                           ; TechnoType
 HealthBar.Hide=false                 ; boolean
@@ -196,6 +438,7 @@ HealthBar.Permanent.PipScale=false   ; boolean
     - Additionally these alpha images are not created if `[AudioVisual] -> LightFlashAlphaImageDetailLevel` is higher than current detail level, regardless of the `HideLightFlashEffects` setting.
 
 In `rulesmd.ini`:
+
 ```ini
 [AudioVisual]
 WarheadParticleAlphaImageIsLightFlash=false  ; boolean
@@ -206,6 +449,7 @@ Particle.AlphaImageIsLightFlash=             ; boolean
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 HideLightFlashEffects=false  ; boolean
@@ -219,6 +463,7 @@ HideLightFlashEffects=false  ; boolean
 - You can now set lower priority for an ingame object (currently has effect on units mostly), which means it will be excluded from box selection if there's at least one normal priority unit in the box. Otherwise it would be selected as normal. Works with box+type selecting (type select hotkey + drag) and regular box selecting. Box shift-selection adds low-priority units to the group if there are no normal priority units among the appended ones.
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMETECHNO]                ; TechnoType
 LowSelectionPriority=false  ; boolean
@@ -227,6 +472,7 @@ LowSelectionPriority=false  ; boolean
 - This behavior is designed to be toggleable by users. For now you can only do that externally via client or manually.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 PrioritySelectionFiltering=true  ; boolean
@@ -244,6 +490,7 @@ PrioritySelectionFiltering=true  ; boolean
 - `PlacementPreview.ShapeFrame` tag defaults to building's artmd.ini `Buildup` entry's last non-shadow frame. If there is no 'Buildup' specified it will instead attempt to default to the building's normal first frame (animation frames and bibs are not included in this preview).
 
 In `rulesmd.ini`:
+
 ```ini
 [AudioVisual]
 PlacementPreview=no                     ; boolean
@@ -268,6 +515,7 @@ The `PlacementPreview.Palette` option is not used when `PlacementPreview.Remap` 
 - This behavior is designed to be toggleable by users. For now you can only do that externally via client or manually.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ShowPlacementPreview=yes   ; boolean
@@ -276,13 +524,17 @@ ShowPlacementPreview=yes   ; boolean
 ### Real time timers
 
 - Timers can now display values in real time, taking game speed into account. This can be enabled with `RealTimeTimers=true`.
+
 - By default, time is calculated relative to desired framerate. Enabling `RealTimeTimers.Adaptive` (always true for unlimited FPS and custom speeds) will calculate time relative to *current* FPS, accounting for lag.
+  
   - When playing with unlimited FPS (or custom speed above 60 FPS), the timers might constantly change value because of the unstable nature.
+
 - This option respects custom game speeds.
 
 - This behavior is designed to be toggleable by users. For now you can only do that externally via client or manually.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 RealTimeTimers=false            ; boolean
@@ -304,6 +556,7 @@ RealTimeTimers.Adaptive=false   ; boolean
   - If `GroundLine=true`, the game will draw a line from techno's position to its vertical projection, `GroundLine.Dashed=true` means the projection line is a dashed line.
 
 In `rulesmd.ini`:
+
 ```ini
 [SelectBoxTypes]
 0=SOMESELECTBOXTYPE
@@ -338,6 +591,7 @@ HideSelectBox=false                     ; boolean
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 EnableSelectBox=false                   ; boolean
@@ -351,6 +605,7 @@ EnableSelectBox=false                   ; boolean
 - This feature can be toggled *by the player* (if enabled in the mod) with `ShowDesignatorRange` in `RA2MD.INI` or with ["Toggle Designator Range" hotkey](#toggle-designator-range) in "Interface" category.
 
 In `rulesmd.ini`:
+
 ```ini
 [AudioVisual]
 ShowDesignatorRange=true    ; boolean
@@ -360,6 +615,7 @@ ShowDesignatorRange=true    ; boolean
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ShowDesignatorRange=false             ; boolean
@@ -370,6 +626,7 @@ ShowDesignatorRange=false             ; boolean
 - You can now sort the timers of superweapons in ascending order from top to bottom according to a given priority value.
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMESW]              ; SuperWeaponType, with ShowTimer=yes
 ShowTimer.Priority=0  ; integer
@@ -384,6 +641,7 @@ ShowTimer.Priority=0  ; integer
   - If you also set `MessageApplyHoverState` to true, when the mouse hovers over the subtitle area (simply judged as a rectangle), its opacity will increase and it will not disappear during this period.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 MessageApplyHoverState=false  ; boolean
@@ -399,6 +657,7 @@ In Vanilla, you can type select a building by holding down the T key in advance 
 ```
 
 In `rulesmd.ini`:
+
 ```ini
 [General]
 BuildingTypeSelectable=false  ; boolean
@@ -418,6 +677,7 @@ Due to technical limitations, this feature is forcibly disabled without Ares.
   - `[AudioVisual] -> DisplayIncome` also allows to display the amount of credits when selling a unit on a repair bay.
 
 In `rulesmd.ini`:
+
 ```ini
 [AudioVisual]
 DisplayIncome=false       ; boolean
@@ -437,6 +697,7 @@ DisplayIncome.Offset=0,0  ; X,Y, pixels relative to default
 - The human player's difficulty in skirmish/campaign is used.
 
 In `rulesmd.ini`:
+
 ```ini
 [General]
 DisableSaveGame.Difficulty=none   ; none | easy | normal | hard (comma list)
@@ -449,6 +710,7 @@ DisableLoadGame.Difficulty=none   ; none | easy | normal | hard (comma list)
 - `LockGameSpeed.Difficulty` accepts a comma-separated list of difficulties (`easy`, `normal`, `hard`) or `none` to leave the speed adjustable.
 
 In `rulesmd.ini`:
+
 ```ini
 [General]
 LockGameSpeed.Difficulty=none     ; none | easy | normal | hard (comma list)
@@ -465,6 +727,7 @@ LockGameSpeed.Difficulty=none     ; none | easy | normal | hard (comma list)
   - `TacticalZoom.Smooth` toggles smooth frame-by-frame interpolation between zoom levels.
 
 In `uimd.ini`:
+
 ```ini
 [TacticalZoom]
 TacticalZoom=false            ; boolean
@@ -476,6 +739,7 @@ TacticalZoom.Smooth=true      ; boolean
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 TacticalZoom=true          ; boolean
@@ -493,6 +757,7 @@ TacticalZoom.Smooth=true   ; boolean
   - Note: the game must render at the display's native resolution for the result to be fully crisp. If it renders lower and is upscaled to a fullscreen display, the whole frame (and therefore the text) will be filtered/blurred.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 TextScale=1.0        ; double (1.0 | 1.25 | 1.5 | 1.75 | 2.0)
@@ -566,6 +831,7 @@ For this command to work in multiplayer - you need to use a version of [YRpp spa
 - You can now disable hardcoded black dots that YR engine shows over empty spawn locations, which allows to use prettier and more correctly placed markers that are produced by Map Renderer instead.
 
 In `uimd.ini`:
+
 ```ini
 [LoadingScreen]
 DisableEmptySpawnPositions=false  ; boolean
@@ -578,13 +844,13 @@ DisableEmptySpawnPositions=false  ; boolean
 When starting a new campaign, the game automatically saves the game. Now you can decide whether you want that to happen or not.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 SaveGameOnScenarioStart=true ; boolean
 ```
 
 ## Sidebar / Battle UI
-
 
 ### Building Production Queue
 
@@ -594,6 +860,7 @@ SaveGameOnScenarioStart=true ; boolean
 - Buildings can now be queued for construction like other units if `BuildingProductionQueue` is set to true.
 
 In `rulesmd.ini`:
+
 ```ini
 [General]
 BuildingProductionQueue=false  ; boolean
@@ -609,6 +876,7 @@ When the building becomes ready to be placed, the next building's construction w
   - The Cameo Priority is checked just before evevything vanilla. Greater `CameoPriority` wins.
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMENAME]             ; TechnoType / SuperWeaponType
 CameoPriority=0        ; integer
@@ -619,6 +887,7 @@ CameoPriority=0        ; integer
 - Pause menu background (`bkgdXX(y).shp`) can now optionally be centered on the center of the available space instead of top-left corner. This allows for backgrounds to be better designed with resolutions larger than `1024x768` in mind.
 
 In `uimd.ini`:
+
 ```ini
 [Sidebar]
 CenterPauseMenuBackground=false  ; boolean
@@ -629,6 +898,7 @@ CenterPauseMenuBackground=false  ; boolean
 - You can now specify any SHP/PCX file as `XXICON.SHP` for missing cameo.
 
 In `rulesmd.ini`:
+
 ```ini
 [AudioVisual]
 MissingCameo=XXICON.SHP  ; filename - including the .shp/.pcx extension
@@ -648,6 +918,7 @@ MissingCameo=XXICON.SHP  ; filename - including the .shp/.pcx extension
   - The feature can be toggled on/off by user if enabled in mod via `ShowHarvesterCounter` setting in `RA2MD.INI`.
 
 In `uimd.ini`:
+
 ```ini
 [Sidebar]
 HarvesterCounter.Show=false           ; boolean
@@ -657,6 +928,7 @@ HarvesterCounter.ConditionRed=50%     ; floating point value, percents
 ```
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMETECHNO]                                    ; TechnoType
 Harvester.Counted=                              ; boolean
@@ -668,6 +940,7 @@ Sidebar.HarvesterCounter.ColorRed=255,0,0       ; integer - R,G,B
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ShowHarvesterCounter=true  ; boolean
@@ -694,6 +967,7 @@ Additionally, default position for harvester counter overlaps with [weeds counte
   - The feature can be toggled on/off by user if enabled in mod via `ShowPowerDelta` setting in `RA2MD.INI`.
 
 In `uimd.ini`:
+
 ```ini
 [Sidebar]
 PowerDelta.Show=false           ; boolean
@@ -702,6 +976,7 @@ PowerDelta.ConditionRed=100%    ; floating point value, percents
 ```
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMESIDE]                                ; Side
 Sidebar.PowerDelta.Offset=0,0             ; X,Y, pixels relative to default
@@ -713,6 +988,7 @@ Sidebar.PowerDelta.Align=left             ; Alignment enumeration - left | cente
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ShowPowerDelta=true  ; boolean
@@ -731,12 +1007,14 @@ If you use the vanilla font in your mod, you can use the improved font (v4 and h
 - You need to draw your own assets (`tab0xpp.shp`, x is replaced by 0-3) and put them into `sidec0x.mix`.
 
 In `uimd.ini`:
+
 ```ini
 [Sidebar]
 ProducingProgress.Show=false  ; boolean
 ```
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMESIDE]                            ; Side
 Sidebar.ProducingProgress.Offset=0,0  ; X,Y, pixels relative to default
@@ -747,6 +1025,7 @@ Sidebar.ProducingProgress.Offset=0,0  ; X,Y, pixels relative to default
 - It's now possible to switch hardcoded sidebar button coords to use GDI sidebar coords by setting `Sidebar.GDIPosition`. Defaults to true for first side, false for all others.
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMESIDE]             ; Side
 Sidebar.GDIPositions=  ; boolean
@@ -771,18 +1050,19 @@ Sidebar.GDIPositions=  ; boolean
 While a mod maker can "ban" certain superweapons from appearing on a sidebar completely using `SuperWeaponSidebar.Allow=false` and `SuperWeaponSidebar.AllowByDefault=false`, it is not recommended to use those keys outside of removing "technical" superweapons (like subfaction choosers). Instead, opt for `SuperWeaponSidebar.Significance` and `SuperWeaponSidebar.RequiredSignificance` to control which superweapons appear on the sidebar. This way users with different preferences and different display resolutions could control how many superweapons they would like to see on the sidebar (via client settings) without having to edit the mod files, and you would be able to specify your exact vision through the default significance value.
 ```
 
-  - There is a hotkey to toggle the sidebar on/off, which can be bound to a key in the hotkey settings.
-    - `TXT_TOGGLE_SW_SIDEBAR` and `TXT_TOGGLE_SW_SIDEBAR_DESC` are used for localization of the hotkey.
-  - `SuperWeaponSidebarKeysEnabled` enables users to use hotkeys for superweapons displayed on the sidebar.
-    - The hotkeys are positional and are only provided for the first 10 superweapons.
-    - If assigned, a hotkey will be displayed on a superweapon instead of the `Ready` (or its alternative) text.
-    - For localization of those hotkeys, add `TXT_FIRE_TACTICAL_SW_XX` and `TXT_FIRE_TACTICAL_SW_XX_DESC` into your `.csf` file.
+- There is a hotkey to toggle the sidebar on/off, which can be bound to a key in the hotkey settings.
+  - `TXT_TOGGLE_SW_SIDEBAR` and `TXT_TOGGLE_SW_SIDEBAR_DESC` are used for localization of the hotkey.
+- `SuperWeaponSidebarKeysEnabled` enables users to use hotkeys for superweapons displayed on the sidebar.
+  - The hotkeys are positional and are only provided for the first 10 superweapons.
+  - If assigned, a hotkey will be displayed on a superweapon instead of the `Ready` (or its alternative) text.
+  - For localization of those hotkeys, add `TXT_FIRE_TACTICAL_SW_XX` and `TXT_FIRE_TACTICAL_SW_XX_DESC` into your `.csf` file.
 
 ```{warning}
 Positional superweapon hotkeys are an experimental feature and currently the user experience may be not polished enough, due to superweapon positions not being fixed on the sidebar, thus the feature is disabled by default.
 ```
 
 In `uimd.ini`:
+
 ```ini
 [Sidebar]
 SuperWeaponSidebar=false                    ; boolean
@@ -795,6 +1075,7 @@ SuperWeaponSidebar.MaxColumns=              ; integer
 ```
 
 In `rulesmd.ini`:
+
 ```ini
 [GlobalControls]
 SuperWeaponSidebarKeysEnabled=false         ; boolean
@@ -817,6 +1098,7 @@ SuperWeaponSidebar.Significance=0           ; integer
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 SuperWeaponSidebar.RequiredSignificance=0   ; integer
@@ -834,12 +1116,14 @@ While the feature is usable without any extra graphics, you can find example ass
   - The feature can be toggled on/off by user if enabled in mod via `ShowWeedsCounter` setting in `RA2MD.INI`.
 
 In `uimd.ini`:
+
 ```ini
 [Sidebar]
 WeedsCounter.Show=false          ; boolean
 ```
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMESIDE]                       ; Side
 Sidebar.WeedsCounter.Offset=0,0  ; X,Y, pixels relative to default
@@ -847,6 +1131,7 @@ Sidebar.WeedsCounter.Color=      ; integer - R,G,B
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ShowWeedsCounter=true  ; boolean
@@ -871,6 +1156,7 @@ Default position for weeds counter overlaps with [harvester counter](#harvester-
 - `AnchoredToolTips` positions the tooltip always to the left of sidebar, only applies to if `ExtendedToolTips` is set to true and they are enabled in user settings.
 
 In `uimd.ini`:
+
 ```ini
 [ToolTips]
 ExtendedToolTips=false     ; boolean
@@ -882,7 +1168,9 @@ TimeLabel=<none>           ; CSF entry key
 SWShotsFormat=<none>       ; CSF entry key
 MaxWidth=0                 ; integer, pixels
 ```
+
 In `rulesmd.ini`:
+
 ```ini
 [SOMENAME]            ; TechnoType or SWType
 UIDescription=<none>  ; CSF entry key
@@ -891,6 +1179,7 @@ UIDescription=<none>  ; CSF entry key
 - The descriptions are designed to be toggleable by users. For now you can only do that externally via client or manually.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ToolTipDescriptions=true  ; boolean
@@ -903,6 +1192,7 @@ Same as with harvester counter, you can download the improved font (v4 and highe
 - The background color and opacity of tooltips can now be customized globally or per side.
 
 In `rulesmd.ini`:
+
 ```ini
 [SOMESIDE]                          ; Side
 ToolTip.Background.Color=0,0,0      ; integer - R,G,B, defaults to [AudioVisual] -> ToolTip.Background.Color, which defaults to 0,0,0
@@ -915,6 +1205,7 @@ The blur effect is resource intensive. Please make sure you really want to enabl
 ```
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ToolTipBlur=false  ; boolean, whether the blur effect of tooltips will be enabled.
@@ -932,6 +1223,7 @@ The features in this section are additions made by the GC build on top of Phobos
 - When `TacticalPause.BlockActions.Difficulty` lists the current difficulty, all operations are forbidden while frozen (except camera panning, the pause toggle and ESC/menu).
 
 In `rulesmd.ini`:
+
 ```ini
 [General]
 TacticalPause=true                         ; boolean - register the time-stop hotkey
@@ -944,6 +1236,7 @@ TacticalPause.BlockActions.Difficulty=none  ; none | easy | normal | hard (comma
 - Infantry/Vehicle/Building/Fighter are matched automatically; Artillery and Bomber use user-defined type lists.
 
 In `rulesmd.ini`:
+
 ```ini
 [ArtilleryTypes]        ; custom Artillery filter list
 0=SOMETYPE,SOMEOTHERTYPE
@@ -957,6 +1250,7 @@ In `rulesmd.ini`:
 - Reimplements the center-message display as a scrollable message column with a toggle button, up/down scroll buttons and a drag-scroll board. The column shows the last `LabelsCount` lines when packed and up to `RecordsCount` records when expanded, and the mouse wheel scrolls it while hovering. It replaces the vanilla top-left message list.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 MessageDisplayInCenter=false             ; boolean - draw messages as a center column
@@ -975,6 +1269,7 @@ MessageDisplayInCenter.RecordsCount=12   ; integer - records shown when expanded
 - `Toggle Auto-Reverse` flips whether the current player's vehicles auto-reverse toward rear targets; the `[General] ReverseMove` value only sets its initial state.
 
 In `rulesmd.ini`:
+
 ```ini
 [General]
 ReverseMove=false  ; boolean - default state of the auto-reverse toggle
@@ -985,6 +1280,7 @@ ReverseMove=false  ; boolean - default state of the auto-reverse toggle
 - Switches the in-game mouse scheme from vanilla (left orders / right cancels) to a mainstream-RTS scheme where the left button selects only and the right button issues orders. Right-button drag pans the view, and the remap is skipped while special placement/targeting modes are active.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 RightClickCommands=false       ; boolean
@@ -1004,6 +1300,7 @@ RightClickCommands.Debug=false ; boolean - log suppressed left-click actions
 - A hotkey that toggles the top-right "Operation Time Elapsed" real-time display. Its background opacity is configurable.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ShowGameTime=true              ; boolean - default state of the game timer
@@ -1015,6 +1312,7 @@ ShowGameTime.BoardOpacity=40   ; integer 0-255 - background opacity of the timer
 - When the player quits a running campaign mission, writes a dedicated continue save (`Saved Games\ContinueGame_<map>.cgs`) that the CnCNet client's "Continue Game" button reads. The non-`.sav` extension keeps it out of the vanilla in-game load list, and the file is deleted when the mission is won.
 
 In `RA2MD.INI`:
+
 ```ini
 [Phobos]
 ContinueGameOnExit=true  ; boolean - write a per-mission continue save when quitting

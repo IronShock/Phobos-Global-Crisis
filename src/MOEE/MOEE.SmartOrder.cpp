@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 #include "MOEE.OrderUtil.h"
 
 #include <Phobos.h>
@@ -40,8 +41,6 @@ namespace MOEE::SmartOrder
 		constexpr int UNIT_CAP = 1024;
 		constexpr int SCATTER_R = 5;
 
-		OU::Hotkey Key;
-		bool Initialized = false;
 		bool PrevDown = false;
 
 		OU::PrevLine Lines[OU::PrevCap];
@@ -55,12 +54,19 @@ namespace MOEE::SmartOrder
 				|| what == static_cast<int>(AbstractType::Aircraft);
 		}
 
-		// The bare middle button yields to the other middle-click combos:
-		// Ctrl -> FuzzyAttack, Shift -> SmartArea, Z -> PatrolCircle.
-		bool ModifiersBlock()
+		// The bare middle button yields to the other middle-click combos. The
+		// keyboard part comes from KeyboardMD.ini -> [Hotkey] (MOEE Smart Order);
+		// an empty binding means "middle button alone".
+		bool ComboDown()
 		{
-			return OU::KeyDown(VK_CONTROL) || OU::KeyDown(VK_SHIFT) || OU::KeyDown('Z')
-				|| DeployPreview::ClaimsMiddle() != 0;
+			if (DeployPreview::ClaimsMiddle() != 0)
+				return false;
+
+			if (MOEE::MouseComboClaimed(CommandNames::SmartOrder))
+				return false;
+
+			return MOEE::KeyPartHeldExact(MOEE::GetKeyPart(CommandNames::SmartOrder))
+				&& OU::KeyDown(VK_MBUTTON);
 		}
 
 		// Infantry pack 3 per cell, everything else 1.
@@ -253,17 +259,7 @@ namespace MOEE::SmartOrder
 
 	void Poll()
 	{
-		if (!Initialized)
-		{
-			Initialized = true;
-			OU::ParseHotkey(Phobos::Config::MOEE_SmartOrder, Key);
-			Log("smartorder", "%s", Key.disabled ? "OFF" : "ON");
-		}
-
-		if (Key.disabled)
-			return;
-
-		const bool down = OU::HotkeyDown(Key) && !ModifiersBlock();
+		const bool down = ComboDown();
 
 		if (!down && PrevDown)
 			Press();
@@ -275,7 +271,7 @@ namespace MOEE::SmartOrder
 	{
 		LineCount = 0;
 
-		if (Key.disabled || !OU::HotkeyDown(Key) || ModifiersBlock())
+		if (!ComboDown())
 			return;
 
 		void* units[UNIT_CAP];

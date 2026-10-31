@@ -351,6 +351,11 @@ public:
 		Nullable<bool> NoQueueUpToEnter;
 		Nullable<bool> NoQueueUpToUnload;
 		Valueable<bool> Passengers_BySize;
+		// Boarding side mask, relative to the transport's body facing.
+		// 0xFF = all sides (vanilla). Not serialized: read from rules on load.
+		Valueable<int> Passengers_EnterDirections;
+		Valueable<int> Passengers_EnterStaggerFrames;
+		Valueable<int> Passengers_UnloadStaggerFrames;
 
 		Valueable<int> RateDown_Delay;
 		Valueable<bool> RateDown_Reset;
@@ -422,7 +427,19 @@ public:
 		// facing direction). Only read for VehicleTypes; buildings keep using
 		// their own Foundation key.
 		FootprintConfig MultiCell;
-		
+
+		// RadarSignal: draws a custom SHP marker on the minimap instead of the
+		// engine's one-pixel blip. See Hooks.cpp, region RadarDrawing.
+		Valueable<bool> RadarSignal;
+		Nullable<SHPStruct*> RadarSignal_Image;
+		Nullable<int> RadarSignal_Frame;
+		Nullable<int> RadarSignal_FrameCount;
+		Nullable<int> RadarSignal_AnimRate;
+		Nullable<int> RadarSignal_Blink;
+		Valueable<bool> RadarSignal_AlwaysVisible;
+		Valueable<bool> RadarSignal_HideBlip;
+		CustomPalette RadarSignal_Palette;
+
 		Valueable<int> AttachmentTopLayerMinHeight;
 		Valueable<int> AttachmentUndergroundLayerMaxHeight;
 		
@@ -850,6 +867,9 @@ public:
 			, NoQueueUpToEnter {}
 			, NoQueueUpToUnload {}
 			, Passengers_BySize { true }
+			, Passengers_EnterDirections { 0xFF }
+			, Passengers_EnterStaggerFrames { 0 }
+			, Passengers_UnloadStaggerFrames { 2 }
 
 			, RateDown_Delay { 0 }
 			, RateDown_Reset { false }
@@ -919,6 +939,15 @@ public:
 
 			, RadarInvisibleToHouse {}
 			, MultiCell {}
+			, RadarSignal { false }
+			, RadarSignal_Image {}
+			, RadarSignal_Frame {}
+			, RadarSignal_FrameCount {}
+			, RadarSignal_AnimRate {}
+			, RadarSignal_Blink {}
+			, RadarSignal_AlwaysVisible { false }
+			, RadarSignal_HideBlip { true }
+			, RadarSignal_Palette {}
 			, AIDirectionalArmor {}
 			, AIDirectionalArmor_Chance {}
 			, AIDirectionalArmor_Delay {}

@@ -1,4 +1,5 @@
 ﻿#include "Body.h"
+#include "TransportEntry.h"
 
 #include <EventClass.h>
 #include <WarheadTypeClass.h>
@@ -369,6 +370,19 @@ DEFINE_HOOK(0x51A0DA, InfantryClass_PerCellProcess_EntryLoopTechnos, 0x0)
 			&& (pThis->Target == pEntryTarget || pThis->Destination == pEntryTarget
 				|| pThis->OnBridge && pCell == pEntryTarget->GetCell()))
 		{
+			if (auto const pTransport = abstract_cast<UnitClass*>(pEntryTarget))
+			{
+				if (pThis->WhatAmI() == AbstractType::Infantry)
+				{
+					if (PassengerDirections::IsPassengerInside(pTransport, pThis))
+						continue;
+
+
+					if (!PassengerDirections::IsEntryApproachAllowed(pTransport, pThis))
+						continue;
+				}
+			}
+
 			R->EDI<TechnoClass*>(pEntryTarget);
 			R->EBP<size_t>(0);
 			return TryEnterTarget;

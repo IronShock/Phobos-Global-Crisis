@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 #include "MOEE.OrderUtil.h"
 
 #include <Phobos.h>
@@ -20,8 +21,9 @@
 
 // Port of MO_ExperienceEnhancements/src/WeaponRange.cpp (core).
 //
-// Ctrl + a single selected unit: draw its current weapon's range as an ellipse
-// on the tactical map (blue = maximum, red = minimum when non-zero).
+// Hold the configured keyboard part (default Ctrl+Shift) with a single
+// selected unit: draw its current weapon's range as an ellipse on the tactical
+// map (yellow = maximum, red = minimum when non-zero).
 //
 // Upstream additionally drew AA / deployed-weapon / cloak-detection / spy
 // identification ranges; those are not ported yet. Drawing goes through Phobos'
@@ -32,7 +34,7 @@ namespace MOEE::WeaponRange
 	{
 		constexpr int SEGMENTS = 48;
 
-		void DrawRing(const CoordStruct& centre, int radius)
+		void DrawRing(const CoordStruct& centre, int radius, COLORREF color)
 		{
 			if (radius <= 0)
 				return;
@@ -59,8 +61,6 @@ namespace MOEE::WeaponRange
 				visible[i] = vis;
 			}
 
-			const COLORREF color = RGB(90, 160, 255);
-
 			for (int i = 0; i < SEGMENTS; ++i)
 			{
 				const int j = (i + 1) % SEGMENTS;
@@ -76,7 +76,9 @@ namespace MOEE::WeaponRange
 		if (!Phobos::Config::MOEE_WeaponRange)
 			return;
 
-		if (!(GetAsyncKeyState(VK_CONTROL) & 0x8000))
+		const auto part = MOEE::GetKeyPart(CommandNames::WeaponRange);
+
+		if (part.Empty() || !MOEE::KeyPartHeldExact(part))
 			return;
 
 		if (OU::SelectionCount() != 1)
@@ -108,7 +110,10 @@ namespace MOEE::WeaponRange
 		const int maxRange = pWeapon->WeaponType->Range;
 		const int minRange = pWeapon->WeaponType->MinimumRange;
 
-		DrawRing(centre, maxRange);
-		DrawRing(centre, minRange);
+		constexpr COLORREF maxColor = RGB(255, 220, 64); // yellow
+		constexpr COLORREF minColor = RGB(255, 64, 64);  // red
+
+		DrawRing(centre, maxRange, maxColor);
+		DrawRing(centre, minRange, minColor);
 	}
 }

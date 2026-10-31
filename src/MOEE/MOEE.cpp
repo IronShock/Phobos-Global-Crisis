@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 
 #include <Phobos.h>
 #include <SessionClass.h>
@@ -77,6 +78,20 @@ namespace MOEE
 			AddVectoredExceptionHandler(1, MOEE_Veh);
 			Log("diag", "phobos base=0x%08X",
 				static_cast<unsigned>(reinterpret_cast<size_t>(Phobos::hInstance)));
+
+			// Keyboard-side bindings, read once the engine has loaded KeyboardMD.ini.
+			static const char* const keyNames[] =
+			{
+				CommandNames::AttackMove, CommandNames::TreeChop, CommandNames::FuzzyAttack,
+				CommandNames::SmartOrder, CommandNames::PatrolCircle, CommandNames::SmartArea,
+				CommandNames::DeployPreview, CommandNames::WeaponRange, CommandNames::RepairAll,
+			};
+
+			for (const char* name : keyNames)
+			{
+				const auto part = GetKeyPart(name);
+				Log("keys", "%s mods=%u vk=0x%02X", name, part.mods, part.vk);
+			}
 		}
 
 		MegaListCap::Poll();

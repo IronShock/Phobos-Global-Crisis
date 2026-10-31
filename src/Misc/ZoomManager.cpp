@@ -711,7 +711,7 @@ void ZoomManager::ApplySurfacePatches()
 // which keeps the camera, the mouse and the incremental redraw all consistent with the
 // larger viewport.
 //
-// Like MOEE's ScaleBar this is render-surface-only bookkeeping: it writes to whatever the
+// This is render-surface-only bookkeeping: it writes to whatever the
 // current render target is and never touches simulation state, so it stays multiplayer safe.
 // =====================================================================================
 

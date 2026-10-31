@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include <Commands/TacticalPause.h>
+#include <Misc/TacticalMap.h>
 
 static Point2D radarCenterPixel = { 0, 0 };
 
@@ -25,9 +26,19 @@ static void __declspec(naked) ProcessClickCoords_BlockThunk()
 	_asm { ret 0x18 }
 }
 
+// The in-game message handler at 0x6930A0 is __thiscall with four stack arguments
+// (ret 0x10). Jumping here skips it entirely, swallowing the mouse message.
+static void __declspec(naked) TacticalMap_ConsumeMessageThunk()
+{
+	_asm { ret 0x10 }
+}
+
 // Translate screen click coordinates into tactical space for mouse hover and selection targeting
 DEFINE_HOOK(0x692300, DisplayClass_ProcessClickCoords_TranslateCoordinates, 0x7)
 {
+	if (TacticalMap::Opened)
+		return reinterpret_cast<uintptr_t>(&ProcessClickCoords_BlockThunk);
+
 	if (TacticalPauseCommandClass::IsBlockingActions())
 		return reinterpret_cast<uintptr_t>(&ProcessClickCoords_BlockThunk);
 
@@ -130,6 +141,29 @@ DEFINE_HOOK(0x6930A0, ScrollClass_MessageHandler_MiddleClickReset, 0x5)
 {
 	GET_STACK(const UINT*, pMessage, 0x8);
 
+	// Tactical map overlay: consume the mouse messages before the engine can turn
+	// them into selections/orders and move the camera from the map rectangle.
+	if (TacticalMap::Opened && pMessage)
+	{
+		switch (*pMessage)
+		{
+		case WM_LBUTTONDOWN:
+		case WM_RBUTTONDOWN:
+			// The overlay's own input state machine (driven by the gadget hit test)
+			// handles camera moves, painting and measuring.
+			return reinterpret_cast<uintptr_t>(&TacticalMap_ConsumeMessageThunk);
+
+		case WM_LBUTTONUP:
+		case WM_RBUTTONUP:
+		case WM_LBUTTONDBLCLK:
+		case WM_RBUTTONDBLCLK:
+			return reinterpret_cast<uintptr_t>(&TacticalMap_ConsumeMessageThunk);
+
+		default:
+			break;
+		}
+	}
+
 	if (ZoomManager::IsZoomed() && ZoomManager::ScrollEnabled && pMessage && *pMessage == WM_MBUTTONDOWN)
 		ZoomManager::ResetZoom();
 
@@ -139,6 +173,7 @@ DEFINE_HOOK(0x6930A0, ScrollClass_MessageHandler_MiddleClickReset, 0x5)
 // Advance smooth zoom interpolation at the beginning of each frame
 DEFINE_HOOK(0x4F4480, GScreenClass_Render_ZoomUpdate, 0x9)
 {
+	TacticalMap::PinCamera();
 	ZoomManager::ApplySurfacePatches();
 	ZoomManager::Update();
 	// Keep the offscreen surfaces / buffers and the engine's viewport cache in step

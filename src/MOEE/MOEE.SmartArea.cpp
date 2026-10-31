@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 #include "MOEE.OrderUtil.h"
 
 #include <Phobos.h>
@@ -35,8 +36,6 @@ namespace MOEE::SmartArea
 		constexpr int TARGET_CAP = 256;
 		constexpr int UNIT_CAP = 1024;
 
-		OU::Hotkey Key;
-		bool Initialized = false;
 		bool PrevDown = false;
 
 		OU::PrevLine Lines[OU::PrevCap];
@@ -69,30 +68,20 @@ namespace MOEE::SmartArea
 				|| what == static_cast<int>(AbstractType::Building);
 		}
 
-		// Ctrl is owned by FuzzyAttack, so SmartArea never claims while Ctrl is
-		// held (also used by SmartOrder to yield the middle button).
-		bool ComboHeld()
+		// Fixed mouse button: Middle. The keyboard part is configurable in
+		// KeyboardMD.ini -> [Hotkey] (MOEE Smart Area, default Shift). Exact
+		// modifier matching keeps it distinct from Fuzzy Attack (Ctrl).
+		bool ComboDown()
 		{
-			if (!Initialized)
+			const auto part = MOEE::GetKeyPart(CommandNames::SmartArea);
+
+			if (part.Empty())
 				return false;
 
-			if (Key.disabled)
+			if (MOEE::MouseComboClaimed(CommandNames::SmartArea))
 				return false;
 
-			if (OU::KeyDown(VK_CONTROL))
-				return false;
-
-			if ((Key.mods & 1u) && !OU::KeyDown(VK_CONTROL)) return false;
-			if ((Key.mods & 2u) && !OU::KeyDown(VK_SHIFT)) return false;
-			if ((Key.mods & 4u) && !OU::KeyDown(VK_MENU)) return false;
-
-			for (int i = 0; i < Key.nExtra; ++i)
-			{
-				if (!OU::KeyDown(Key.extra[i]))
-					return false;
-			}
-
-			return true;
+			return MOEE::KeyPartHeldExact(part) && OU::KeyDown(VK_MBUTTON);
 		}
 
 		int CollectTargets(int cx, int cy, void** targets)
@@ -276,34 +265,15 @@ namespace MOEE::SmartArea
 	// SmartOrder yields the middle button while this combo is held.
 	int ClaimsMiddle()
 	{
-		if (!Initialized)
-			return 0;
-
-		if (Key.disabled)
-			return 0;
-
-		if (!OU::KeyDown(Key.vk))
-			return 0;
-
-		return ComboHeld() ? 1 : 0;
+		return ComboDown() ? 1 : 0;
 	}
 
 	void Poll()
 	{
-		if (!Initialized)
-		{
-			Initialized = true;
-			OU::ParseHotkey(Phobos::Config::MOEE_SmartArea, Key);
-			Log("smartarea", "%s range=%d squad=%d",
-				Key.disabled ? "OFF" : "ON", Range(), Squad());
-		}
+		const auto part = MOEE::GetKeyPart(CommandNames::SmartArea);
+		const bool down = ComboDown();
 
-		if (Key.disabled)
-			return;
-
-		const bool down = OU::HotkeyDown(Key);
-
-		if (!down && PrevDown && ComboHeld())
+		if (!down && PrevDown && !part.Empty() && MOEE::KeyPartHeld(part))
 			Press();
 
 		PrevDown = down;
@@ -313,7 +283,7 @@ namespace MOEE::SmartArea
 	{
 		LineCount = 0;
 
-		if (Key.disabled || !OU::HotkeyDown(Key))
+		if (!ComboDown())
 			return;
 
 		int cx = 0, cy = 0;

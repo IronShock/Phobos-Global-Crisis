@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 #include "MOEE.OrderUtil.h"
 
 #include <Phobos.h>
@@ -37,9 +38,22 @@ namespace MOEE::FuzzyAttack
 		constexpr int ENEMY_CAP = 256;
 		constexpr int UNIT_CAP = 512;
 
-		OU::Hotkey Key;
-		bool Initialized = false;
 		bool PrevDown = false;
+
+		// Fixed mouse button: Middle. The keyboard part is configurable in
+		// KeyboardMD.ini -> [Hotkey] (MOEE Fuzzy Attack, default Ctrl).
+		bool ComboDown()
+		{
+			const auto part = MOEE::GetKeyPart(CommandNames::FuzzyAttack);
+
+			if (part.Empty())
+				return false;
+
+			if (MOEE::MouseComboClaimed(CommandNames::FuzzyAttack))
+				return false;
+
+			return MOEE::KeyPartHeldExact(part) && OU::KeyDown(VK_MBUTTON);
+		}
 
 		// Preview state (filled while the key is held).
 		OU::PrevLine Lines[OU::PrevCap];
@@ -248,18 +262,7 @@ namespace MOEE::FuzzyAttack
 
 	void Poll()
 	{
-		if (!Initialized)
-		{
-			Initialized = true;
-			OU::ParseHotkey(Phobos::Config::MOEE_FuzzyAttack, Key);
-			Log("fuzzyattack", "%s range=%d squad=%d",
-				Key.disabled ? "OFF" : "ON", Range(), Squad());
-		}
-
-		if (Key.disabled)
-			return;
-
-		const bool down = OU::HotkeyDown(Key);
+		const bool down = ComboDown();
 
 		if (!down && PrevDown)
 			Press();
@@ -271,7 +274,7 @@ namespace MOEE::FuzzyAttack
 	{
 		LineCount = 0;
 
-		if (Key.disabled || !OU::HotkeyDown(Key))
+		if (!ComboDown())
 			return;
 
 		void* units[UNIT_CAP];

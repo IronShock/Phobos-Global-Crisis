@@ -26,6 +26,9 @@ public:
 	void SetAnimationTunnelState(bool visible);
 	AttachEffectTypeClass* GetType() const { return this->Type; }
 	int GetRemainingDuration() const { return this->Duration; }
+	// Read-only accessor used by LoadBar to derive the original duration for
+	// progress display. No state is added, so savegame layout is unchanged.
+	int GetDurationOverride() const { return this->DurationOverride; }
 	void RefreshDuration(int durationOverride = 0);
 	bool ResetIfRecreatable();
 	bool IsSelfOwned() const { return this->Source == this->Techno; }

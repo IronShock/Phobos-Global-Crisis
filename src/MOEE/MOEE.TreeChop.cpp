@@ -1,4 +1,5 @@
 #include "MOEE.h"
+#include "MOEE.Commands.h"
 #include "MOEE.OrderUtil.h"
 
 #include <Phobos.h>
@@ -37,9 +38,16 @@ namespace MOEE::TreeChop
 		constexpr int LEP_PER_CELL = 256;
 		constexpr int TREE_CAP = 256;
 
-		OU::Hotkey Key;
-		bool Initialized = false;
 		bool PrevDown = false;
+
+		// Fixed mouse button: Middle. The keyboard part is configurable in
+		// KeyboardMD.ini -> [Hotkey] (MOEE Tree Chop, default Ctrl+Z).
+		bool ComboDown()
+		{
+			const auto part = MOEE::GetKeyPart(CommandNames::TreeChop);
+			return !part.Empty() && MOEE::KeyPartHeldExact(part)
+				&& OU::KeyDown(VK_MBUTTON);
+		}
 
 		bool IsTree(const char* id)
 		{
@@ -160,17 +168,7 @@ namespace MOEE::TreeChop
 
 	void Poll()
 	{
-		if (!Initialized)
-		{
-			Initialized = true;
-			OU::ParseHotkey(Phobos::Config::MOEE_TreeChop, Key);
-			Log("treechop", "%s range=%d", Key.disabled ? "OFF" : "ON", Range());
-		}
-
-		if (Key.disabled)
-			return;
-
-		const bool down = OU::HotkeyDown(Key);
+		const bool down = ComboDown();
 
 		if (!down && PrevDown)
 			Press();
@@ -180,7 +178,7 @@ namespace MOEE::TreeChop
 
 	void Draw()
 	{
-		if (Key.disabled || !OU::HotkeyDown(Key))
+		if (!ComboDown())
 			return;
 
 		auto pSurface = DSurface::Temp;

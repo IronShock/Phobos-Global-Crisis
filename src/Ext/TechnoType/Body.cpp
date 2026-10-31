@@ -6,6 +6,7 @@
 #include <JumpjetLocomotionClass.h>
 #include <TechnoTypeClass.h>
 #include <StringTable.h>
+#include <FileSystem.h>
 
 #include <cstdio>
 #include <cstring>
@@ -15,11 +16,13 @@
 #include <Ext/BuildingType/Body.h>
 #include <Ext/BulletType/Body.h>
 #include <Ext/Techno/Body.h>
+#include <Ext/Techno/TransportEntry.h>
 #include <Ext/WeaponType/Body.h>
 #include <Locomotion/FootprintLocomotionClass.h>
 #include <New/Type/InsigniaTypeClass.h>
 
 #include <Utilities/GeneralUtils.h>
+#include <Utilities/Debug.h>
 
 TechnoTypeExt::ExtContainer TechnoTypeExt::ExtMap;
 bool TechnoTypeExt::SelectWeaponMutex = false;
@@ -1287,6 +1290,42 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 				this->MultiCell.HitAllCells ? 1 : 0);
 		}
 	}
+	this->RadarSignal.Read(exINI, pSection, "RadarSignal");
+
+	// Loaded by hand instead of via Nullable<SHPStruct*>.Read because the generic
+	// reader appends ".shp" case-sensitively, turning "ICON.SHP" into
+	// "ICON.SHP.shp" and silently failing for the uppercase names used in MIX files.
+	auto const loadRadarSignalShape = [&](const char* pKey) -> SHPStruct*
+	{
+		if (!exINI.ReadString(pSection, pKey))
+			return nullptr;
+
+		char* pValue = exINI.value();
+		GeneralUtils::ApplyTheaterSuffixToString(pValue);
+
+		std::string name = pValue;
+
+		if (name.size() < 4 || _stricmp(name.c_str() + name.size() - 4, ".shp") != 0)
+			name += ".shp";
+
+		if (auto const pImage = FileSystem::LoadSHPFile(name.c_str()))
+			return pImage;
+
+		Debug::Log("[RadarSignal] Failed to load %s referenced by [%s]%s\n", name.c_str(), pSection, pKey);
+		return nullptr;
+	};
+
+	if (auto const pImage = loadRadarSignalShape("RadarSignal.Image"))
+		this->RadarSignal_Image = pImage;
+
+
+	this->RadarSignal_Frame.Read(exINI, pSection, "RadarSignal.Frame");
+	this->RadarSignal_FrameCount.Read(exINI, pSection, "RadarSignal.FrameCount");
+	this->RadarSignal_AnimRate.Read(exINI, pSection, "RadarSignal.AnimRate");
+	this->RadarSignal_Blink.Read(exINI, pSection, "RadarSignal.Blink");
+	this->RadarSignal_AlwaysVisible.Read(exINI, pSection, "RadarSignal.AlwaysVisible");
+	this->RadarSignal_HideBlip.Read(exINI, pSection, "RadarSignal.HideBlip");
+	this->RadarSignal_Palette.LoadFromINI(pINI, pSection, "RadarSignal.Palette");
 
 	this->AIDirectionalArmor.Read(exINI, pSection, "AIDirectionalArmor");
 	this->AIDirectionalArmor_Chance.Read(exINI, pSection, "AIDirectionalArmor.Chance");
@@ -1382,6 +1421,24 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 
 	// Ares 2.0
 	this->Passengers_BySize.Read(exINI, pSection, "Passengers.BySize");
+
+	// Passenger boarding sides / pacing. These stay out of Serialize so old
+	// savegames keep loading; the values are re-read from rules on startup.
+	if (exINI.ReadString(pSection, "Passengers.EnterDirections"))
+	{
+		this->Passengers_EnterDirections = PassengerDirections::Parse(exINI.value());
+		Debug::Log("[Passengers.EnterDirections] %s = '%s' (0x%02X)\n",
+			pSection, exINI.value(), static_cast<int>(this->Passengers_EnterDirections));
+	}
+
+	this->Passengers_EnterStaggerFrames.Read(exINI, pSection, "Passengers.EnterStaggerFrames");
+	this->Passengers_UnloadStaggerFrames.Read(exINI, pSection, "Passengers.UnloadStaggerFrames");
+
+	if (static_cast<int>(this->Passengers_EnterStaggerFrames) < 0)
+		this->Passengers_EnterStaggerFrames = 0;
+
+	if (static_cast<int>(this->Passengers_UnloadStaggerFrames) < 0)
+		this->Passengers_UnloadStaggerFrames = 0;
 
 	char tempBuffer[40];
 
@@ -1973,6 +2030,15 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->Promote_EliteAnimation)
 
 		.Process(this->RadarInvisibleToHouse)
+		.Process(this->RadarSignal)
+		.Process(this->RadarSignal_Image)
+		.Process(this->RadarSignal_Frame)
+		.Process(this->RadarSignal_FrameCount)
+		.Process(this->RadarSignal_AnimRate)
+		.Process(this->RadarSignal_Blink)
+		.Process(this->RadarSignal_AlwaysVisible)
+		.Process(this->RadarSignal_HideBlip)
+		.Process(this->RadarSignal_Palette)
 		.Process(this->AIDirectionalArmor)
 		.Process(this->AIDirectionalArmor_Chance)
 		.Process(this->AIDirectionalArmor_Delay)
