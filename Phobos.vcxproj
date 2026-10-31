@@ -128,7 +128,6 @@
     <ClCompile Include="src\MOEE\MOEE.DeployPreview.cpp" />
     <ClCompile Include="src\MOEE\MOEE.MapCenter.cpp" />
     <ClCompile Include="src\MOEE\MOEE.WeaponRange.cpp" />
-    <ClCompile Include="src\MOEE\MOEE.GridView.cpp" />
     <ClCompile Include="src\MOEE\MOEE.Observer.cpp" />
     <ClCompile Include="src\MOEE\MOEE.GdiText.cpp" />
     <ClCompile Include="src\MOEE\MOEE.VecText.cpp" />

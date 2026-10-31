@@ -106,7 +106,6 @@ namespace MOEE
 		SmartOrder::Poll();
 		PatrolCircle::Poll();
 		SmartArea::Poll();
-		GridView::Poll();
 	}
 
 	void Draw()
@@ -119,7 +118,6 @@ namespace MOEE
 		SmartArea::Draw();
 		DeployPreview::Draw();
 		WeaponRange::Draw();
-		GridView::Draw();
 		FootprintDebug::Draw();
 	}
 }

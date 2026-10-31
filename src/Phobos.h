@@ -193,8 +193,6 @@ public:
 		static int MOEE_DeployPreview_Timeout;
 		static bool MOEE_MapCenter;
 		static bool MOEE_WeaponRange;
-		static char MOEE_Grid[0x40];
-		static int MOEE_Grid_Radius;
 		static bool MOEE_VecText;
 		static char MOEE_VecText_FontFace[0x40];
 		static char MOEE_VecText_FontFaceLatin[0x40];

@@ -46,6 +46,5 @@ namespace MOEE
 	namespace SmartArea { int ClaimsMiddle(); void Poll(); void Draw(); } // key part + Middle: area order
 	namespace DeployPreview { int ClaimsMiddle(); void Poll(); void Draw(); } // Middle: base-deploy preview
 	namespace WeaponRange { void Draw(); }   // key part: weapon range ellipse
-	namespace GridView { void Poll(); void Draw(); } // toggleable tactical ground grid
 	namespace VecText { void EnsureInit(); }  // global vector text
 }

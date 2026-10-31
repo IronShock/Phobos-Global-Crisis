@@ -145,8 +145,6 @@ bool Phobos::Config::MOEE_DeployPreview_AutoDeploy = true;
 int Phobos::Config::MOEE_DeployPreview_Timeout = 675;
 bool Phobos::Config::MOEE_MapCenter = true;
 bool Phobos::Config::MOEE_WeaponRange = true;
-char Phobos::Config::MOEE_Grid[0x40] = "Ctrl+G";
-int Phobos::Config::MOEE_Grid_Radius = 20;
 bool Phobos::Config::MOEE_VecText = true;
 char Phobos::Config::MOEE_VecText_FontFace[0x40] = "HarmonyOS_Sans_SC_Regular.ttf";
 char Phobos::Config::MOEE_VecText_FontFaceLatin[0x40] = "Roboto_SemiCondensed-Medium.ttf";
@@ -389,10 +387,6 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 	Phobos::Config::MOEE_MapCenter = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.MapCenter", true);
 	// Hold the configured key part (default Ctrl+Shift) to draw the weapon range.
 	Phobos::Config::MOEE_WeaponRange = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.WeaponRange", true);
-	// Toggleable tactical ground grid (Ctrl+G by default).
-	CCINIClass::INI_RA2MD.ReadString(phobosSection, "MOEE.Grid", "Ctrl+G", Phobos::Config::MOEE_Grid);
-	Phobos::Config::MOEE_Grid_Radius = std::clamp(
-		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "MOEE.Grid.Radius", 20), 8, 40);
 
 	// Global vector-text takeover (MO_EE VecText port, staged).
 	Phobos::Config::MOEE_VecText = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MOEE.VecText", true);
