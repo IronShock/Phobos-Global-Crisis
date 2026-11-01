@@ -206,16 +206,24 @@ DEFINE_HOOK(0x6B4DBA, ScenarioClass_ReadSmudge_ExtraSmudges, 0x7)
 }
 
 // Map saving: ScenarioClass::Write_Smudge (0x6B4DD0) writes each cell's native
-// smudge. Hook right after a native entry is written (0x6B4E76) and also write the
-// stacked ExtraSmudges so a map saved from the game keeps every per-cell smudge.
-DEFINE_HOOK(0x6B4E76, ScenarioClass_WriteSmudge_ExtraSmudges, 0x5)
+// smudge. Hook at the loop's `cmp edi,0x200` (0x6B4E7B) and also write the stacked
+// ExtraSmudges so a map saved from the game keeps every per-cell smudge.
+//
+// Do NOT hook 0x6B4E76 with size 0x5: that 5-byte jump covers 0x6B4E7A, which is
+// the branch target of the two `je/jne 0x6B4E7A` above (taken for every cell
+// without a native smudge). Jumping there executes the last byte of the E9 rel32
+// as an opcode, runs off into 0x6B4E80 and crashes with C0000005 (EAX = -1).
+// 0x6B4E7B..0x6B4E80 is exactly `cmp edi,0x200` and has no branch targets.
+DEFINE_HOOK(0x6B4E7B, ScenarioClass_WriteSmudge_ExtraSmudges, 0x6)
 {
 	GET(CellClass*, pCell, ESI);
+	// Both `inc [esp+0x10]` and `inc edi` already ran, so this is the index the
+	// next native entry will use; extras are appended from here.
 	GET_STACK(int, keyIndex, 0x10);
 	// `this` (the CCINIClass) is at [esp+0x18] at this hook point (the engine
-	// loads it as `mov ecx,[esp+0x1c]` one push earlier, before WriteString's
-	// ret 0xC). Using 0x20 read the key buffer instead and passed a garbage INI
-	// to WriteString, corrupting the heap (map INI entry UAF on the next load).
+	// loads it as `mov ecx,[esp+0x1c]` before WriteString's ret 0xC). Using 0x20
+	// read the key buffer instead and passed a garbage INI to WriteString,
+	// corrupting the heap (map INI entry UAF on the next load).
 	GET_STACK(CCINIClass*, pINI, 0x18);
 
 	auto const pCellExt = CellExt::ExtMap.Find(pCell);
@@ -233,9 +241,8 @@ DEFINE_HOOK(0x6B4E76, ScenarioClass_WriteSmudge_ExtraSmudges, 0x5)
 		}
 	}
 
-	// The vanilla `inc dword ptr [esp+0x10]` (stolen with size 0x5) is replayed by
-	// the trampoline, so write back the counter already advanced past any extras we
-	// wrote; the replayed `inc` then bumps it once more for the next native smudge.
+	// The engine's `inc dword ptr [esp+0x10]` for this cell is already done, so
+	// hand back the counter advanced past every extra we appended.
 	R->Stack(0x10, keyIndex);
 
 	return 0;
