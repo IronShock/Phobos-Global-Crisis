@@ -53,6 +53,62 @@ namespace Fog
 		map.sub_657CE0();
 		map.MarkNeedsRedraw(2);
 	}
+
+	// Real MapClass::IsLocationFogged. gamemd ships a stub there (`xor al,al; ret 4`)
+	// that always reports "not fogged", which is why units are still drawn inside
+	// fog. This is installed as a 5-byte JMP over the stub once the port is active.
+	bool __fastcall IsLocationFoggedImpl(MapClass* pThis, void* /*edx*/, const CoordStruct& coords)
+	{
+		if (!Active())
+			return false;
+
+		const int level = coords.Z / Unsorted::LevelHeight;
+		const int extra = (level & 1) ? ((level >> 1) + 1) : (level >> 1);
+		const CellStruct cell { static_cast<short>((coords.X >> 8) - extra),
+			static_cast<short>((coords.Y >> 8) - extra) };
+		const auto pCell = MapClass::Instance.GetCellAt(cell);
+
+		if (!(pCell->Flags & CellFlags::Fogged) || pCell->Foggedness == -1)
+			return false;
+
+		// Objects overlapping a fully visible neighbour keep drawing, otherwise
+		// they pop out at the fog border.
+		for (auto const& offset : Unsorted::AdjacentCell)
+		{
+			if (MapClass::Instance.GetCellAt(cell + offset)->Foggedness == -1)
+				return false;
+		}
+
+		return true;
+	}
+
+	void InstallIsLocationFogged()
+	{
+		static bool installed = false;
+
+		if (installed)
+			return;
+
+		installed = true;
+
+		constexpr DWORD address = 0x5865E0;
+		DWORD oldProtect = 0;
+
+		if (VirtualProtect(reinterpret_cast<void*>(address), 5, PAGE_EXECUTE_READWRITE, &oldProtect))
+		{
+			*reinterpret_cast<unsigned char*>(address) = 0xE9;
+			const auto relative = static_cast<int>(reinterpret_cast<uintptr_t>(&IsLocationFoggedImpl)
+				- (address + 5));
+			*reinterpret_cast<int*>(address + 1) = relative;
+			VirtualProtect(reinterpret_cast<void*>(address), 5, oldProtect, &oldProtect);
+			FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(address), 5);
+			Debug::Log("[Fog] IsLocationFogged installed\n");
+		}
+		else
+		{
+			Debug::Log("[Fog] IsLocationFogged patch failed\n");
+		}
+	}
 }
 
 // Scenario / game-mode fog decision. Campaign maps keep their own setting (TUTO4
@@ -78,6 +134,10 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 
 	GameModeOptionsClass::Instance.FogOfWar = fog;
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
+
+	if (fog)
+		Fog::InstallIsLocationFogged();
+
 	return 0;
 }
 
