@@ -375,6 +375,14 @@ namespace FoggedObjectHelper
 using FoggedObjectFields = FoggedObjectHelper::FoggedObjectFields;
 using FoggedObjectHelper::RemoveFoggedObject;
 
+// Master gate for the fog port: while the scenario has no fog (or the rules
+// switch is off) every fog hook replays the original engine code, so fog-less
+// missions such as TUTO4 behave exactly like vanilla.
+static inline bool FogActive()
+{
+	return Phobos::Config::TSFog && ScenarioClass::Instance->SpecialFlags.FogOfWar;
+}
+
 DEFINE_HOOK(0x687C56, INIClass_ReadScenario_EnableFog, 0x5)
 {
 	// Follow the scenario / game-mode setting instead of forcing the rules value:
@@ -395,6 +403,9 @@ DEFINE_HOOK(0x687C56, INIClass_ReadScenario_EnableFog, 0x5)
 // 像黑幕那样自动刷新周围格子的绘制状态，防止边缘出现锯齿
 DEFINE_HOOK(0x4A9CA0, DisplayClass_RevealFogShroud_Reimplement, 0x8)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipGameCode = 0x4A9DC6 };
 
 	GET(DisplayClass*, pThis, ECX);
@@ -516,6 +527,9 @@ DEFINE_HOOK(0x4A9CA0, DisplayClass_RevealFogShroud_Reimplement, 0x8)
 
 DEFINE_HOOK(0x4A9DF1, DisplayClass_MapCellFoggedness_NoUpdate, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipGameCode = 0x4A9DFE };
 
 	GET(CellFlags, flags, EAX);
@@ -534,6 +548,9 @@ DEFINE_HOOK(0x4A9DF1, DisplayClass_MapCellFoggedness_NoUpdate, 0x6)
 // 像黑幕刷新那样考虑飞行单位，确保未移动的飞行单位的视野不会被刷新掉，并且友军视野不只看建筑，避免频繁刷新
 DEFINE_HOOK(0x4ADFF0, MapClass_AllToSee_Reimplement, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipGameCode = 0x4AE0A5 };
 
 	GET_STACK(bool, notForBuilding, STACK_OFFSET(0x0, 0x4));
@@ -568,6 +585,9 @@ DEFINE_HOOK(0x4ADFF0, MapClass_AllToSee_Reimplement, 0x5)
 // 增加一种立即刷新迷雾的机制，甚至！？性能提升？！
 DEFINE_HOOK(0x4ACBC4, MapClass_FogSpread_SkipWithSpySat, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipGameCode = 0x4ACC4B, SpreadFogOfWar = 0x4ACBF8 };
 
 	GET(MapClass*, pThis, ECX);
@@ -602,6 +622,9 @@ DEFINE_HOOK(0x4ACBC4, MapClass_FogSpread_SkipWithSpySat, 0x5)
 // DrawSHP site; the building overlay SHP also reaches it with another type.
 DEFINE_HOOK(0x4D20FA, FoggedObjectClass_DrawFoggedObjects_AnimDrawOffset, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(AnimTypeClass* const, pType, ESI);
 	R->ref_Stack<int>(0x38) += AnimTypeExt::ExtMap.Find(pType)->XDrawOffset;
 	R->EDX(static_cast<int>(R->EDX()) + pType->YDrawOffset);
@@ -619,6 +642,9 @@ DEFINE_HOOK(0x4D20FA, FoggedObjectClass_DrawFoggedObjects_AnimDrawOffset, 0x6)
 // 其 LightConvert。TerrainPalette 分支在钩点之前已处理，优先级与正常绘制一致。
 DEFINE_HOOK(0x4D1EE5, FoggedObjectClass_DrawFoggedObjects_BuildingCustomPalette, 0x8)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(BuildingTypeClass*, pType, ESI);
 	GET(void*, pFogged, EBX);
 
@@ -655,6 +681,9 @@ DEFINE_FUNCTION_JUMP(CALL6, 0x73AC5F, FoggedObjectHelper::TechnoClass_RevealLast
 // 迷雾遮蔽时增加地形对象、覆盖物、弹坑
 DEFINE_HOOK(0x486B21, CellClass_FogCell_FreezeObjects, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipGameCode = 0x486BAB };
 
 	GET(FoggedObjectHelper::CellClassFake*, pCell, EBP);
@@ -701,6 +730,9 @@ DEFINE_HOOK(0x486B21, CellClass_FogCell_FreezeObjects, 0x6)
 DEFINE_HOOK_AGAIN(0x4D246E, FoggedObjectClass_MarkFogged_SkipWhenVisible, 0x6)
 DEFINE_HOOK(0x4D2430, FoggedObjectClass_MarkFogged_SkipWhenVisible, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(uintptr_t, flagsAddr, EAX);
 
 	auto const pCell = reinterpret_cast<CellClass*>(flagsAddr - 0x140);
@@ -716,6 +748,9 @@ DEFINE_HOOK(0x4D2430, FoggedObjectClass_MarkFogged_SkipWhenVisible, 0x6)
 // 的真实地形与快照都不绘制，表现为迷雾边缘的地形对象整体消失。
 DEFINE_HOOK(0x6D9313, TacticalClass_DrawObjectsInLayers_SkipTerrainInFog, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipDraw = 0x6D940C };
 
 	GET(const CoordStruct*, pCoord, EAX);
@@ -738,6 +773,9 @@ DEFINE_HOOK(0x6D9313, TacticalClass_DrawObjectsInLayers_SkipTerrainInFog, 0x6)
 // 不能因为不满足迷雾条件就返回 Draw，否则会绕过原版的 -1 检查。
 DEFINE_HOOK(0x6D70BC, TacticalClass_DrawCellOverlay_SkipOverlayInFog, 0xA)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { Draw = 0x6D70C6, SkipDraw = 0x6D71A4 };
 
 	GET(const CellClass*, pCell, EBX);
@@ -756,6 +794,9 @@ DEFINE_HOOK(0x6D70BC, TacticalClass_DrawCellOverlay_SkipOverlayInFog, 0xA)
 // -1 去索引 SmudgeTypeClass::Array（读到数组前面的垃圾指针）并在绘制时崩溃。
 DEFINE_HOOK(0x48049E, CellClass_DrawCellSmudge_SkipSmudgeInFog, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { Draw = 0x4804A4, SkipDraw = 0x4804FB };
 
 	GET(const CellClass*, pThis, ESI);
@@ -772,6 +813,9 @@ DEFINE_HOOK(0x48049E, CellClass_DrawCellSmudge_SkipSmudgeInFog, 0x6)
 // 被击败或是观察者时揭开所有迷雾
 DEFINE_HOOK(0x4FC200, HouseClass_AcceptDefeat_RevealFog, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	if (ScenarioClass::Instance->SpecialFlags.FogOfWar)
 		FoggedObjectHelper::ClearAllFog();
 
@@ -833,6 +877,9 @@ DEFINE_FUNCTION_JUMP(CALL, 0x71D012, FoggedObjectHelper::TerrainClassFake::Terra
 // state changes, and never sample a building that was not actually visible.
 DEFINE_HOOK(0x457AA0, BuildingClass_FreezeInFog_PrepareVoxel, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(BuildingClass*, building, ECX);
 	GET_STACK(bool, visible, 0xC);
 	if (visible)
@@ -844,6 +891,9 @@ DEFINE_HOOK(0x457AA0, BuildingClass_FreezeInFog_PrepareVoxel, 0x6)
 // 70750E: ECX = selected converter, EDI = Techno, [ESP] = flags.
 DEFINE_HOOK(0x70750E, TechnoClass_BlitVoxel_RememberFogPalette, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(TechnoClass*, pThis, EDI);
 	GET(ConvertClass*, palette, ECX);
 	GET_STACK(unsigned, flags, 0x0);
@@ -855,6 +905,9 @@ DEFINE_HOOK(0x70750E, TechnoClass_BlitVoxel_RememberFogPalette, 0x5)
 // [ESP+14/18/1C/30] = Z adjustment/gradient/intensity/tint. Resume the call once.
 DEFINE_HOOK(0x707736, TechnoClass_BlitVoxel_RememberFogImage, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(TechnoClass*, pThis, EDI);
 	GET(const VoxelCacheStruct*, cache, ESI);
 	GET(const RectangleStruct*, clip, EDX);
@@ -867,6 +920,9 @@ DEFINE_HOOK(0x707736, TechnoClass_BlitVoxel_RememberFogImage, 0x5)
 // EBP = source Techno, EDX = converter, EBX = flags; 11 blit args on the stack.
 DEFINE_HOOK(0x707235, TechnoClass_RenderVoxel_RememberFogImage, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(TechnoClass*, pThis, EBP);
 	GET(ConvertClass*, palette, EDX);
 	GET(unsigned, flags, EBX);
@@ -881,6 +937,9 @@ DEFINE_HOOK(0x707235, TechnoClass_RenderVoxel_RememberFogImage, 0x5)
 // reuses that argument slot for AnimTypeClass*, so animated buildings lose VXLs.
 DEFINE_HOOK(0x4D10D3, FoggedObjectClass_CTOR_FreezeVoxel, 0x9)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(FoggedObjectClass*, snapshot, EDI);
 	GET(BuildingClass*, building, EBX);
 	FoggedVoxel::Freeze(building, snapshot);
@@ -891,6 +950,9 @@ DEFINE_HOOK(0x4D10D3, FoggedObjectClass_CTOR_FreezeVoxel, 0x9)
 // skip/invalid-record paths must never interpret EBX as a valid snapshot.
 DEFINE_HOOK(0x4D2203, FoggedObjectClass_DrawFrozenVoxel, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(FoggedObjectClass*, snapshot, EBX);
 	GET(const RectangleStruct*, bounds, EDI);
 	FoggedVoxel::Draw(snapshot, bounds);
@@ -902,6 +964,9 @@ DEFINE_HOOK(0x4D2203, FoggedObjectClass_DrawFrozenVoxel, 0x5)
 // 按对象指针把绘制数组里指向自己的记录全部清掉。
 DEFINE_HOOK(0x4D1855, FoggedObjectClass_Destructor_CleanDrawRecords, 0x7)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(FoggedObjectClass*, pThis, EDI);
 
 	FoggedVoxel::Remove(pThis);
@@ -921,6 +986,9 @@ DEFINE_HOOK(0x4D1855, FoggedObjectClass_Destructor_CleanDrawRecords, 0x7)
 // 不一致就跳过该记录，交给下一帧；正常对象的检查恒通过，不改变绘制结果。
 DEFINE_HOOK(0x4D18F3, FoggedObjectClass_DrawFoggedObjects_SkipInvalidRecord, 0x7)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipThisObject = 0x4D2311 };
 
 	GET(FoggedObjectHelper::FoggedDrawRecord*, pRecords, ECX);
@@ -942,6 +1010,9 @@ DEFINE_HOOK(0x4D18F3, FoggedObjectClass_DrawFoggedObjects_SkipInvalidRecord, 0x7
 
 DEFINE_HOOK(0x4D1B2E, FoggedObjectClass_DrawFoggedObjects_DrawTerrain, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	enum { SkipGameCode = 0x4D2311 };
 
 	GET(SHPStruct*, pImage, EAX);
@@ -1067,6 +1138,9 @@ namespace FoggedEffectHelper
 // 激光（含飞碟激光分段、激光型尾迹）两端都在迷雾中时跳过绘制
 DEFINE_HOOK(0x550274, LaserDrawClass_Draw_SkipInFog, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(LaserDrawClass* const, pThis, EBX);
 
 	if (FoggedEffectHelper::IsBeamFogged(pThis->Source, pThis->Target))
@@ -1078,6 +1152,9 @@ DEFINE_HOOK(0x550274, LaserDrawClass_Draw_SkipInFog, 0x5)
 // 电弧（含电弧型尾迹）两端都在迷雾中时跳过绘制，寿命照常折半递减
 DEFINE_HOOK(0x4C27D5, EBolt_DrawAll_SkipInFog_1, 0x7)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(EBolt* const, pThis, ESI);
 	GET(int, visible, EAX);
 
@@ -1089,6 +1166,9 @@ DEFINE_HOOK(0x4C27D5, EBolt_DrawAll_SkipInFog_1, 0x7)
 
 DEFINE_HOOK(0x4C28F9, EBolt_DrawAll_SkipInFog_2, 0x7)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(EBolt* const, pThis, ESI);
 	GET(int, visible, EAX);
 
@@ -1101,6 +1181,9 @@ DEFINE_HOOK(0x4C28F9, EBolt_DrawAll_SkipInFog_2, 0x7)
 // 辐射波（含辐射型尾迹）两端都在迷雾中时跳过绘制，存活计时照常递增
 DEFINE_HOOK(0x65978C, RadBeam_AI_SkipInFog_1, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(RadBeam* const, pThis, ESI);
 
 	if (*(bool*)((char*)pThis + 9) && FoggedEffectHelper::IsBeamFogged(pThis->SourceLocation, pThis->TargetLocation))
@@ -1111,6 +1194,9 @@ DEFINE_HOOK(0x65978C, RadBeam_AI_SkipInFog_1, 0x5)
 
 DEFINE_HOOK(0x659CB7, RadBeam_AI_SkipInFog_2, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(RadBeam* const, pThis, EDI);
 
 	if (*(bool*)((char*)pThis + 9) && FoggedEffectHelper::IsBeamFogged(pThis->SourceLocation, pThis->TargetLocation))
@@ -1122,6 +1208,9 @@ DEFINE_HOOK(0x659CB7, RadBeam_AI_SkipInFog_2, 0x5)
 // 声波/磁波两端都在迷雾中时跳过绘制，波动推进与伤害逻辑照常执行
 DEFINE_HOOK(0x762C4E, WaveClass_UpdateWave_SkipInFog, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	struct WaveEndpointsFake
 	{
 		char _[0xAC];
@@ -1157,6 +1246,9 @@ DEFINE_HOOK(0x762C4E, WaveClass_UpdateWave_SkipInFog, 0x6)
 // 与同分支的无遮挡子路径传 0 的行为一致，迷雾中的建筑不需要遮挡效果。
 DEFINE_HOOK(0x4D1E46, FoggedObjectClass_DrawFoggedObjects_NullBuildingZSHA, 0x7)
 {
+	if (!FogActive())
+		return 0;
+
 	R->EAX(0); // 原本存入 BUILDINGZ_SHA，改为空指针
 	return 0;
 }
@@ -1168,6 +1260,9 @@ DEFINE_HOOK(0x4D1E46, FoggedObjectClass_DrawFoggedObjects_NullBuildingZSHA, 0x7)
 // 迷雾中的建筑被摧毁后，移除其冻结在迷雾中的贴图，防止残留
 DEFINE_HOOK(0x441F60, BuildingClass_AfterDestruction_RemoveFoggedImage, 0x5)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(BuildingClass* const, pThis, ECX);
 
 	if (ScenarioClass::Instance->SpecialFlags.FogOfWar)
@@ -1220,6 +1315,9 @@ DEFINE_HOOK(0x441F60, BuildingClass_AfterDestruction_RemoveFoggedImage, 0x5)
 // 数量变化就地更新，类型变化或耗尽则移除后重建（0x480C67 为两条扣减路径的汇合点）
 DEFINE_HOOK(0x480C67, CellClass_ReduceTiberium_SyncFoggedOverlay, 0x6)
 {
+	if (!FogActive())
+		return 0;
+
 	GET(CellClass* const, pRawCell, ESI);
 
 	// 耗尽路径中 ESI 已被调整为 cell+0x24（&MapCoords），此处还原
