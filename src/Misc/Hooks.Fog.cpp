@@ -119,35 +119,6 @@ namespace Fog
 		return Phobos::Config::TSFog_FogFrame;
 	}
 
-	void ClampExplored(CellClass* pCell, const CellStruct& cell)
-	{
-		EnsureExplored();
-
-		const int index = MapClass::GetCellIndex(cell);
-		if (index < 0 || index >= 512 * 512)
-			return;
-
-		if (pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed))
-			MarkExplored(cell, index);
-
-		if (!Explored[index])
-			return;
-
-		pCell->Flags |= CellFlags::CenterRevealed;
-
-		if (pCell->Visibility == -2)
-		{
-			pCell->Visibility = -1;
-
-			if (pCell->Foggedness < 0)
-				pCell->Foggedness = static_cast<char>(FogFrame());
-		}
-		else if (pCell->Foggedness == -2)
-		{
-			pCell->Foggedness = static_cast<char>(FogFrame());
-		}
-	}
-
 	void SetVisible(CellClass* pCell, const CellStruct& cell)
 	{
 		if (pCell->Foggedness == -1 && pCell->Visibility == -1 && !(pCell->Flags & CellFlags::Fogged))
@@ -166,130 +137,11 @@ namespace Fog
 	{
 		pCell->Visibility = TacticalClass::Instance->GetOcclusion(cell, false);
 		pCell->Foggedness = TacticalClass::Instance->GetOcclusion(cell, true);
-		ClampExplored(pCell, cell);
 
 		if (pCell->Foggedness == -1)
 			pCell->Flags &= ~CellFlags::Fogged;
 
 		TacticalClass::Instance->RegisterCellAsVisible(pCell);
-	}
-
-	// Safety net: the gap generator, the shroud cascade and several other engine
-	// paths write CellClass::Visibility directly, bypassing RevealFogShroud. Walk
-	// the explored cells and turn any black shroud back into fog, and make sure a
-	// fogged cell always carries the Fogged flag so units are hidden.
-	void ApplyExploredClamp()
-	{
-		if (ExploredList.empty())
-			return;
-
-		const char frame = static_cast<char>(FogFrame());
-
-		for (const int key : ExploredList)
-		{
-			const CellStruct cell { static_cast<short>(key & 0x1FF), static_cast<short>(key >> 9) };
-			auto const pCell = MapClass::Instance.TryGetCellAt(cell);
-
-			if (!pCell)
-				continue;
-
-			bool changed = false;
-
-			if (pCell->Visibility == -2)
-			{
-				pCell->Visibility = -1;
-				changed = true;
-
-				// The engine sometimes clears only the shroud layer; make sure the
-				// cell is fogged too, otherwise units stay visible on black.
-				if (pCell->Foggedness < 0)
-					pCell->Foggedness = frame;
-			}
-			else if (pCell->Foggedness == -2)
-			{
-				pCell->Foggedness = frame;
-				changed = true;
-			}
-
-			if (pCell->Foggedness != -1 && !(pCell->Flags & CellFlags::Fogged))
-			{
-				pCell->Flags |= CellFlags::Fogged;
-				changed = true;
-			}
-
-			if (changed)
-			{
-				pCell->Flags |= CellFlags::CenterRevealed;
-				TacticalClass::Instance->RegisterCellAsVisible(pCell);
-			}
-		}
-	}
-
-	// Gap generators: the engine re-shrouds covered cells to black. Render them as
-	// semi-transparent fog instead. Only cells whose state actually changes are
-	// rewritten/redrawn, so a large gap does not dirty the whole viewport.
-	std::unordered_set<int> GapCells;
-
-	void ApplyGapFog()
-	{
-		std::unordered_set<int> next;
-
-		if (Phobos::Config::TSFog_GapFog && HouseClass::CurrentPlayer)
-		{
-			for (auto pBuilding : BuildingClass::Array)
-			{
-				if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo
-					|| !pBuilding->Type || !pBuilding->Type->GapGenerator
-					|| !pBuilding->GeneratingGap || !pBuilding->Owner)
-					continue;
-
-				if (pBuilding->Owner->IsAlliedWith(HouseClass::CurrentPlayer))
-					continue;
-
-				const auto center = pBuilding->GetMapCoords();
-				const int radius = pBuilding->GapRadius > 0 ? pBuilding->GapRadius : 10;
-
-				for (int dy = -radius; dy <= radius; ++dy)
-				{
-					for (int dx = -radius; dx <= radius; ++dx)
-					{
-						if (dx * dx + dy * dy > radius * radius)
-							continue;
-
-						const CellStruct cell { static_cast<short>(center.X + dx),
-							static_cast<short>(center.Y + dy) };
-						auto const pCell = MapClass::Instance.TryGetCellAt(cell);
-
-						if (!pCell || !(pCell->Flags & CellFlags::CenterRevealed))
-							continue;
-
-						next.insert(MapClass::GetCellIndex(cell));
-
-						if (pCell->Foggedness != static_cast<char>(Phobos::Config::TSFog_GapFrame)
-							|| pCell->Visibility != -1 || !(pCell->Flags & CellFlags::Fogged))
-						{
-							pCell->Flags |= CellFlags::Fogged;
-							pCell->Visibility = -1;
-							pCell->Foggedness = static_cast<char>(Phobos::Config::TSFog_GapFrame);
-							ClampExplored(pCell, cell);
-							TacticalClass::Instance->RegisterCellAsVisible(pCell);
-						}
-					}
-				}
-			}
-		}
-
-		for (const int key : GapCells)
-		{
-			if (next.count(key))
-				continue;
-
-			const CellStruct cell { static_cast<short>(key & 0x1FF), static_cast<short>(key >> 9) };
-			if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
-				Restore(pCell, cell);
-		}
-
-		GapCells.swap(next);
 	}
 
 	// --- Isolated gap-generator overlay -----------------------------------
@@ -1622,11 +1474,11 @@ DEFINE_FUNCTION_JUMP(CALL, 0x5FD2D2, FoggedObjectHelper::OverlayClassFake::Overl
 DEFINE_FUNCTION_JUMP(CALL, 0x6B4B14, FoggedObjectHelper::SmudgeClassFake::SmudgeClass_Unlimbo_CheckFog);
 DEFINE_FUNCTION_JUMP(CALL, 0x71D012, FoggedObjectHelper::TerrainClassFake::TerrainClass_Unlimbo_CheckFog);
 
-// --- Stage C3: gap-generator areas become semi-transparent fog ---
+// --- Per-frame fog driver ---
 //
-// The engine re-shrouds gap-covered cells to black every update. ApplyGapFog runs
-// on a cheap 8-frame cadence and rewrites those cells to a fog frame instead; the
-// previous cell set is restored when a gap ends.
+// Impact reveals expire here, the gap coverage mask is rebuilt and newly revealed
+// cells are remembered. No cell fields are touched from this hook, so the normal
+// fog path stays exactly as the engine renders it.
 DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 {
 	if (!Fog::Active())
@@ -1634,10 +1486,6 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 
 	// Impact reveals expire quickly and must disappear the moment they do.
 	Fog::ApplyImpacts();
-
-	// Catch any engine path that writes black shroud over an explored cell.
-	if ((Unsorted::CurrentFrame % 6) == 0)
-		Fog::ApplyExploredClamp();
 
 	// Gap coverage mask (vanilla gap shroud is neutralised there).
 	if ((Unsorted::CurrentFrame % 10) == 0)
