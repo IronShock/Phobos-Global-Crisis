@@ -395,6 +395,11 @@ DEFINE_HOOK(0x687C56, INIClass_ReadScenario_EnableFog, 0x5)
 
 	fog = fog && Phobos::Config::TSFog;
 
+	Debug::Log("[Fog] scenario read: map=%d mode=%d tsfog=%d -> %d\n",
+		static_cast<int>(ScenarioClass::Instance->SpecialFlags.FogOfWar),
+		static_cast<int>(GameModeOptionsClass::Instance.FogOfWar),
+		static_cast<int>(Phobos::Config::TSFog), static_cast<int>(fog));
+
 	GameModeOptionsClass::Instance.FogOfWar = fog;
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
 	return 0;
