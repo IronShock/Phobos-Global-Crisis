@@ -99,6 +99,30 @@ namespace Fog
 		ExploredList.push_back(index);
 	}
 
+	// Full-map sweep: remember every cell the player has ever revealed, before the
+	// gap generator / reshroud clears CenterRevealed and EdgeRevealed.
+	void ScanExploredCells()
+	{
+		EnsureExplored();
+
+		auto& map = MapClass::Instance;
+		map.CellIteratorReset();
+
+		for (auto pCell = map.CellIteratorNext(); pCell; pCell = map.CellIteratorNext())
+		{
+			if (pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed))
+			{
+				const int index = MapClass::GetCellIndex(pCell->MapCoords);
+
+				if (index >= 0 && index < 512 * 512 && !Explored[index])
+				{
+					Explored[index] = 1;
+					ExploredList.push_back(index);
+				}
+			}
+		}
+	}
+
 	int FogFrame()
 	{
 		return Phobos::Config::TSFog_FogFrame;
@@ -175,20 +199,24 @@ namespace Fog
 			return engineFog < 0 ? 0 : engineFog;
 
 		// Unexplored cells are never touched: the normal black shroud stays.
-		if (!(pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)))
+		if (!Explored[key])
 		{
 			FogLevel[key] = -2;
 			return engineFog < 0 ? 0 : engineFog;
 		}
 
-		if (engineFog == -1)
+		const bool inGap = GapMask[key] != 0;
+
+		if (engineFog == -1 && !inGap)
 		{
 			FogLevel[key] = -1;
 			pCell->Flags &= ~CellFlags::Fogged;
 			return 0;
 		}
 
-		const int target = std::clamp(engineFog < 0 ? FogFrame() : engineFog, 0, 48) * 100;
+		// Inside an enemy gap the cell is treated as unseen even if the engine
+		// still reports it visible, so the fog spreads there as well.
+		const int target = std::clamp(inGap || engineFog < 0 ? FogFrame() : engineFog, 0, 48) * 100;
 		int level = FogLevel[key];
 
 		if (level < 0)
@@ -462,6 +490,14 @@ namespace Fog
 			else
 				++it;
 		}
+	}
+
+	bool IsExplored(CellClass* pCell)
+	{
+		EnsureExplored();
+
+		const int key = MapClass::GetCellIndex(pCell->MapCoords);
+		return key >= 0 && key < 512 * 512 && Explored[key] != 0;
 	}
 
 	// Real MapClass::IsLocationFogged. gamemd ships a stub there (`xor al,al; ret 4`)
@@ -1628,6 +1664,10 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 	if ((Unsorted::CurrentFrame % 10) == 0)
 		Fog::UpdateGapMask();
 
+	// Remember newly revealed cells before the gap clears their reveal flags.
+	if ((Unsorted::CurrentFrame % 15) == 0)
+		Fog::ScanExploredCells();
+
 	return 0;
 }
 
@@ -1695,8 +1735,9 @@ DEFINE_HOOK(0x480223, Fog_Spread_VisibilityFrame, 0x8)
 
 	GET(CellClass*, pCell, ESI);
 
-	// Only explored cells are affected; unexplored cells keep the black shroud.
-	if (!(pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)))
+	// Only cells the player has ever revealed are affected; unexplored cells keep
+	// the black shroud even after the gap clears their reveal flags.
+	if (!Fog::IsExplored(pCell))
 		return 0;
 
 	R->EAX(0);
@@ -1710,7 +1751,7 @@ DEFINE_HOOK(0x480273, Fog_Spread_FogFrame, 0x5)
 
 	GET(CellClass*, pCell, ESI);
 
-	if (!(pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)))
+	if (!Fog::IsExplored(pCell))
 		return 0;
 
 	const int frame = Fog::UpdateCellFog(pCell, static_cast<int>(pCell->Foggedness));
