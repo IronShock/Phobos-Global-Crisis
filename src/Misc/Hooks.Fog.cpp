@@ -122,10 +122,8 @@ namespace Fog
 
 		if (pCell->Visibility == -2)
 		{
-			pCell->Visibility = -1;
-
-			if (pCell->Foggedness < 0)
-				pCell->Foggedness = static_cast<char>(FogFrame());
+			pCell->Visibility = static_cast<char>(FogFrame());
+			pCell->Foggedness = static_cast<char>(FogFrame());
 		}
 		else if (pCell->Foggedness == -2)
 		{
@@ -182,13 +180,9 @@ namespace Fog
 
 			if (pCell->Visibility == -2)
 			{
-				pCell->Visibility = -1;
+				pCell->Visibility = frame;
+				pCell->Foggedness = frame;
 				changed = true;
-
-				// The engine sometimes clears only the shroud layer; make sure the
-				// cell is fogged too, otherwise units stay visible on black.
-				if (pCell->Foggedness < 0)
-					pCell->Foggedness = frame;
 			}
 			else if (pCell->Foggedness == -2)
 			{
@@ -507,10 +501,8 @@ DEFINE_HOOK(0x4A9CA0, Fog_RevealFogShroud, 0x8)
 
 			if (newVisibility == -2)
 			{
-				newVisibility = -1;
-
-				if (newFoggedness < 0)
-					newFoggedness = static_cast<char>(Fog::FogFrame());
+				newVisibility = static_cast<char>(Fog::FogFrame());
+				newFoggedness = static_cast<char>(Fog::FogFrame());
 			}
 			else if (newFoggedness == -2)
 			{
@@ -1511,6 +1503,55 @@ DEFINE_HOOK(0x4690B6, Fog_BulletDetonate_ImpactReveal, 0x6)
 
 	if (pCoords)
 		Fog::AddImpactReveal(*pCoords);
+
+	return 0;
+}
+
+// --- Final render-frame override ---
+//
+// 0x4801F0 recomputes a cell's Visibility/Foggedness from GetOcclusion twice per
+// frame and draws the fog overlay itself. Gap generators make GetOcclusion return
+// -2, which maps to frame 15 (the darkest fog frame -> looks like black shroud).
+// Overriding the frame here works regardless of which engine path wrote the cell,
+// and it cannot be overwritten by the next recompute.
+
+// Visibility-derived frame: reached with EAX already mapped to the draw frame.
+DEFINE_HOOK(0x480223, Fog_DrawFog_VisibilityFrame, 0x8)
+{
+	if (!Fog::Active())
+		return 0;
+
+	GET(CellClass*, pCell, ESI);
+
+	if (pCell->Visibility != -2 || !(pCell->AltFlags & AltCellFlags::Mapped))
+		return 0;
+
+	const char frame = static_cast<char>(Fog::FogFrame());
+
+	pCell->Visibility = frame;
+	pCell->Foggedness = frame;
+	pCell->Flags |= CellFlags::Fogged | CellFlags::CenterRevealed;
+	R->EAX(static_cast<int>(frame));
+
+	return 0;
+}
+
+// Foggedness-derived frame (-2 -> frame 15 path). EAX holds the frame.
+DEFINE_HOOK(0x480273, Fog_DrawFog_FoggedFrame, 0x5)
+{
+	if (!Fog::Active())
+		return 0;
+
+	GET(CellClass*, pCell, ESI);
+
+	if (pCell->Foggedness != -2 || !(pCell->AltFlags & AltCellFlags::Mapped))
+		return 0;
+
+	const char frame = static_cast<char>(Fog::FogFrame());
+
+	pCell->Foggedness = frame;
+	pCell->Flags |= CellFlags::Fogged | CellFlags::CenterRevealed;
+	R->EAX(static_cast<int>(frame));
 
 	return 0;
 }
