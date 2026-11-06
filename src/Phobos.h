@@ -106,6 +106,8 @@ public:
 		static bool TSFog;
 		static bool TSFog_RevealAllClear;
 		static bool TSFog_ForceAll;
+		static bool TSFog_GapFog;
+		static int TSFog_GapFrame;
 		static bool ArtImageSwap;
 		static bool ShowPlacementPreview;
 		static bool EnableBuildingPlacementPreview;

@@ -14,6 +14,7 @@
 #include <Unsorted.h>
 
 #include <AnimTypeClass.h>
+#include <BuildingClass.h>
 #include <BuildingTypeClass.h>
 #include <ColorScheme.h>
 #include <FileSystem.h>
@@ -26,6 +27,8 @@
 
 #include <Ext/AnimType/Body.h>
 #include <Ext/TerrainType/Body.h>
+
+#include <unordered_set>
 
 // Fog of war, stage A: activation + reveal model only.
 //
@@ -66,6 +69,80 @@ namespace Fog
 
 		map.sub_657CE0();
 		map.MarkNeedsRedraw(2);
+	}
+
+	// Gap generators: the engine re-shrouds covered cells to black. Render them as
+	// semi-transparent fog instead: no black shroud layer, a fog frame from the
+	// config, and the Fogged flag so units are hidden by IsLocationFogged.
+	std::unordered_set<int> GapCells;
+
+	void ApplyGapFog()
+	{
+		std::unordered_set<int> next;
+		const int frame = Phobos::Config::TSFog_GapFrame;
+
+		if (Phobos::Config::TSFog_GapFog && HouseClass::CurrentPlayer)
+		{
+			for (auto pBuilding : BuildingClass::Array)
+			{
+				if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo
+					|| !pBuilding->Type || !pBuilding->Type->GapGenerator
+					|| !pBuilding->GeneratingGap || !pBuilding->Owner)
+					continue;
+
+				if (pBuilding->Owner->IsAlliedWith(HouseClass::CurrentPlayer))
+					continue;
+
+				const auto center = pBuilding->GetMapCoords();
+				const int radius = pBuilding->GapRadius > 0 ? pBuilding->GapRadius : 10;
+
+				for (int dy = -radius; dy <= radius; ++dy)
+				{
+					for (int dx = -radius; dx <= radius; ++dx)
+					{
+						if (dx * dx + dy * dy > radius * radius)
+							continue;
+
+						const CellStruct cell { static_cast<short>(center.X + dx),
+							static_cast<short>(center.Y + dy) };
+						auto const pCell = MapClass::Instance.TryGetCellAt(cell);
+
+						if (!pCell || !(pCell->Flags & CellFlags::CenterRevealed))
+							continue;
+
+						pCell->Flags |= CellFlags::Fogged;
+						pCell->Visibility = -1;
+						pCell->Foggedness = static_cast<char>(frame);
+						TacticalClass::Instance->RegisterCellAsVisible(pCell);
+						next.insert(MapClass::GetCellIndex(cell));
+					}
+				}
+			}
+		}
+
+		// Restore cells that are no longer covered by a gap.
+		for (const int key : GapCells)
+		{
+			if (next.count(key))
+				continue;
+
+			const CellStruct cell { static_cast<short>(key & 0x1FF),
+				static_cast<short>(key >> 9) };
+			auto const pCell = MapClass::Instance.TryGetCellAt(cell);
+
+			if (!pCell)
+				continue;
+
+			pCell->Visibility = TacticalClass::Instance->GetOcclusion(cell, false);
+			pCell->Foggedness = TacticalClass::Instance->GetOcclusion(cell, true);
+
+			if (pCell->Foggedness == -1)
+				pCell->Flags &= ~CellFlags::Fogged;
+
+			TacticalClass::Instance->RegisterCellAsVisible(pCell);
+		}
+
+		GapCells.swap(next);
 	}
 
 	// Real MapClass::IsLocationFogged. gamemd ships a stub there (`xor al,al; ret 4`)
@@ -1143,3 +1220,19 @@ DEFINE_FUNCTION_JUMP(CALL, 0x5FC4B1, FoggedObjectHelper::OverlayClassFake::Overl
 DEFINE_FUNCTION_JUMP(CALL, 0x5FD2D2, FoggedObjectHelper::OverlayClassFake::OverlayClass_Unlimbo_CheckFog);
 DEFINE_FUNCTION_JUMP(CALL, 0x6B4B14, FoggedObjectHelper::SmudgeClassFake::SmudgeClass_Unlimbo_CheckFog);
 DEFINE_FUNCTION_JUMP(CALL, 0x71D012, FoggedObjectHelper::TerrainClassFake::TerrainClass_Unlimbo_CheckFog);
+
+// --- Stage C3: gap-generator areas become semi-transparent fog ---
+//
+// The engine re-shrouds gap-covered cells to black every update. ApplyGapFog runs
+// on a cheap 8-frame cadence and rewrites those cells to a fog frame instead; the
+// previous cell set is restored when a gap ends.
+DEFINE_HOOK(0x55B4E1, Fog_PerFrame_GapFog, 0x5)
+{
+	if (!Fog::Active())
+		return 0;
+
+	if ((Unsorted::CurrentFrame % 8) == 0)
+		Fog::ApplyGapFog();
+
+	return 0;
+}

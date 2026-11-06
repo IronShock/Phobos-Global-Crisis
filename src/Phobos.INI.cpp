@@ -69,6 +69,8 @@ int Phobos::Config::SmudgeCapacity = 1;
 bool Phobos::Config::TSFog = true;
 bool Phobos::Config::TSFog_RevealAllClear = true;
 bool Phobos::Config::TSFog_ForceAll = false;
+bool Phobos::Config::TSFog_GapFog = true;
+int Phobos::Config::TSFog_GapFrame = 8;
 bool Phobos::Config::ShowPlanningPath = false;
 bool Phobos::Config::ArtImageSwap = false;
 bool Phobos::Config::ShowPlacementPreview = false;
@@ -664,6 +666,12 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 	// [General] TSFog.ForceAll: test switch that enables fog even for maps whose
 	// [SpecialFlags] FogOfWar=no (e.g. TUTO4). Keep it off for normal play.
 	Phobos::Config::TSFog_ForceAll = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.ForceAll", false);
+	// [General] TSFog.GapFog / TSFog.GapFrame: render gap-generator areas as
+	// semi-transparent fog instead of black shroud. Frame is a fog.shp index
+	// (0 = dense, 48 = almost clear).
+	Phobos::Config::TSFog_GapFog = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.GapFog", true);
+	Phobos::Config::TSFog_GapFrame = std::clamp(
+		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.GapFrame", 8), 0, 48);
 
 	Phobos::Misc::CustomGS = pINI_RULESMD->ReadBool(GameStrings::General, "CustomGS", false);
 
