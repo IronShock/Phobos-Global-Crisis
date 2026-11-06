@@ -71,13 +71,32 @@ namespace Fog
 		map.MarkNeedsRedraw(2);
 	}
 
-	// Explored-once bitmap: an explored cell must never show the black shroud again.
+	// Explored-once bitmap + list: an explored cell must never show the black
+	// shroud again, no matter which engine path writes it.
 	std::vector<unsigned char> Explored;
+	std::vector<int> ExploredList;
 
 	void EnsureExplored()
 	{
 		if (Explored.empty())
 			Explored.assign(512 * 512, 0);
+	}
+
+	void ResetExplored()
+	{
+		Explored.assign(512 * 512, 0);
+		ExploredList.clear();
+	}
+
+	void MarkExplored(const CellStruct& cell, int index)
+	{
+		EnsureExplored();
+
+		if (index < 0 || index >= 512 * 512 || Explored[index])
+			return;
+
+		Explored[index] = 1;
+		ExploredList.push_back(index);
 	}
 
 	int FogFrame()
@@ -94,7 +113,7 @@ namespace Fog
 			return;
 
 		if (pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed))
-			Explored[index] = 1;
+			MarkExplored(cell, index);
 
 		if (!Explored[index])
 			return;
@@ -102,10 +121,16 @@ namespace Fog
 		pCell->Flags |= CellFlags::CenterRevealed;
 
 		if (pCell->Visibility == -2)
+		{
 			pCell->Visibility = -1;
 
-		if (pCell->Foggedness == -2)
+			if (pCell->Foggedness < 0)
+				pCell->Foggedness = static_cast<char>(FogFrame());
+		}
+		else if (pCell->Foggedness == -2)
+		{
 			pCell->Foggedness = static_cast<char>(FogFrame());
+		}
 	}
 
 	void SetVisible(CellClass* pCell, const CellStruct& cell)
@@ -118,11 +143,7 @@ namespace Fog
 		pCell->Visibility = -1;
 		pCell->Foggedness = -1;
 
-		EnsureExplored();
-		const int index = MapClass::GetCellIndex(cell);
-		if (index >= 0 && index < 512 * 512)
-			Explored[index] = 1;
-
+		MarkExplored(cell, MapClass::GetCellIndex(cell));
 		TacticalClass::Instance->RegisterCellAsVisible(pCell);
 	}
 
@@ -136,6 +157,57 @@ namespace Fog
 			pCell->Flags &= ~CellFlags::Fogged;
 
 		TacticalClass::Instance->RegisterCellAsVisible(pCell);
+	}
+
+	// Safety net: the gap generator, the shroud cascade and several other engine
+	// paths write CellClass::Visibility directly, bypassing RevealFogShroud. Walk
+	// the explored cells and turn any black shroud back into fog, and make sure a
+	// fogged cell always carries the Fogged flag so units are hidden.
+	void ApplyExploredClamp()
+	{
+		if (ExploredList.empty())
+			return;
+
+		const char frame = static_cast<char>(FogFrame());
+
+		for (const int key : ExploredList)
+		{
+			const CellStruct cell { static_cast<short>(key & 0x1FF), static_cast<short>(key >> 9) };
+			auto const pCell = MapClass::Instance.TryGetCellAt(cell);
+
+			if (!pCell)
+				continue;
+
+			bool changed = false;
+
+			if (pCell->Visibility == -2)
+			{
+				pCell->Visibility = -1;
+				changed = true;
+
+				// The engine sometimes clears only the shroud layer; make sure the
+				// cell is fogged too, otherwise units stay visible on black.
+				if (pCell->Foggedness < 0)
+					pCell->Foggedness = frame;
+			}
+			else if (pCell->Foggedness == -2)
+			{
+				pCell->Foggedness = frame;
+				changed = true;
+			}
+
+			if (pCell->Foggedness != -1 && !(pCell->Flags & CellFlags::Fogged))
+			{
+				pCell->Flags |= CellFlags::Fogged;
+				changed = true;
+			}
+
+			if (changed)
+			{
+				pCell->Flags |= CellFlags::CenterRevealed;
+				TacticalClass::Instance->RegisterCellAsVisible(pCell);
+			}
+		}
 	}
 
 	// Gap generators: the engine re-shrouds covered cells to black. Render them as
@@ -341,6 +413,8 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 	GameModeOptionsClass::Instance.FogOfWar = fog;
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
 
+	Fog::ResetExplored();
+
 	if (fog)
 		Fog::InstallIsLocationFogged();
 
@@ -384,7 +458,7 @@ DEFINE_HOOK(0x4A9CA0, Fog_RevealFogShroud, 0x8)
 
 		if (explored)
 		{
-			Fog::Explored[index] = 1;
+			Fog::MarkExplored(*pCellStruct, index);
 
 			const char frame = static_cast<char>(Fog::FogFrame());
 			const bool changed = !(pCell->Flags & CellFlags::Fogged)
@@ -429,13 +503,19 @@ DEFINE_HOOK(0x4A9CA0, Fog_RevealFogShroud, 0x8)
 
 		if (explored)
 		{
-			Fog::Explored[exploredIndex] = 1;
+			Fog::MarkExplored(*pCellStruct, exploredIndex);
 
 			if (newVisibility == -2)
+			{
 				newVisibility = -1;
 
-			if (newFoggedness == -2)
+				if (newFoggedness < 0)
+					newFoggedness = static_cast<char>(Fog::FogFrame());
+			}
+			else if (newFoggedness == -2)
+			{
 				newFoggedness = static_cast<char>(Fog::FogFrame());
+			}
 
 			pCell->Flags |= CellFlags::CenterRevealed;
 		}
@@ -1411,6 +1491,10 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 
 	// Impact reveals expire quickly and must disappear the moment they do.
 	Fog::ApplyImpacts();
+
+	// Catch any engine path that writes black shroud over an explored cell.
+	if ((Unsorted::CurrentFrame % 6) == 0)
+		Fog::ApplyExploredClamp();
 
 	return 0;
 }
