@@ -1514,3 +1514,36 @@ DEFINE_HOOK(0x4690B6, Fog_BulletDetonate_ImpactReveal, 0x6)
 
 	return 0;
 }
+
+// Diagnostic only: dump the real fog state of cells touched by a gap generator
+// (or a black cell) once every 30 frames, so we can see what the engine actually
+// stores instead of guessing.
+DEFINE_HOOK(0x4801F0, FogDbg_CellFogCalc, 0x5)
+{
+	if (!Fog::Active())
+		return 0;
+
+	GET(CellClass*, pCell, ECX);
+
+	if (pCell->GapsCoveringThisCell == 0 && pCell->Visibility != -2)
+		return 0;
+
+	static int lastFrame = -1000;
+
+	if (Unsorted::CurrentFrame - lastFrame < 30)
+		return 0;
+
+	lastFrame = Unsorted::CurrentFrame;
+
+	const char occVis = TacticalClass::Instance->GetOcclusion(pCell->MapCoords, false);
+	const char occFog = TacticalClass::Instance->GetOcclusion(pCell->MapCoords, true);
+
+	Debug::Log("[FogDbg] cell=(%d,%d) vis=%d fog=%d flags=0x%08X alt=0x%08X gaps=%u occVis=%d occFog=%d\n",
+		static_cast<int>(pCell->MapCoords.X), static_cast<int>(pCell->MapCoords.Y),
+		static_cast<int>(pCell->Visibility), static_cast<int>(pCell->Foggedness),
+		static_cast<unsigned>(pCell->Flags), static_cast<unsigned>(pCell->AltFlags),
+		pCell->GapsCoveringThisCell,
+		static_cast<int>(occVis), static_cast<int>(occFog));
+
+	return 0;
+}
