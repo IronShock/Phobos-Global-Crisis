@@ -112,6 +112,9 @@ public:
 		static bool TSFog_ImpactReveal;
 		static int TSFog_ImpactRadius;
 		static int TSFog_ImpactFrames;
+		static int TSFog_SpreadStep;
+		static int TSFog_GapSpeed;
+		static int TSFog_HideFrame;
 		static bool ArtImageSwap;
 		static bool ShowPlacementPreview;
 		static bool EnableBuildingPlacementPreview;
