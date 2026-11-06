@@ -99,8 +99,7 @@ namespace Fog
 		ExploredList.push_back(index);
 	}
 
-	// Full-map sweep: remember every cell the player has ever revealed, before the
-	// gap generator / reshroud clears CenterRevealed and EdgeRevealed.
+	// Remember every revealed cell before a gap/reshroud clears its flags.
 	void ScanExploredCells()
 	{
 		EnsureExplored();
@@ -111,144 +110,13 @@ namespace Fog
 		for (auto pCell = map.CellIteratorNext(); pCell; pCell = map.CellIteratorNext())
 		{
 			if (pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed))
-			{
-				const int index = MapClass::GetCellIndex(pCell->MapCoords);
-
-				if (index >= 0 && index < 512 * 512 && !Explored[index])
-				{
-					Explored[index] = 1;
-					ExploredList.push_back(index);
-				}
-			}
+				MarkExplored(pCell->MapCoords, MapClass::GetCellIndex(pCell->MapCoords));
 		}
 	}
 
 	int FogFrame()
 	{
 		return Phobos::Config::TSFog_FogFrame;
-	}
-
-	// --- Fog spread model -------------------------------------------------
-	// FogLevel stores a per-cell fixed-point fog level (x100):
-	//   -2 untracked, -1 fully visible, 0..4800 (48.00 = almost clear).
-	// A cell leaving sight starts at 48.00 and descends to the target fog frame
-	// (TSFog.FogFrame) by 100 / TSFog.SpreadStep per frame; inside an enemy gap
-	// generator radius the step is multiplied by TSFog.GapSpeed (1..100).
-	std::vector<short> FogLevel;
-	std::vector<unsigned char> GapMask;
-
-	void EnsureSpreadState()
-	{
-		if (FogLevel.empty())
-		{
-			FogLevel.assign(512 * 512, -2);
-			GapMask.assign(512 * 512, 0);
-		}
-	}
-
-	// Rebuild the gap coverage mask and neutralise the vanilla gap shroud.
-	void UpdateGapMask()
-	{
-		EnsureSpreadState();
-		std::fill(GapMask.begin(), GapMask.end(), static_cast<unsigned char>(0));
-
-		if (!HouseClass::CurrentPlayer)
-			return;
-
-		for (auto pBuilding : BuildingClass::Array)
-		{
-			if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo
-				|| !pBuilding->Type || !pBuilding->Type->GapGenerator
-				|| !pBuilding->Owner)
-				continue;
-
-			if (pBuilding->Owner->IsAlliedWith(HouseClass::CurrentPlayer))
-				continue;
-
-			pBuilding->GeneratingGap = false;
-
-			const auto center = pBuilding->GetMapCoords();
-			const int radius = pBuilding->GapRadius > 0 ? pBuilding->GapRadius : 10;
-
-			for (int dy = -radius; dy <= radius; ++dy)
-			{
-				for (int dx = -radius; dx <= radius; ++dx)
-				{
-					if (dx * dx + dy * dy > radius * radius)
-						continue;
-
-					const CellStruct cell { static_cast<short>(center.X + dx),
-						static_cast<short>(center.Y + dy) };
-					const int key = MapClass::GetCellIndex(cell);
-
-					if (key >= 0 && key < 512 * 512)
-						GapMask[key] = 1;
-				}
-			}
-		}
-	}
-
-	// Advance one cell's fog level and return the frame to draw.
-	int UpdateCellFog(CellClass* pCell, int engineFog)
-	{
-		EnsureSpreadState();
-
-		const int key = MapClass::GetCellIndex(pCell->MapCoords);
-
-		if (key < 0 || key >= 512 * 512)
-			return engineFog < 0 ? 0 : engineFog;
-
-		// Unexplored cells are never touched: the normal black shroud stays.
-		if (!Explored[key])
-		{
-			FogLevel[key] = -2;
-			return engineFog < 0 ? 0 : engineFog;
-		}
-
-		const bool inGap = GapMask[key] != 0;
-
-		if (engineFog == -1 && !inGap)
-		{
-			FogLevel[key] = -1;
-			pCell->Flags &= ~CellFlags::Fogged;
-			return 0;
-		}
-
-		// Inside an enemy gap the cell is treated as unseen even if the engine
-		// still reports it visible, so the fog spreads there as well.
-		const int target = std::clamp(inGap || engineFog < 0 ? FogFrame() : engineFog, 0, 48) * 100;
-		int level = FogLevel[key];
-
-		if (level < 0)
-			level = 4800;
-
-		int step = 100 / std::max(1, Phobos::Config::TSFog_SpreadStep);
-
-		if (GapMask[key])
-			step *= std::max(1, Phobos::Config::TSFog_GapSpeed);
-
-		step = std::clamp(step, 1, 100);
-
-		if (level > target)
-			level = std::max(target, level - step);
-		else
-			level = std::min(target, level + step);
-
-		FogLevel[key] = static_cast<short>(level);
-
-		// Units stay visible while the fog is still light, and disappear once it
-		// reaches TSFog.HideFrame (option B).
-		if (level <= Phobos::Config::TSFog_HideFrame * 100)
-		{
-			pCell->Flags |= CellFlags::Fogged;
-			pCell->Foggedness = static_cast<char>(level / 100);
-		}
-		else
-		{
-			pCell->Flags &= ~CellFlags::Fogged;
-		}
-
-		return level / 100;
 	}
 
 	void ClampExplored(CellClass* pCell, const CellStruct& cell)
@@ -357,31 +225,26 @@ namespace Fog
 		}
 	}
 
-	// Independent gap-generator fog. The vanilla gap logic re-shrouds its radius
-	// to black and fights any external state, so its shroud effect is neutralised
-	// (GeneratingGap cleared) and the radius is rendered as fog by this pass.
-	// Explored cells are detected with CenterRevealed|EdgeRevealed; unexplored
-	// cells are never touched and keep the normal black shroud.
+	// Gap generators: the engine re-shrouds covered cells to black. Render them as
+	// semi-transparent fog instead. Only cells whose state actually changes are
+	// rewritten/redrawn, so a large gap does not dirty the whole viewport.
 	std::unordered_set<int> GapCells;
 
 	void ApplyGapFog()
 	{
 		std::unordered_set<int> next;
 
-		if (HouseClass::CurrentPlayer)
+		if (Phobos::Config::TSFog_GapFog && HouseClass::CurrentPlayer)
 		{
 			for (auto pBuilding : BuildingClass::Array)
 			{
 				if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo
 					|| !pBuilding->Type || !pBuilding->Type->GapGenerator
-					|| !pBuilding->Owner)
+					|| !pBuilding->GeneratingGap || !pBuilding->Owner)
 					continue;
 
 				if (pBuilding->Owner->IsAlliedWith(HouseClass::CurrentPlayer))
 					continue;
-
-				// Stop the vanilla reshroud from fighting this pass.
-				pBuilding->GeneratingGap = false;
 
 				const auto center = pBuilding->GetMapCoords();
 				const int radius = pBuilding->GapRadius > 0 ? pBuilding->GapRadius : 10;
@@ -397,28 +260,20 @@ namespace Fog
 							static_cast<short>(center.Y + dy) };
 						auto const pCell = MapClass::Instance.TryGetCellAt(cell);
 
-						if (!pCell)
+						if (!pCell || !(pCell->Flags & CellFlags::CenterRevealed))
 							continue;
 
-						const int key = MapClass::GetCellIndex(cell);
-						next.insert(key);
+						next.insert(MapClass::GetCellIndex(cell));
 
-						// Never touch cells the player has not explored yet.
-						if (!(pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)))
-							continue;
-
-						const char frame = static_cast<char>(FogFrame());
-
-						pCell->Flags |= CellFlags::Fogged | CellFlags::CenterRevealed;
-						ClampExplored(pCell, cell);
-
-						const bool changed = pCell->Visibility != -1 || pCell->Foggedness != frame;
-
-						pCell->Visibility = -1;
-						pCell->Foggedness = frame;
-
-						if (changed)
+						if (pCell->Foggedness != static_cast<char>(Phobos::Config::TSFog_GapFrame)
+							|| pCell->Visibility != -1 || !(pCell->Flags & CellFlags::Fogged))
+						{
+							pCell->Flags |= CellFlags::Fogged;
+							pCell->Visibility = -1;
+							pCell->Foggedness = static_cast<char>(Phobos::Config::TSFog_GapFrame);
+							ClampExplored(pCell, cell);
 							TacticalClass::Instance->RegisterCellAsVisible(pCell);
+						}
 					}
 				}
 			}
@@ -435,6 +290,130 @@ namespace Fog
 		}
 
 		GapCells.swap(next);
+	}
+
+	// --- Isolated gap-generator overlay -----------------------------------
+	// Only cells inside an enemy gap radius are touched. Neither the cell fields
+	// nor the normal fog path are modified, so ordinary fog of war cannot break.
+	std::vector<unsigned char> GapMask;
+	std::vector<short> GapLevel; // fixed-point fraction x100; -1 = inactive
+
+	void EnsureGapState()
+	{
+		if (GapMask.empty())
+		{
+			GapMask.assign(512 * 512, 0);
+			GapLevel.assign(512 * 512, -1);
+		}
+	}
+
+	void ResetGapState()
+	{
+		GapMask.assign(512 * 512, 0);
+		GapLevel.assign(512 * 512, -1);
+	}
+
+	void UpdateGapMask()
+	{
+		EnsureGapState();
+		std::fill(GapMask.begin(), GapMask.end(), static_cast<unsigned char>(0));
+
+		if (!HouseClass::CurrentPlayer)
+			return;
+
+		for (auto pBuilding : BuildingClass::Array)
+		{
+			if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo
+				|| !pBuilding->Type || !pBuilding->Type->GapGenerator
+				|| !pBuilding->Owner)
+				continue;
+
+			if (pBuilding->Owner->IsAlliedWith(HouseClass::CurrentPlayer))
+				continue;
+
+			// Vanilla gap shroud is disabled; this overlay replaces it.
+			pBuilding->GeneratingGap = false;
+
+			const auto center = pBuilding->GetMapCoords();
+			const int radius = pBuilding->GapRadius > 0 ? pBuilding->GapRadius : 10;
+
+			for (int dy = -radius; dy <= radius; ++dy)
+			{
+				for (int dx = -radius; dx <= radius; ++dx)
+				{
+					if (dx * dx + dy * dy > radius * radius)
+						continue;
+
+					const CellStruct cell { static_cast<short>(center.X + dx),
+						static_cast<short>(center.Y + dy) };
+					const int key = MapClass::GetCellIndex(cell);
+
+					if (key >= 0 && key < 512 * 512)
+						GapMask[key] = 1;
+				}
+			}
+		}
+	}
+
+	bool IsGapCellExplored(CellClass* pCell)
+	{
+		EnsureGapState();
+		EnsureExplored();
+
+		const int key = MapClass::GetCellIndex(pCell->MapCoords);
+
+		return key >= 0 && key < 512 * 512 && GapMask[key] && Explored[key];
+	}
+
+	// Advance the gap fog level for one cell and return the frame to draw.
+	int UpdateGapCellFog(CellClass* pCell)
+	{
+		EnsureGapState();
+
+		const int key = MapClass::GetCellIndex(pCell->MapCoords);
+
+		if (key < 0 || key >= 512 * 512)
+			return -1;
+
+		if (!GapMask[key])
+		{
+			GapLevel[key] = -1;
+			return -1;
+		}
+
+		int level = GapLevel[key];
+
+		if (level < 0)
+			level = 4800;
+
+		int step = 100 / std::max(1, Phobos::Config::TSFog_SpreadStep);
+		step *= std::max(1, Phobos::Config::TSFog_GapSpeed);
+		step = std::clamp(step, 1, 100);
+
+		const int target = Phobos::Config::TSFog_FogFrame * 100;
+
+		if (level > target)
+			level = std::max(target, level - step);
+		else
+			level = std::min(target, level + step);
+
+		GapLevel[key] = static_cast<short>(level);
+
+		return level / 100;
+	}
+
+	bool IsGapHidden(const CellStruct& cell)
+	{
+		EnsureGapState();
+
+		const int key = MapClass::GetCellIndex(cell);
+
+		if (key < 0 || key >= 512 * 512 || !GapMask[key])
+			return false;
+
+		const int level = GapLevel[key];
+
+		return level >= 0 && level <= Phobos::Config::TSFog_HideFrame * 100;
 	}
 
 	// Temporary reveal around a detonation, then fall back to fog.
@@ -492,14 +471,6 @@ namespace Fog
 		}
 	}
 
-	bool IsExplored(CellClass* pCell)
-	{
-		EnsureExplored();
-
-		const int key = MapClass::GetCellIndex(pCell->MapCoords);
-		return key >= 0 && key < 512 * 512 && Explored[key] != 0;
-	}
-
 	// Real MapClass::IsLocationFogged. gamemd ships a stub there (`xor al,al; ret 4`)
 	// that always reports "not fogged", which is why units are still drawn inside
 	// fog. This is installed as a 5-byte JMP over the stub once the port is active.
@@ -513,6 +484,9 @@ namespace Fog
 		const CellStruct cell { static_cast<short>((coords.X >> 8) - extra),
 			static_cast<short>((coords.Y >> 8) - extra) };
 		const auto pCell = MapClass::Instance.GetCellAt(cell);
+
+		if (IsGapHidden(cell))
+			return true;
 
 		if (!(pCell->Flags & CellFlags::Fogged) || pCell->Foggedness == -1)
 			return false;
@@ -582,6 +556,7 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
 
 	Fog::ResetExplored();
+	Fog::ResetGapState();
 
 	if (fog)
 		Fog::InstallIsLocationFogged();
@@ -1660,11 +1635,15 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 	// Impact reveals expire quickly and must disappear the moment they do.
 	Fog::ApplyImpacts();
 
-	// Rebuild the gap coverage mask; vanilla gap shroud is neutralised there.
+	// Catch any engine path that writes black shroud over an explored cell.
+	if ((Unsorted::CurrentFrame % 6) == 0)
+		Fog::ApplyExploredClamp();
+
+	// Gap coverage mask (vanilla gap shroud is neutralised there).
 	if ((Unsorted::CurrentFrame % 10) == 0)
 		Fog::UpdateGapMask();
 
-	// Remember newly revealed cells before the gap clears their reveal flags.
+	// Remember revealed cells before a gap clears their reveal flags.
 	if ((Unsorted::CurrentFrame % 15) == 0)
 		Fog::ScanExploredCells();
 
@@ -1687,75 +1666,37 @@ DEFINE_HOOK(0x4690B6, Fog_BulletDetonate_ImpactReveal, 0x6)
 	return 0;
 }
 
-// Diagnostic only: dump the real fog state of cells touched by a gap generator
-// (or a black cell) once every 30 frames, so we can see what the engine actually
-// stores instead of guessing.
-DEFINE_HOOK(0x4801F0, FogDbg_CellFogCalc, 0x5)
-{
-	if (!Fog::Active())
-		return 0;
-
-	GET(CellClass*, pCell, ECX);
-
-	if (pCell->GapsCoveringThisCell == 0 && pCell->Visibility != -2)
-		return 0;
-
-	static int lastFrame = -1000;
-
-	if (Unsorted::CurrentFrame - lastFrame < 30)
-		return 0;
-
-	lastFrame = Unsorted::CurrentFrame;
-
-	const char occVis = TacticalClass::Instance->GetOcclusion(pCell->MapCoords, false);
-	const char occFog = TacticalClass::Instance->GetOcclusion(pCell->MapCoords, true);
-
-	Debug::Log("[FogDbg] cell=(%d,%d) vis=%d fog=%d flags=0x%08X alt=0x%08X gaps=%u occVis=%d occFog=%d\n",
-		static_cast<int>(pCell->MapCoords.X), static_cast<int>(pCell->MapCoords.Y),
-		static_cast<int>(pCell->Visibility), static_cast<int>(pCell->Foggedness),
-		static_cast<unsigned>(pCell->Flags), static_cast<unsigned>(pCell->AltFlags),
-		pCell->GapsCoveringThisCell,
-		static_cast<int>(occVis), static_cast<int>(occFog));
-
-	return 0;
-}
-
-
-// --- Fog spread rendering hooks ---
-//
-// 0x4801F0 computes Visibility/Foggedness per cell each frame and draws two
-// overlays. The first one (Visibility) is the black shroud layer, the second
-// (Foggedness) is the fog layer. Explored cells never get the shroud layer; their
-// fog frame comes from the gradual level maintained by Fog::UpdateCellFog.
-
-DEFINE_HOOK(0x480223, Fog_Spread_VisibilityFrame, 0x8)
+// Scoped gap overlay rendering: only cells inside an enemy gap radius and already
+// explored are affected. Everything else returns 0 and is rendered by the normal
+// fog path, unchanged.
+DEFINE_HOOK(0x480223, Fog_Gap_VisibilityFrame, 0x8)
 {
 	if (!Fog::Active())
 		return 0;
 
 	GET(CellClass*, pCell, ESI);
 
-	// Only cells the player has ever revealed are affected; unexplored cells keep
-	// the black shroud even after the gap clears their reveal flags.
-	if (!Fog::IsExplored(pCell))
+	if (!Fog::IsGapCellExplored(pCell))
 		return 0;
 
-	R->EAX(0);
+	R->EAX(0); // no black shroud layer inside the gap
 	return 0;
 }
 
-DEFINE_HOOK(0x480273, Fog_Spread_FogFrame, 0x5)
+DEFINE_HOOK(0x480273, Fog_Gap_FogFrame, 0x5)
 {
 	if (!Fog::Active())
 		return 0;
 
 	GET(CellClass*, pCell, ESI);
 
-	if (!Fog::IsExplored(pCell))
+	if (!Fog::IsGapCellExplored(pCell))
 		return 0;
 
-	const int frame = Fog::UpdateCellFog(pCell, static_cast<int>(pCell->Foggedness));
-	R->EAX(frame);
+	const int frame = Fog::UpdateGapCellFog(pCell);
+
+	if (frame >= 0)
+		R->EAX(frame);
 
 	return 0;
 }
