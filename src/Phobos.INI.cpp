@@ -68,6 +68,7 @@ bool Phobos::Config::TacticalPause = true;
 int Phobos::Config::SmudgeCapacity = 1;
 bool Phobos::Config::TSFog = true;
 bool Phobos::Config::TSFog_RevealAllClear = true;
+bool Phobos::Config::TSFog_ForceAll = false;
 bool Phobos::Config::ShowPlanningPath = false;
 bool Phobos::Config::ArtImageSwap = false;
 bool Phobos::Config::ShowPlacementPreview = false;
@@ -660,6 +661,9 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 		pINI_RULESMD->ReadString(GameStrings::General, "TSFog.RevealAll", "clear", revealAll);
 		Phobos::Config::TSFog_RevealAllClear = _stricmp(revealAll, "keep") != 0;
 	}
+	// [General] TSFog.ForceAll: test switch that enables fog even for maps whose
+	// [SpecialFlags] FogOfWar=no (e.g. TUTO4). Keep it off for normal play.
+	Phobos::Config::TSFog_ForceAll = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.ForceAll", false);
 
 	Phobos::Misc::CustomGS = pINI_RULESMD->ReadBool(GameStrings::General, "CustomGS", false);
 

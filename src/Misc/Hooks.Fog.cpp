@@ -65,11 +65,15 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 	if (!SessionClass::IsCampaign())
 		fog = fog || GameModeOptionsClass::Instance.FogOfWar;
 
+	if (Phobos::Config::TSFog_ForceAll)
+		fog = true;
+
 	fog = fog && Phobos::Config::TSFog;
 
-	Debug::Log("[Fog] scenario read: map=%d mode=%d tsfog=%d -> %d\n",
+	Debug::Log("[Fog] scenario read: map=%d mode=%d force=%d tsfog=%d -> %d\n",
 		static_cast<int>(ScenarioClass::Instance->SpecialFlags.FogOfWar),
 		static_cast<int>(GameModeOptionsClass::Instance.FogOfWar),
+		static_cast<int>(Phobos::Config::TSFog_ForceAll),
 		static_cast<int>(Phobos::Config::TSFog), static_cast<int>(fog));
 
 	GameModeOptionsClass::Instance.FogOfWar = fog;
@@ -302,5 +306,67 @@ DEFINE_HOOK(0x4FC200, Fog_AcceptDefeat_Reveal, 0x5)
 		return 0;
 
 	Fog::ClearAllFog();
+	return 0;
+}
+
+// --- Stage B: hide terrain objects / overlays / smudges while fully occluded ---
+//
+// The original hooks at 0x6D9313 / 0x6D70BC / 0x48049E stole relative branches
+// (je), which Syringe cannot relocate; replaying them in the trampoline jumped
+// into unmapped memory. These sites are the straight-line instructions after the
+// native "no such thing" branches, so the original checks stay intact.
+
+// Terrain objects: skip the real draw only when the cell is fully occluded.
+DEFINE_HOOK(0x6D9313, Fog_DrawObjects_SkipTerrain, 0x6)
+{
+	if (!Fog::Active())
+		return 0;
+
+	enum { SkipDraw = 0x6D940C };
+
+	GET(const CoordStruct*, pCoord, EAX);
+
+	const int level = pCoord->Z / Unsorted::LevelHeight;
+	const int extra = (level & 1) ? ((level >> 1) + 1) : (level >> 1);
+	const CellStruct cell { static_cast<short>((pCoord->X >> 8) - extra),
+		static_cast<short>((pCoord->Y >> 8) - extra) };
+
+	if (MapClass::Instance.GetCellAt(cell)->Visibility == -2)
+		return SkipDraw;
+
+	return 0;
+}
+
+// Overlay (walls, tiberium, ...). Reached only when the cell has an overlay, the
+// native "no overlay" branch at 0x6D70BC is left untouched.
+DEFINE_HOOK(0x6D70C6, Fog_DrawCellOverlay_Skip, 0x7)
+{
+	if (!Fog::Active())
+		return 0;
+
+	enum { SkipDraw = 0x6D71A4 };
+
+	GET(const CellClass*, pCell, EBX);
+
+	if (pCell->Visibility == -2)
+		return SkipDraw;
+
+	return 0;
+}
+
+// Smudge (craters). Reached only when the cell has a smudge, the native branch at
+// 0x48049E is left untouched.
+DEFINE_HOOK(0x4804A4, Fog_DrawCellSmudge_Skip, 0x6)
+{
+	if (!Fog::Active())
+		return 0;
+
+	enum { SkipDraw = 0x4804FB };
+
+	GET(const CellClass*, pCell, ESI);
+
+	if (pCell->Visibility == -2)
+		return SkipDraw;
+
 	return 0;
 }

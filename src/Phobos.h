@@ -105,6 +105,7 @@ public:
 		static int SmudgeCapacity;
 		static bool TSFog;
 		static bool TSFog_RevealAllClear;
+		static bool TSFog_ForceAll;
 		static bool ArtImageSwap;
 		static bool ShowPlacementPreview;
 		static bool EnableBuildingPlacementPreview;
