@@ -96,6 +96,10 @@ def main():
                 covered = 0
                 for insn in md.disasm(data[off:off + size], va):
                     covered += insn.size
+                    relative = (insn.mnemonic.startswith("j")
+                                or insn.mnemonic in ("call", "loop", "loope", "loopne"))
+                    if relative and insn.op_str.startswith("0x"):
+                        issues.append(f"stolen instruction {insn.mnemonic} {insn.op_str} is a relative branch")
                     if covered > size:
                         break
                 if covered != size:
