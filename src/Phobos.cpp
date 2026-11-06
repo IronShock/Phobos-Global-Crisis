@@ -22,6 +22,7 @@
 #include <Misc/PerfOverlay.h>
 #include <Ext/Unit/Footprint.h>
 #include <Misc/TacticalMap.h>
+#include <Misc/FoggedVoxel.h>
 #include <LoadBar/LoadBarManager.h>
 #include <GameStrings.h>
 
@@ -281,6 +282,7 @@ DEFINE_HOOK(0x683E7F, ScenarioClass_Start_Optimizations, 0x7)
 	Footprint::ClearAll();
 	TacticalMap::Close();
 	TacticalMap::ResetCanvas();
+	FoggedVoxel::Clear();
 
 	Phobos::ApplyOptimizations();
 	RulesExt::ApplyRemoveShroudGlobally();

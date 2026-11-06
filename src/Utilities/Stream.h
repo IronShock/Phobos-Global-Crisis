@@ -171,6 +171,11 @@ public:
 
 	// helpers
 
+	bool AtEndOfBlock() const
+	{
+		return this->stream->Size() == this->stream->Offset();
+	}
+
 	bool ExpectEndOfBlock() const
 	{
 		if (!this->Success() || this->stream->Size() != this->stream->Offset())
