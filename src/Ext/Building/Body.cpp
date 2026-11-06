@@ -7,7 +7,6 @@
 #include <Ext/Rules/Body.h>
 #include <InfantryClass.h>
 #include <InfantryTypeClass.h>
-#include <Misc/FoggedVoxel.h>
 #include <WeaponTypeClass.h>
 #include <Utilities/Debug.h>
 #include <Utilities/EnumFunctions.h>
@@ -667,12 +666,14 @@ void BuildingExt::ExtData::SaveToStream(PhobosStreamWriter& Stm)
 
 bool BuildingExt::LoadGlobals(PhobosStreamReader& Stm)
 {
-	return FoggedVoxel::Load(Stm);
+	return Stm
+		.Success();
 }
 
 bool BuildingExt::SaveGlobals(PhobosStreamWriter& Stm)
 {
-	return FoggedVoxel::Save(Stm);
+	return Stm
+		.Success();
 }
 
 // =============================
