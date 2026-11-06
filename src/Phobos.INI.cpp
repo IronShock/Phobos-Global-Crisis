@@ -71,6 +71,10 @@ bool Phobos::Config::TSFog_RevealAllClear = true;
 bool Phobos::Config::TSFog_ForceAll = false;
 bool Phobos::Config::TSFog_GapFog = true;
 int Phobos::Config::TSFog_GapFrame = 8;
+int Phobos::Config::TSFog_FogFrame = 8;
+bool Phobos::Config::TSFog_ImpactReveal = true;
+int Phobos::Config::TSFog_ImpactRadius = 2;
+int Phobos::Config::TSFog_ImpactFrames = 45;
 bool Phobos::Config::ShowPlanningPath = false;
 bool Phobos::Config::ArtImageSwap = false;
 bool Phobos::Config::ShowPlacementPreview = false;
@@ -672,6 +676,16 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 	Phobos::Config::TSFog_GapFog = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.GapFog", true);
 	Phobos::Config::TSFog_GapFrame = std::clamp(
 		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.GapFrame", 8), 0, 48);
+	// [General] TSFog.FogFrame: fog frame used when an explored cell is no longer
+	// visible (0 = dense, 48 = almost clear). TSFog.ImpactReveal*: temporarily
+	// reveal the area around a detonation, then let it fall back to this fog.
+	Phobos::Config::TSFog_FogFrame = std::clamp(
+		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.FogFrame", 8), 0, 48);
+	Phobos::Config::TSFog_ImpactReveal = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.ImpactReveal", true);
+	Phobos::Config::TSFog_ImpactRadius = std::clamp(
+		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.ImpactRadius", 2), 0, 8);
+	Phobos::Config::TSFog_ImpactFrames = std::clamp(
+		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.ImpactFrames", 45), 5, 300);
 
 	Phobos::Misc::CustomGS = pINI_RULESMD->ReadBool(GameStrings::General, "CustomGS", false);
 
