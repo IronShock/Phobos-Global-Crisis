@@ -17,6 +17,7 @@
 #include <RadBeam.h>
 #include <RulesClass.h>
 #include <ScenarioClass.h>
+#include <SessionClass.h>
 #include <SmudgeClass.h>
 #include <TacticalClass.h>
 #include <TechnoClass.h>
@@ -376,7 +377,16 @@ using FoggedObjectHelper::RemoveFoggedObject;
 
 DEFINE_HOOK(0x687C56, INIClass_ReadScenario_EnableFog, 0x5)
 {
-	const bool fog = RulesClass::Instance->FogOfWar;
+	// Follow the scenario / game-mode setting instead of forcing the rules value:
+	// campaign maps such as TUTO4 write [SpecialFlags] FogOfWar=no and must stay
+	// fully revealed. The rules switch only decides whether the port is allowed.
+	bool fog = ScenarioClass::Instance->SpecialFlags.FogOfWar;
+
+	if (!SessionClass::IsCampaign())
+		fog = fog || GameModeOptionsClass::Instance.FogOfWar;
+
+	fog = fog && Phobos::Config::TSFog;
+
 	GameModeOptionsClass::Instance.FogOfWar = fog;
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
 	return 0;
@@ -783,12 +793,29 @@ DEFINE_HOOK(0x577EE9, DisplayClass_RevealWholeMap_ClearFog, 0x5)
 {
 	GET(CellClass* const, pCell, EAX);
 
-	if (ScenarioClass::Instance->SpecialFlags.FogOfWar)
+	if (Phobos::Config::TSFog && ScenarioClass::Instance->SpecialFlags.FogOfWar)
 	{
 		pCell->Flags = (pCell->Flags & ~CellFlags::Fogged) | CellFlags::CenterRevealed | CellFlags::EdgeRevealed;
 		pCell->Visibility = -1;
 		pCell->Foggedness = -1;
 		pCell->ClearFoggedObjects();
+	}
+
+	return 0;
+}
+
+// End of DisplayClass::RevealWholeMap (the push before the final call, after the
+// cell loop). A map that reveals everything is meant to stay revealed, so drop the
+// fog flag for the rest of the scenario and release the frozen images; otherwise
+// the next FogSpread pass would re-fog the map and recreate snapshots we just freed.
+DEFINE_HOOK(0x577F14, DisplayClass_RevealWholeMap_AfterReveal, 0x5)
+{
+	if (Phobos::Config::TSFog && Phobos::Config::TSFog_RevealAllClear
+		&& ScenarioClass::Instance->SpecialFlags.FogOfWar)
+	{
+		GameModeOptionsClass::Instance.FogOfWar = false;
+		ScenarioClass::Instance->SpecialFlags.FogOfWar = false;
+		FoggedVoxel::Clear();
 	}
 
 	return 0;

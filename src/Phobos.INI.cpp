@@ -66,6 +66,8 @@ bool Phobos::Config::ReverseMove = false;
 bool Phobos::Config::TacticalGear = false;
 bool Phobos::Config::TacticalPause = true;
 int Phobos::Config::SmudgeCapacity = 1;
+bool Phobos::Config::TSFog = true;
+bool Phobos::Config::TSFog_RevealAllClear = true;
 bool Phobos::Config::ShowPlanningPath = false;
 bool Phobos::Config::ArtImageSwap = false;
 bool Phobos::Config::ShowPlacementPreview = false;
@@ -648,6 +650,16 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 	// Max smudges per cell (native + stacked extras), used by CreateSmudge and the
 	// map editor's multi-smudge loading.
 	Phobos::Config::SmudgeCapacity = pINI_RULESMD->ReadInteger(GameStrings::General, "SmudgeCapacity", 1);
+	// [General] TSFog: master switch for the TS-style fog of war port. When off the
+	// scenario fog flag is forced off, so the whole port is inert without a rebuild.
+	Phobos::Config::TSFog = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog", true);
+	// [General] TSFog.RevealAll: clear (default) lifts fog permanently for the rest of
+	// the scenario when a "Reveal all" trigger fires; keep only drops the frozen images.
+	{
+		char revealAll[16] {};
+		pINI_RULESMD->ReadString(GameStrings::General, "TSFog.RevealAll", "clear", revealAll);
+		Phobos::Config::TSFog_RevealAllClear = _stricmp(revealAll, "keep") != 0;
+	}
 
 	Phobos::Misc::CustomGS = pINI_RULESMD->ReadBool(GameStrings::General, "CustomGS", false);
 

@@ -103,6 +103,8 @@ public:
 		static bool TacticalGear;
 		static bool TacticalPause;
 		static int SmudgeCapacity;
+		static bool TSFog;
+		static bool TSFog_RevealAllClear;
 		static bool ArtImageSwap;
 		static bool ShowPlacementPreview;
 		static bool EnableBuildingPlacementPreview;
