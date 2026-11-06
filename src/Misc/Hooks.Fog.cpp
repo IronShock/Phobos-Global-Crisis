@@ -144,25 +144,28 @@ namespace Fog
 		TacticalClass::Instance->RegisterCellAsVisible(pCell);
 	}
 
-	// --- Isolated gap-generator overlay -----------------------------------
-	// Only cells inside an enemy gap radius are touched. Neither the cell fields
-	// nor the normal fog path are modified, so ordinary fog of war cannot break.
+	// --- Isolated gap overlay ---------------------------------------------
+	// Only cells inside an enemy gap radius are touched. Rendering is overridden at
+	// the final draw frame; no cell fields are written, so normal fog cannot break.
 	std::vector<unsigned char> GapMask;
-	std::vector<short> GapLevel; // fixed-point fraction x100; -1 = inactive
+	std::vector<int> GapStartFrame;    // -1 = no active transition
+	std::vector<short> GapStartLevel;  // fixed-point x100
 
 	void EnsureGapState()
 	{
 		if (GapMask.empty())
 		{
 			GapMask.assign(512 * 512, 0);
-			GapLevel.assign(512 * 512, -1);
+			GapStartFrame.assign(512 * 512, -1);
+			GapStartLevel.assign(512 * 512, 0);
 		}
 	}
 
 	void ResetGapState()
 	{
 		GapMask.assign(512 * 512, 0);
-		GapLevel.assign(512 * 512, -1);
+		GapStartFrame.assign(512 * 512, -1);
+		GapStartLevel.assign(512 * 512, 0);
 	}
 
 	void UpdateGapMask()
@@ -188,20 +191,24 @@ namespace Fog
 
 			const auto center = pBuilding->GetMapCoords();
 			const int radius = pBuilding->GapRadius > 0 ? pBuilding->GapRadius : 10;
+			const int radius2 = radius * radius;
 
-			for (int dy = -radius; dy <= radius; ++dy)
+			const int x0 = std::max<int>(0, center.X - radius);
+			const int x1 = std::min<int>(511, center.X + radius);
+			const int y0 = std::max<int>(0, center.Y - radius);
+			const int y1 = std::min<int>(511, center.Y + radius);
+
+			for (int y = y0; y <= y1; ++y)
 			{
-				for (int dx = -radius; dx <= radius; ++dx)
+				for (int x = x0; x <= x1; ++x)
 				{
-					if (dx * dx + dy * dy > radius * radius)
+					const int dx = x - center.X;
+					const int dy = y - center.Y;
+
+					if (dx * dx + dy * dy > radius2)
 						continue;
 
-					const CellStruct cell { static_cast<short>(center.X + dx),
-						static_cast<short>(center.Y + dy) };
-					const int key = MapClass::GetCellIndex(cell);
-
-					if (key >= 0 && key < 512 * 512)
-						GapMask[key] = 1;
+					GapMask[(y << 9) + x] = 1;
 				}
 			}
 		}
@@ -217,53 +224,64 @@ namespace Fog
 		return key >= 0 && key < 512 * 512 && GapMask[key] && Explored[key];
 	}
 
-	// Advance the gap fog level for one cell and return the frame to draw.
-	int UpdateGapCellFog(CellClass* pCell)
+	int GapStepPerFrame()
+	{
+		return std::max(1, (100 * std::max(1, Phobos::Config::TSFog_GapSpeed))
+			/ std::max(1, Phobos::Config::TSFog_SpreadStep));
+	}
+
+	int GapLevelAt(int key)
+	{
+		if (key < 0 || key >= 512 * 512 || !GapMask[key] || !Explored[key])
+			return -1;
+
+		if (GapStartFrame[key] < 0)
+			return -1;
+
+		int level = GapStartLevel[key]
+			- (Unsorted::CurrentFrame - GapStartFrame[key]) * GapStepPerFrame();
+		const int target = FogFrame() * 100;
+
+		return level < target ? target : level;
+	}
+
+	// Called from the draw hook with the engine's own Foggedness for this cell:
+	// visible cells are never fogged by the gap, unseen cells start/continue the
+	// accelerated fog fade.
+	void NoteGapVisibility(CellClass* pCell, int engineFog)
 	{
 		EnsureGapState();
+		EnsureExplored();
 
 		const int key = MapClass::GetCellIndex(pCell->MapCoords);
 
 		if (key < 0 || key >= 512 * 512)
-			return -1;
+			return;
 
-		if (!GapMask[key])
+		if (engineFog == -1 || !GapMask[key] || !Explored[key])
 		{
-			GapLevel[key] = -1;
-			return -1;
+			GapStartFrame[key] = -1;
+			return;
 		}
 
-		int level = GapLevel[key];
-
-		if (level < 0)
-			level = 4800;
-
-		int step = 100 / std::max(1, Phobos::Config::TSFog_SpreadStep);
-		step *= std::max(1, Phobos::Config::TSFog_GapSpeed);
-		step = std::clamp(step, 1, 100);
-
-		const int target = Phobos::Config::TSFog_FogFrame * 100;
-
-		if (level > target)
-			level = std::max(target, level - step);
-		else
-			level = std::min(target, level + step);
-
-		GapLevel[key] = static_cast<short>(level);
-
-		return level / 100;
+		if (GapStartFrame[key] < 0)
+		{
+			GapStartFrame[key] = Unsorted::CurrentFrame;
+			GapStartLevel[key] = 4800;
+		}
 	}
 
 	bool IsGapHidden(const CellStruct& cell)
 	{
 		EnsureGapState();
+		EnsureExplored();
 
 		const int key = MapClass::GetCellIndex(cell);
 
-		if (key < 0 || key >= 512 * 512 || !GapMask[key])
+		if (key < 0 || key >= 512 * 512 || !GapMask[key] || !Explored[key])
 			return false;
 
-		const int level = GapLevel[key];
+		const int level = GapLevelAt(key);
 
 		return level >= 0 && level <= Phobos::Config::TSFog_HideFrame * 100;
 	}
@@ -1527,7 +1545,10 @@ DEFINE_HOOK(0x480223, Fog_Gap_VisibilityFrame, 0x8)
 	if (!Fog::IsGapCellExplored(pCell))
 		return 0;
 
-	R->EAX(0); // no black shroud layer inside the gap
+	// Suppress only the black shroud layer; visible cells keep their own state.
+	if (pCell->Visibility == -2)
+		R->EAX(0);
+
 	return 0;
 }
 
@@ -1541,10 +1562,12 @@ DEFINE_HOOK(0x480273, Fog_Gap_FogFrame, 0x5)
 	if (!Fog::IsGapCellExplored(pCell))
 		return 0;
 
-	const int frame = Fog::UpdateGapCellFog(pCell);
+	Fog::NoteGapVisibility(pCell, static_cast<int>(pCell->Foggedness));
 
-	if (frame >= 0)
-		R->EAX(frame);
+	const int level = Fog::GapLevelAt(MapClass::GetCellIndex(pCell->MapCoords));
+
+	if (level >= 0)
+		R->EAX(level / 100);
 
 	return 0;
 }
