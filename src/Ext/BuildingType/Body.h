@@ -20,6 +20,12 @@ public:
 	public:
 		Valueable<AffectedHouse> PowersUp_Owner;
 		ValueableVector<BuildingTypeClass*> PowersUp_Buildings;
+
+		Valueable<bool> FogProducer;
+		Valueable<int> FogProducer_Range;
+		Valueable<int> FogProducer_Speed;
+		Valueable<int> FogProducer_Step;
+		Valueable<bool> FogProducer_Grow;
 		ValueableIdxVector<SuperWeaponTypeClass> SuperWeapons;
 
 		Valueable<double> PowerPlant_DamageFactor;
@@ -109,6 +115,11 @@ public:
 		ExtData(BuildingTypeClass* OwnerObject) : Extension<BuildingTypeClass>(OwnerObject)
 			, PowersUp_Owner { AffectedHouse::Owner }
 			, PowersUp_Buildings {}
+			, FogProducer { false }
+			, FogProducer_Range { 10 }
+			, FogProducer_Speed { 30 }
+			, FogProducer_Step { 1 }
+			, FogProducer_Grow { true }
 			, PowerPlant_DamageFactor { 1.0 }
 			, PowerPlantEnhancer_Buildings {}
 			, PowerPlantEnhancer_Amount { 0 }

@@ -78,6 +78,7 @@ int Phobos::Config::TSFog_ImpactFrames = 45;
 int Phobos::Config::TSFog_SpreadStep = 15;
 int Phobos::Config::TSFog_GapSpeed = 50;
 int Phobos::Config::TSFog_HideFrame = 24;
+bool Phobos::Config::TSFog_AutoSpread = true;
 bool Phobos::Config::ShowPlanningPath = false;
 bool Phobos::Config::ArtImageSwap = false;
 bool Phobos::Config::ShowPlacementPreview = false;
@@ -698,6 +699,9 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.GapSpeed", 50), 1, 100);
 	Phobos::Config::TSFog_HideFrame = std::clamp(
 		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.HideFrame", 24), 0, 48);
+	// [General] TSFog.AutoSpread: when off, fog no longer reconceals an explored
+	// area on its own; only FogProducer buildings spread fog.
+	Phobos::Config::TSFog_AutoSpread = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.AutoSpread", true);
 
 	Phobos::Misc::CustomGS = pINI_RULESMD->ReadBool(GameStrings::General, "CustomGS", false);
 

@@ -115,6 +115,7 @@ public:
 		static int TSFog_SpreadStep;
 		static int TSFog_GapSpeed;
 		static int TSFog_HideFrame;
+		static bool TSFog_AutoSpread;
 		static bool ArtImageSwap;
 		static bool ShowPlacementPreview;
 		static bool EnableBuildingPlacementPreview;

@@ -26,6 +26,7 @@
 #include <TerrainTypeClass.h>
 
 #include <Ext/AnimType/Body.h>
+#include <Ext/BuildingType/Body.h>
 #include <Ext/TerrainType/Body.h>
 
 #include <unordered_set>
@@ -144,55 +145,75 @@ namespace Fog
 		TacticalClass::Instance->RegisterCellAsVisible(pCell);
 	}
 
-	// --- Isolated gap overlay ---------------------------------------------
-	// Only cells inside an enemy gap radius are touched. Rendering is overridden at
-	// the final draw frame; no cell fields are written, so normal fog cannot break.
-	std::vector<unsigned char> GapMask;
-	std::vector<int> GapStartFrame;    // -1 = no active transition
-	std::vector<short> GapStartLevel;  // fixed-point x100
-
-	void EnsureGapState()
+	// --- FogProducer -------------------------------------------------------
+	// Buildings with FogProducer=yes spread fog outward from themselves. The
+	// vanilla gap generator is left completely untouched.
+	struct ProducerState
 	{
-		if (GapMask.empty())
+		int Radius = 0;
+		int NextStep = 0;
+	};
+
+	std::unordered_map<BuildingClass*, ProducerState> Producers;
+	std::vector<unsigned char> ProducerMask;
+
+	void EnsureProducerState()
+	{
+		if (ProducerMask.empty())
+			ProducerMask.assign(512 * 512, 0);
+	}
+
+	void ResetProducers()
+	{
+		Producers.clear();
+		ProducerMask.assign(512 * 512, 0);
+	}
+
+	void UpdateProducers()
+	{
+		EnsureProducerState();
+		std::fill(ProducerMask.begin(), ProducerMask.end(), static_cast<unsigned char>(0));
+
+		if (!Active() || !HouseClass::CurrentPlayer)
 		{
-			GapMask.assign(512 * 512, 0);
-			GapStartFrame.assign(512 * 512, -1);
-			GapStartLevel.assign(512 * 512, 0);
-		}
-	}
-
-	void ResetGapState()
-	{
-		GapMask.assign(512 * 512, 0);
-		GapStartFrame.assign(512 * 512, -1);
-		GapStartLevel.assign(512 * 512, 0);
-	}
-
-	void UpdateGapMask()
-	{
-		EnsureGapState();
-		std::fill(GapMask.begin(), GapMask.end(), static_cast<unsigned char>(0));
-
-		if (!HouseClass::CurrentPlayer)
+			Producers.clear();
 			return;
+		}
 
 		for (auto pBuilding : BuildingClass::Array)
 		{
-			if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo
-				|| !pBuilding->Type || !pBuilding->Type->GapGenerator
-				|| !pBuilding->Owner)
+			if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo || !pBuilding->Type)
 				continue;
 
-			if (pBuilding->Owner->IsAlliedWith(HouseClass::CurrentPlayer))
+			auto const pTypeExt = BuildingTypeExt::ExtMap.Find(pBuilding->Type);
+
+			if (!pTypeExt || !pTypeExt->FogProducer.Get())
 				continue;
 
-			// Vanilla gap shroud is disabled; this overlay replaces it.
-			pBuilding->GeneratingGap = false;
+			auto& state = Producers[pBuilding];
+
+			const int range = std::clamp(pTypeExt->FogProducer_Range.Get(), 0, 255);
+			const int speed = std::max(1, pTypeExt->FogProducer_Speed.Get());
+			const int step = std::max(1, pTypeExt->FogProducer_Step.Get());
+
+			if (!pTypeExt->FogProducer_Grow.Get())
+			{
+				state.Radius = range;
+			}
+			else if (pBuilding->IsPowerOnline() && state.Radius < range
+				&& Unsorted::CurrentFrame >= state.NextStep)
+			{
+				state.Radius = std::min(range, state.Radius + step);
+				state.NextStep = Unsorted::CurrentFrame + speed;
+			}
 
 			const auto center = pBuilding->GetMapCoords();
-			const int radius = pBuilding->GapRadius > 0 ? pBuilding->GapRadius : 10;
-			const int radius2 = radius * radius;
+			const int radius = state.Radius;
 
+			if (radius <= 0)
+				continue;
+
+			const int radius2 = radius * radius;
 			const int x0 = std::max<int>(0, center.X - radius);
 			const int x1 = std::min<int>(511, center.X + radius);
 			const int y0 = std::max<int>(0, center.Y - radius);
@@ -208,82 +229,37 @@ namespace Fog
 					if (dx * dx + dy * dy > radius2)
 						continue;
 
-					GapMask[(y << 9) + x] = 1;
+					ProducerMask[(y << 9) + x] = 1;
 				}
 			}
 		}
-	}
 
-	bool IsGapCellExplored(CellClass* pCell)
-	{
-		EnsureGapState();
-		EnsureExplored();
-
-		const int key = MapClass::GetCellIndex(pCell->MapCoords);
-
-		return key >= 0 && key < 512 * 512 && GapMask[key] && Explored[key];
-	}
-
-	int GapStepPerFrame()
-	{
-		return std::max(1, (100 * std::max(1, Phobos::Config::TSFog_GapSpeed))
-			/ std::max(1, Phobos::Config::TSFog_SpreadStep));
-	}
-
-	int GapLevelAt(int key)
-	{
-		if (key < 0 || key >= 512 * 512 || !GapMask[key] || !Explored[key])
-			return -1;
-
-		if (GapStartFrame[key] < 0)
-			return -1;
-
-		int level = GapStartLevel[key]
-			- (Unsorted::CurrentFrame - GapStartFrame[key]) * GapStepPerFrame();
-		const int target = FogFrame() * 100;
-
-		return level < target ? target : level;
-	}
-
-	// Called from the draw hook with the engine's own Foggedness for this cell:
-	// visible cells are never fogged by the gap, unseen cells start/continue the
-	// accelerated fog fade.
-	void NoteGapVisibility(CellClass* pCell, int engineFog)
-	{
-		EnsureGapState();
-		EnsureExplored();
-
-		const int key = MapClass::GetCellIndex(pCell->MapCoords);
-
-		if (key < 0 || key >= 512 * 512)
-			return;
-
-		if (engineFog == -1 || !GapMask[key] || !Explored[key])
+		// Drop states of buildings that are gone or no longer producers.
+		for (auto it = Producers.begin(); it != Producers.end(); )
 		{
-			GapStartFrame[key] = -1;
-			return;
-		}
+			auto const pBuilding = it->first;
+			auto const pTypeExt = (pBuilding && pBuilding->Type)
+				? BuildingTypeExt::ExtMap.Find(pBuilding->Type) : nullptr;
 
-		if (GapStartFrame[key] < 0)
-		{
-			GapStartFrame[key] = Unsorted::CurrentFrame;
-			GapStartLevel[key] = 4800;
+			if (!pBuilding || !pBuilding->IsAlive || !pTypeExt || !pTypeExt->FogProducer.Get())
+				it = Producers.erase(it);
+			else
+				++it;
 		}
 	}
 
-	bool IsGapHidden(const CellStruct& cell)
+	bool IsExploredCell(CellClass* pCell)
 	{
-		EnsureGapState();
-		EnsureExplored();
+		return static_cast<unsigned>(pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)) != 0;
+	}
 
-		const int key = MapClass::GetCellIndex(cell);
+	bool IsProducerCell(CellClass* pCell)
+	{
+		EnsureProducerState();
 
-		if (key < 0 || key >= 512 * 512 || !GapMask[key] || !Explored[key])
-			return false;
+		const int key = MapClass::GetCellIndex(pCell->MapCoords);
 
-		const int level = GapLevelAt(key);
-
-		return level >= 0 && level <= Phobos::Config::TSFog_HideFrame * 100;
+		return key >= 0 && key < 512 * 512 && ProducerMask[key] != 0;
 	}
 
 	// Temporary reveal around a detonation, then fall back to fog.
@@ -355,9 +331,6 @@ namespace Fog
 			static_cast<short>((coords.Y >> 8) - extra) };
 		const auto pCell = MapClass::Instance.GetCellAt(cell);
 
-		if (IsGapHidden(cell))
-			return true;
-
 		if (!(pCell->Flags & CellFlags::Fogged) || pCell->Foggedness == -1)
 			return false;
 
@@ -426,7 +399,7 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
 
 	Fog::ResetExplored();
-	Fog::ResetGapState();
+	Fog::ResetProducers();
 
 	if (fog)
 		Fog::InstallIsLocationFogged();
@@ -1505,13 +1478,8 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 	// Impact reveals expire quickly and must disappear the moment they do.
 	Fog::ApplyImpacts();
 
-	// Gap coverage mask (vanilla gap shroud is neutralised there).
-	if ((Unsorted::CurrentFrame % 10) == 0)
-		Fog::UpdateGapMask();
-
-	// Remember revealed cells before a gap clears their reveal flags.
-	if ((Unsorted::CurrentFrame % 15) == 0)
-		Fog::ScanExploredCells();
+	// FogProducer coverage / radius growth.
+	Fog::UpdateProducers();
 
 	return 0;
 }
@@ -1535,39 +1503,49 @@ DEFINE_HOOK(0x4690B6, Fog_BulletDetonate_ImpactReveal, 0x6)
 // Scoped gap overlay rendering: only cells inside an enemy gap radius and already
 // explored are affected. Everything else returns 0 and is rendered by the normal
 // fog path, unchanged.
-DEFINE_HOOK(0x480223, Fog_Gap_VisibilityFrame, 0x8)
+// FogProducer / AutoSpread visual override. Only explored, non-visible cells are
+// affected; visible cells, unexplored black and the vanilla gap stay untouched.
+
+DEFINE_HOOK(0x480223, Fog_Producer_VisibilityFrame, 0x8)
 {
 	if (!Fog::Active())
 		return 0;
 
 	GET(CellClass*, pCell, ESI);
 
-	if (!Fog::IsGapCellExplored(pCell))
+	if (!Fog::IsExploredCell(pCell) || pCell->Visibility == -1)
 		return 0;
 
-	// Suppress only the black shroud layer; visible cells keep their own state.
-	if (pCell->Visibility == -2)
+	if (Fog::IsProducerCell(pCell))
+	{
+		R->EAX(Fog::FogFrame());
+		return 0;
+	}
+
+	if (!Phobos::Config::TSFog_AutoSpread)
 		R->EAX(0);
 
 	return 0;
 }
 
-DEFINE_HOOK(0x480273, Fog_Gap_FogFrame, 0x5)
+DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 {
 	if (!Fog::Active())
 		return 0;
 
 	GET(CellClass*, pCell, ESI);
 
-	if (!Fog::IsGapCellExplored(pCell))
+	if (!Fog::IsExploredCell(pCell) || pCell->Foggedness == -1)
 		return 0;
 
-	Fog::NoteGapVisibility(pCell, static_cast<int>(pCell->Foggedness));
+	if (Fog::IsProducerCell(pCell))
+	{
+		R->EAX(Fog::FogFrame());
+		return 0;
+	}
 
-	const int level = Fog::GapLevelAt(MapClass::GetCellIndex(pCell->MapCoords));
-
-	if (level >= 0)
-		R->EAX(level / 100);
+	if (!Phobos::Config::TSFog_AutoSpread)
+		R->EAX(0);
 
 	return 0;
 }
