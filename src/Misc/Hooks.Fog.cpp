@@ -1715,21 +1715,24 @@ DEFINE_HOOK(0x6D8AD4, Fog_GetOcclusion_ClearExplored_Early, 0x5)
 // creates the frozen snapshots (FogCell). With AutoSpread=no explored cells must
 // never enter it, otherwise the engine keeps "fogging" them logically even though
 // the overlay is drawn transparent.
-DEFINE_HOOK(0x4ACC50, Fog_AutoSpread_SkipFogCell, 0x5)
+//
+// Hook after the prologue (sub esp,0x10; push ebx; push edi) and jump to the
+// routine's own epilogue at 0x4ACD89, so the stack stays balanced. Emulating
+// `ret 4` by hand at 0x4ACC50 leaked 8 bytes per call and corrupted the cell
+// iterator's caller.
+DEFINE_HOOK(0x4ACC55, Fog_AutoSpread_SkipFogCell, 0x6)
 {
+	enum { SkipToEpilogue = 0x4ACD89 };
+
 	if (!Fog::Active() || Phobos::Config::TSFog_AutoSpread)
 		return 0;
 
-	GET_STACK(CellStruct*, pCellStruct, STACK_OFFSET(0x0, 0x4));
+	GET_STACK(CellStruct*, pCellStruct, STACK_OFFSET(0x0, 0x1C));
 
 	if (!pCellStruct || !Fog::IsExploredCoords(*pCellStruct))
 		return 0;
 
-	// Skip the whole thiscall routine, emulating its `ret 4`.
-	const auto retAddr = *reinterpret_cast<uintptr_t*>(R->ESP());
-	R->ESP(R->ESP() + 8);
-
-	return retAddr;
+	return SkipToEpilogue;
 }
 
 // Diagnostic: confirm the per-cell fog update function is reached at runtime.
