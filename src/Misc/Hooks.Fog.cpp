@@ -424,43 +424,6 @@ DEFINE_HOOK(0x4A9CA0, Fog_RevealFogShroud, 0x8)
 
 	const auto pCell = pThis->GetCellAt(*pCellStruct);
 
-	// Gap-generator cells: the engine refreshes them every update and re-shrouds
-	// them to black. Handle them in one cheap branch (no neighbour recursion, no
-	// redraw unless the state actually changes) and render them as fog instead.
-	if (Phobos::Config::TSFog_GapFog && pCell->GapsCoveringThisCell > 0
-		&& pHouse == HouseClass::CurrentPlayer)
-	{
-		if (increase)
-			pCell->IncreaseShroudCounter();
-		else
-			pCell->ReduceShroudCounter();
-
-		Fog::EnsureExplored();
-
-		const int index = MapClass::GetCellIndex(*pCellStruct);
-		const bool inRange = index >= 0 && index < 512 * 512;
-		const bool explored = inRange
-			&& (Fog::Explored[index] || (pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)));
-
-		if (explored)
-		{
-			Fog::MarkExplored(*pCellStruct, index);
-
-			const char frame = static_cast<char>(Fog::FogFrame());
-			const bool changed = !(pCell->Flags & CellFlags::Fogged)
-				|| pCell->Visibility != -1 || pCell->Foggedness != frame;
-
-			pCell->Flags |= CellFlags::CenterRevealed | CellFlags::Fogged;
-			pCell->Visibility = -1;
-			pCell->Foggedness = frame;
-
-			if (changed)
-				TacticalClass::Instance->RegisterCellAsVisible(pCell);
-		}
-
-		return SkipGameCode;
-	}
-
 	const auto flags = pCell->Flags;
 
 	const bool edgeNotRevealed = !(flags & CellFlags::EdgeRevealed);

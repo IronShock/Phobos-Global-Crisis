@@ -3460,3 +3460,46 @@ BattlePoints.Label=              ; string - tooltip point label
 BattlePointsSidebar.Label=       ; string - sidebar point label
 BattlePointsSidebar.Label.InvertPosition=no ; boolean
 ```
+
+### Fog of War
+
+A Tiberian Sun-style fog of war on top of the engine's fog layer. Explored cells
+never fall back to the black shroud, units inside fog are not drawn, buildings
+keep their last visible state (frozen snapshot) and terrain objects, overlays and
+smudges are hidden while the cell is fully occluded. Vanilla gap generators are
+left untouched.
+
+The scenario's `[SpecialFlags]FogOfWar` decides per map; campaign maps keep their
+own value, skirmish and multiplayer may enable the game-mode option. `TSFog=no`
+disables the whole port.
+
+In `rulesmd.ini`:
+```ini
+[General]
+TSFog=yes                       ; boolean - master switch
+TSFog.ForceAll=no               ; boolean - enable fog even for maps with FogOfWar=no (testing)
+TSFog.RevealAll=clear           ; clear|keep - Reveal All also stops fog for the scenario
+TSFog.FogFrame=8                ; integer - fog frame used by FogProducer (0 dense .. 48 almost clear)
+
+TSFog.AutoSpread=yes            ; boolean - no = explored cells stay visible after leaving
+                                ; sight (units are still hidden); only FogProducer spreads fog
+
+TSFog.ImpactReveal=yes          ; boolean - a detonation briefly reveals the impact area
+TSFog.ImpactRadius=2            ; integer - cells
+TSFog.ImpactFrames=45           ; integer - duration in frames
+```
+
+Fog producers spread fog outward from themselves. They only work while fog of war
+is enabled and never fog a cell the player can currently see:
+
+```ini
+[BUILDINGTYPE]
+FogProducer=no                  ; boolean - master switch for this building
+FogProducer.Range=10            ; integer - maximum radius in cells
+FogProducer.Speed=30            ; integer - frames per spread step
+FogProducer.Step=1              ; integer - cells added per step
+FogProducer.Grow=yes            ; boolean - yes = radius grows from 0 outward,
+                                ;           no = the whole Range is fogged immediately
+```
+
+Power loss pauses the growth; destroying the building clears its radius.

@@ -69,15 +69,10 @@ int Phobos::Config::SmudgeCapacity = 1;
 bool Phobos::Config::TSFog = true;
 bool Phobos::Config::TSFog_RevealAllClear = true;
 bool Phobos::Config::TSFog_ForceAll = false;
-bool Phobos::Config::TSFog_GapFog = true;
-int Phobos::Config::TSFog_GapFrame = 8;
 int Phobos::Config::TSFog_FogFrame = 8;
 bool Phobos::Config::TSFog_ImpactReveal = true;
 int Phobos::Config::TSFog_ImpactRadius = 2;
 int Phobos::Config::TSFog_ImpactFrames = 45;
-int Phobos::Config::TSFog_SpreadStep = 15;
-int Phobos::Config::TSFog_GapSpeed = 50;
-int Phobos::Config::TSFog_HideFrame = 24;
 bool Phobos::Config::TSFog_AutoSpread = true;
 bool Phobos::Config::ShowPlanningPath = false;
 bool Phobos::Config::ArtImageSwap = false;
@@ -674,12 +669,6 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 	// [General] TSFog.ForceAll: test switch that enables fog even for maps whose
 	// [SpecialFlags] FogOfWar=no (e.g. TUTO4). Keep it off for normal play.
 	Phobos::Config::TSFog_ForceAll = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.ForceAll", false);
-	// [General] TSFog.GapFog / TSFog.GapFrame: render gap-generator areas as
-	// semi-transparent fog instead of black shroud. Frame is a fog.shp index
-	// (0 = dense, 48 = almost clear).
-	Phobos::Config::TSFog_GapFog = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.GapFog", true);
-	Phobos::Config::TSFog_GapFrame = std::clamp(
-		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.GapFrame", 8), 0, 48);
 	// [General] TSFog.FogFrame: fog frame used when an explored cell is no longer
 	// visible (0 = dense, 48 = almost clear). TSFog.ImpactReveal*: temporarily
 	// reveal the area around a detonation, then let it fall back to this fog.
@@ -690,15 +679,6 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.ImpactRadius", 2), 0, 8);
 	Phobos::Config::TSFog_ImpactFrames = std::clamp(
 		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.ImpactFrames", 45), 5, 300);
-	// [General] TSFog.SpreadStep: frames per fog level for the standard spread.
-	// TSFog.GapSpeed: multiplier (1..100) inside an enemy gap generator radius.
-	// TSFog.HideFrame: units are hidden once the fog reaches this density.
-	Phobos::Config::TSFog_SpreadStep = std::clamp(
-		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.SpreadStep", 15), 1, 300);
-	Phobos::Config::TSFog_GapSpeed = std::clamp(
-		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.GapSpeed", 50), 1, 100);
-	Phobos::Config::TSFog_HideFrame = std::clamp(
-		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.HideFrame", 24), 0, 48);
 	// [General] TSFog.AutoSpread: when off, fog no longer reconceals an explored
 	// area on its own; only FogProducer buildings spread fog.
 	Phobos::Config::TSFog_AutoSpread = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.AutoSpread", true);

@@ -106,15 +106,10 @@ public:
 		static bool TSFog;
 		static bool TSFog_RevealAllClear;
 		static bool TSFog_ForceAll;
-		static bool TSFog_GapFog;
-		static int TSFog_GapFrame;
 		static int TSFog_FogFrame;
 		static bool TSFog_ImpactReveal;
 		static int TSFog_ImpactRadius;
 		static int TSFog_ImpactFrames;
-		static int TSFog_SpreadStep;
-		static int TSFog_GapSpeed;
-		static int TSFog_HideFrame;
 		static bool TSFog_AutoSpread;
 		static bool ArtImageSwap;
 		static bool ShowPlacementPreview;

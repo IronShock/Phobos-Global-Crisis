@@ -1220,6 +1220,72 @@ out the original project.
 
 ---
 
+---
+
+## 13. Fog of War (TS-style)
+
+A Tiberian Sun-style fog of war layered on the engine's fog:
+
+- Explored cells never fall back to the black shroud; they show fog instead.
+- Units inside fog are not drawn; buildings keep their last visible state
+  (frozen snapshot, with the owner's palette and damage state).
+- Terrain objects, overlays (walls, tiberium) and smudges are hidden while the
+  cell is fully occluded.
+- An "Reveal all" trigger clears both shroud and fog; by default fog stays off
+  for the rest of the scenario.
+- Vanilla gap generators are untouched and still create black shroud.
+
+### Activation
+
+The scenario's `[SpecialFlags]FogOfWar` decides per map. Campaign maps keep
+their own value; skirmish and multiplayer may enable the game-mode option.
+`TSFog=no` disables the whole port.
+
+```ini
+[General]
+TSFog=yes             ; master switch
+TSFog.ForceAll=no     ; yes = enable fog even for maps with FogOfWar=no (testing)
+TSFog.RevealAll=clear ; clear = Reveal All also stops fog for the scenario
+                      ; keep  = only clear the current fog
+TSFog.FogFrame=8      ; fog frame used by FogProducer (0 dense .. 48 almost clear)
+```
+
+### Fog spread
+
+```ini
+[General]
+TSFog.AutoSpread=yes  ; yes = normal automatic fog of war
+                      ; no  = explored cells stay visible after leaving sight
+                      ;       (units are still hidden); only FogProducer spreads fog
+```
+
+### FogProducer
+
+A building can act as a fog source that spreads fog outward from itself. It is
+only active while fog of war is enabled, and a cell the player can currently see
+is never fogged.
+
+```ini
+[BUILDINGTYPE]
+FogProducer=no        ; master switch for this building
+FogProducer.Range=10  ; maximum radius in cells
+FogProducer.Speed=30  ; frames per spread step
+FogProducer.Step=1    ; cells added per step
+FogProducer.Grow=yes  ; yes = radius grows from 0 outward
+                      ; no  = the whole Range is fogged immediately
+```
+
+Power loss pauses the growth; destroying the building clears its radius.
+
+### Impact reveal
+
+```ini
+[General]
+TSFog.ImpactReveal=yes  ; a detonation briefly reveals the impact area
+TSFog.ImpactRadius=2    ; cells
+TSFog.ImpactFrames=45   ; duration in frames
+```
+
 ## Full INI key index
 
 ### `rulesmd.ini` → `[General]`
@@ -1232,6 +1298,9 @@ out the original project.
 `MissileSpawnAttackCell`, `MovePositionIndicator.ShowEnemy`,
 `RemoveShroudGlobally`, `ReverseMove`, `Rock.CanBeBuiltOn`, `SmudgeCapacity`,
 `SmoothMove`, `TA.VirtualUnit`, `TacticalGear`, `TacticalPause`,
+`TSFog`, `TSFog.AutoSpread`, `TSFog.ForceAll`, `TSFog.FogFrame`,
+`TSFog.ImpactFrames`, `TSFog.ImpactRadius`, `TSFog.ImpactReveal`,
+`TSFog.RevealAll`,
 `TacticalPause.BlockActions.Difficulty`, `Tiberium.CanBeBuiltOn`,
 `UrbanCombat.AttackBuff`, `UrbanCombat.AttOutsideMulti`,
 `UrbanCombat.DefOutsideMulti`, `UrbanCombat.OutsideDamageMultiplier`,
@@ -1249,7 +1318,8 @@ out the original project.
 `Armor.*Multiplier`, `AttackMove*`, `BattlePoints`, `Image.Empty`,
 `PassengersPipOffset`, `PassengersPipSize`, `PenetratesTransport*`, `PipScale`,
 `PipScale2`, `RadarSignal*`, `ShowMovePositionIndicator`, `SmoothMove`, `UrbanCombat`,
-`WaterImage.Empty`
+`WaterImage.Empty`, `FogProducer`, `FogProducer.Grow`, `FogProducer.Range`,
+`FogProducer.Speed`, `FogProducer.Step`
 
 ### `rulesmd.ini` → other sections
 `[LoadBar]` (`Enable`, `MaxPerFrame`, `*.Default`),
