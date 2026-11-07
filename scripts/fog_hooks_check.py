@@ -4,7 +4,7 @@
 Usage: python scripts/fog_hooks_check.py [path/to/gamemd.exe] [file ...]
 
 Checks, for every DEFINE_HOOK / DEFINE_HOOK_AGAIN in the given files (default:
-src/Misc/Hooks.Fog.cpp):
+src/Misc/Fog/*.cpp):
   * the site exists in the executable image
   * the stolen byte range ends on an instruction boundary
   * no relative branch/call targets the middle of the range
@@ -18,7 +18,7 @@ from pathlib import Path
 import capstone
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FILES = [ROOT / "src/Misc/Hooks.Fog.cpp"]
+DEFAULT_FILES = sorted((ROOT / "src/Misc/Fog").glob("*.cpp"))
 HOOK_RE = re.compile(
     r"DEFINE_HOOK(?:_AGAIN)?\(\s*(0x[0-9A-Fa-f]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*(0x[0-9A-Fa-f]+)")
 

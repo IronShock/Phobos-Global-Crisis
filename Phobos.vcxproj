@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\New\Entity\FilterButtonClass.h" />
+    <ClInclude Include="src\Misc\Fog\Fog.h" />
     <ClInclude Include="src\Ext\Techno\RadarSignal.h" />
     <ClCompile Include="src\New\Entity\FilterButtonClass.cpp" />
     <ClCompile Include="src\Ext\Infantry\Hooks.cpp" />
@@ -231,7 +232,12 @@
     <ClCompile Include="src\Ext\WeaponType\Hooks.DiskLaserRadius.cpp" />
     <ClCompile Include="src\Misc\BlittersFix.cpp" />
 	<ClCompile Include="src\Misc\Hooks.AI.cpp" />
-	<ClCompile Include="src\Misc\Hooks.Fog.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Activation.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Anim.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Draw.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Reveal.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Snapshots.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.State.cpp" />
     <ClCompile Include="src\Misc\Selection.cpp" />
     <ClCompile Include="src\Utilities\Anchor.cpp" />
     <ClCompile Include="src\Utilities\Debug.cpp" />
