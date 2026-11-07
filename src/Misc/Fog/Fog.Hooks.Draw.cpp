@@ -10,15 +10,16 @@ namespace Fog
 		if (!Active())
 			return false;
 
-		const int level = coords.Z / Unsorted::LevelHeight;
-		const int extra = (level & 1) ? ((level >> 1) + 1) : (level >> 1);
-		const CellStruct cell { static_cast<short>((coords.X >> 8) - extra),
-			static_cast<short>((coords.Y >> 8) - extra) };
-		const auto pCell = MapClass::Instance.GetCellAt(cell);
+		const CellStruct cell = CoordsToCellWithLevel(coords);
+		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+		if (!pCell)
+			return false;
+
 		const bool producer = IsProducerCell(pCell);
 		bool hide = false;
 
-		if (!AutoSpreadEnabled())
+		if (!UsesNativeFog())
 		{
 			// Pure AutoSpread=no: only producer fog hides objects.
 			if (producer && !InSightAt(cell))
@@ -52,7 +53,9 @@ namespace Fog
 
 				for (auto const& offset : Unsorted::AdjacentCell)
 				{
-					if (MapClass::Instance.GetCellAt(cell + offset)->Foggedness == -1)
+					const auto pAdjacent = MapClass::Instance.TryGetCellAt(cell + offset);
+
+					if (pAdjacent && pAdjacent->Foggedness == -1)
 					{
 						hide = false;
 						break;
@@ -93,7 +96,7 @@ namespace Fog
 	}
 }
 
-// --- Stage B: hide terrain objects / overlays / smudges while fully occluded ---
+// --- Terrain objects / overlays / smudges: hide while fully occluded ---
 //
 // The original hooks at 0x6D9313 / 0x6D70BC / 0x48049E stole relative branches
 // (je), which Syringe cannot relocate; replaying them in the trampoline jumped
@@ -110,12 +113,10 @@ DEFINE_HOOK(0x6D9313, Fog_DrawObjects_SkipTerrain, 0x6)
 
 	GET(const CoordStruct*, pCoord, EAX);
 
-	const int level = pCoord->Z / Unsorted::LevelHeight;
-	const int extra = (level & 1) ? ((level >> 1) + 1) : (level >> 1);
-	const CellStruct cell { static_cast<short>((pCoord->X >> 8) - extra),
-		static_cast<short>((pCoord->Y >> 8) - extra) };
+	const CellStruct cell = Fog::CoordsToCellWithLevel(*pCoord);
+	const auto pCell = MapClass::Instance.TryGetCellAt(cell);
 
-	if (MapClass::Instance.GetCellAt(cell)->Visibility == -2)
+	if (pCell && pCell->Visibility == -2)
 		return SkipDraw;
 
 	return 0;
@@ -157,7 +158,7 @@ DEFINE_HOOK(0x4804A4, Fog_DrawCellSmudge_Skip, 0x6)
 
 // FogProducer / AutoSpread visual override. These hooks only run in the custom
 // AutoSpread=no mode with no Global producer. With AutoSpread=yes or a Global
-// producer, AutoSpreadEnabled() is true and the engine's normal per-cell fog
+// producer, UsesNativeFog() is true and the engine's normal per-cell fog
 // frames are left untouched (this is the "normal fog of war" look).
 
 DEFINE_HOOK(0x480223, Fog_Producer_VisibilityFrame, 0x8)
@@ -170,7 +171,7 @@ DEFINE_HOOK(0x480223, Fog_Producer_VisibilityFrame, 0x8)
 	// Global fog: only override the shroud *drawing* for genuinely mapped
 	// cells, so the engine's own fog layer is visible. Cells still inside the
 	// black shroud transition keep their native shroud frames. No state writes.
-	if (Fog::AutoSpreadEnabled())
+	if (Fog::UsesNativeFog())
 		return 0;
 
 	if (!Fog::IsExploredCell(pCell) || !Fog::IsMappedCell(pCell)
@@ -198,7 +199,7 @@ DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 
 	GET(CellClass*, pCell, ESI);
 
-	if (Fog::AutoSpreadEnabled())
+	if (Fog::UsesNativeFog())
 		return 0;
 
 	if (!Fog::IsExploredCell(pCell) || !Fog::IsMappedCell(pCell))
@@ -227,7 +228,7 @@ DEFINE_HOOK(0x48028B, Fog_Producer_FogFrameNormal, 0x5)
 
 	GET(CellClass*, pCell, ESI);
 
-	if (Fog::AutoSpreadEnabled())
+	if (Fog::UsesNativeFog())
 		return 0;
 
 	if (!Fog::IsExploredCell(pCell) || !Fog::IsMappedCell(pCell))
@@ -274,7 +275,7 @@ DEFINE_HOOK(0x6D8AC6, Fog_GetOcclusion_ClearExplored, 0x7)
 	if (!pCoords)
 		return 0;
 
-	if (Fog::AutoSpreadEnabled())
+	if (Fog::UsesNativeFog())
 		return 0;
 
 	if (!Fog::IsExploredCoords(*pCoords))
@@ -300,7 +301,7 @@ DEFINE_HOOK(0x6D8AD4, Fog_GetOcclusion_ClearExplored_Early, 0x5)
 	if (!pCoords)
 		return 0;
 
-	if (Fog::AutoSpreadEnabled())
+	if (Fog::UsesNativeFog())
 		return 0;
 
 	if (!Fog::IsExploredCoords(*pCoords))
@@ -325,7 +326,7 @@ DEFINE_HOOK(0x4ACC55, Fog_AutoSpread_SkipFogCell, 0x6)
 {
 	enum { SkipToEpilogue = 0x4ACD89 };
 
-	if (!Fog::Active() || Fog::AutoSpreadEnabled())
+	if (!Fog::Active() || Fog::UsesNativeFog())
 		return 0;
 
 	GET_STACK(CellStruct*, pCellStruct, STACK_OFFSET(0x0, 0x1C));

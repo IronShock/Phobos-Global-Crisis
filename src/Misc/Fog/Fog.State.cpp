@@ -54,27 +54,27 @@ namespace Fog
 	void EnsureExplored()
 	{
 		if (Explored.empty())
-			Explored.assign(512 * 512, 0);
+			Explored.assign(MapCellCount, 0);
 
 		if (InSight.empty())
-			InSight.assign(512 * 512, 0);
+			InSight.assign(MapCellCount, 0);
 
 	}
 
 	void ResetExplored()
 	{
-		Explored.assign(512 * 512, 0);
+		Explored.assign(MapCellCount, 0);
 		ExploredList.clear();
-		InSight.assign(512 * 512, 0);
+		InSight.assign(MapCellCount, 0);
 		FogAnimPostRenderInProgress = false;
 		SightDirty = true;
 	}
 
-	void MarkExplored(const CellStruct& cell, int index)
+	void MarkExplored(int index)
 	{
 		EnsureExplored();
 
-		if (index < 0 || index >= 512 * 512 || Explored[index])
+		if (index < 0 || index >= MapCellCount || Explored[index])
 			return;
 
 		Explored[index] = 1;
@@ -92,13 +92,23 @@ namespace Fog
 		for (auto pCell = map.CellIteratorNext(); pCell; pCell = map.CellIteratorNext())
 		{
 			if (pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed))
-				MarkExplored(pCell->MapCoords, MapClass::GetCellIndex(pCell->MapCoords));
+				MarkExplored(MapClass::GetCellIndex(pCell->MapCoords));
 		}
 	}
 
 	int FogFrame()
 	{
 		return Phobos::Config::TSFog_FogFrame;
+	}
+
+	CellStruct CoordsToCellWithLevel(const CoordStruct& coords)
+	{
+		const int level = coords.Z / Unsorted::LevelHeight;
+		const int extra = (level & 1) ? ((level >> 1) + 1) : (level >> 1);
+
+		return CellStruct {
+			static_cast<short>((coords.X >> 8) - extra),
+			static_cast<short>((coords.Y >> 8) - extra) };
 	}
 
 	// --- FogProducer -------------------------------------------------------
@@ -147,7 +157,7 @@ namespace Fog
 	// AutoSpread=yes or an active Global producer both mean "let the engine's
 	// normal fog logic run". The custom AutoSpread=no path (InSight map, forced
 	// cell clearing) is only used when no global producer is active.
-	bool AutoSpreadEnabled()
+	bool UsesNativeFog()
 	{
 		return Phobos::Config::TSFog_AutoSpread || AnyGlobalProducer;
 	}
@@ -155,13 +165,13 @@ namespace Fog
 	void EnsureProducerState()
 	{
 		if (ProducerMask.empty())
-			ProducerMask.assign(512 * 512, 0);
+			ProducerMask.assign(MapCellCount, 0);
 	}
 
 	void ResetProducers()
 	{
 		Producers.clear();
-		ProducerMask.assign(512 * 512, 0);
+		ProducerMask.assign(MapCellCount, 0);
 		AnyGlobalProducer = false;
 		GlobalStateKnown = false;
 		ProducerScanSerial = 0;
@@ -180,9 +190,9 @@ namespace Fog
 
 		const int radius2 = radius * radius;
 		const int x0 = std::max<int>(0, center.X - radius);
-		const int x1 = std::min<int>(511, center.X + radius);
+		const int x1 = std::min<int>(MaxMapCoord, center.X + radius);
 		const int y0 = std::max<int>(0, center.Y - radius);
-		const int y1 = std::min<int>(511, center.Y + radius);
+		const int y1 = std::min<int>(MaxMapCoord, center.Y + radius);
 
 		for (int y = y0; y <= y1; ++y)
 		{
@@ -192,7 +202,7 @@ namespace Fog
 				const int dy = y - center.Y;
 
 				if (dx * dx + dy * dy <= radius2)
-					mask[(y << 9) + x] = 1;
+					mask[(y * MapSize) + x] = 1;
 			}
 		}
 	}
@@ -318,7 +328,7 @@ namespace Fog
 				// power are ignored.
 				const bool grow = global ? false : pTypeExt->FogProducer_Grow.Get();
 				const int range = global ? GlobalProducerRange
-					: std::clamp(pTypeExt->FogProducer_Range.Get(), 0, 511);
+					: std::clamp(pTypeExt->FogProducer_Range.Get(), 0, MaxMapCoord);
 				const int speed = std::max(1, pTypeExt->FogProducer_Speed.Get());
 				const int step = std::max(1, pTypeExt->FogProducer_Step.Get());
 				const auto center = pBuilding->GetMapCoords();
@@ -427,14 +437,14 @@ namespace Fog
 
 		const int key = MapClass::GetCellIndex(cell);
 
-		return key >= 0 && key < 512 * 512 && Explored[key] != 0;
+		return key >= 0 && key < MapCellCount && Explored[key] != 0;
 	}
 
 	bool IsExploredIndex(int index)
 	{
 		EnsureExplored();
 
-		return index >= 0 && index < 512 * 512 && Explored[index] != 0;
+		return index >= 0 && index < MapCellCount && Explored[index] != 0;
 	}
 
 	bool InSightAt(const CellStruct& cell)
@@ -443,7 +453,7 @@ namespace Fog
 
 		const int key = MapClass::GetCellIndex(cell);
 
-		return key >= 0 && key < 512 * 512 && InSight[key] != 0;
+		return key >= 0 && key < MapCellCount && InSight[key] != 0;
 	}
 
 	void MarkSightCircle(const CellStruct& center, int sight)
@@ -453,9 +463,9 @@ namespace Fog
 
 		const int sight2 = sight * sight;
 		const int x0 = std::max<int>(0, center.X - sight);
-		const int x1 = std::min<int>(511, center.X + sight);
+		const int x1 = std::min<int>(MaxMapCoord, center.X + sight);
 		const int y0 = std::max<int>(0, center.Y - sight);
-		const int y1 = std::min<int>(511, center.Y + sight);
+		const int y1 = std::min<int>(MaxMapCoord, center.Y + sight);
 
 		for (int y = y0; y <= y1; ++y)
 		{
@@ -465,7 +475,7 @@ namespace Fog
 				const int dy = y - center.Y;
 
 				if (dx * dx + dy * dy <= sight2)
-					InSight[(y << 9) + x] = 1;
+					InSight[(y * MapSize) + x] = 1;
 			}
 		}
 	}
@@ -508,7 +518,7 @@ namespace Fog
 			if (sight <= 0)
 				continue;
 
-			MarkSightCircle(pTechno->GetMapCoords(), std::min(sight, 511));
+			MarkSightCircle(pTechno->GetMapCoords(), std::min(sight, MaxMapCoord));
 		}
 	}
 
@@ -529,7 +539,7 @@ namespace Fog
 		{
 			const int index = MapClass::GetCellIndex(pCell->MapCoords);
 
-			if (index < 0 || index >= 512 * 512 || !Explored[index])
+			if (index < 0 || index >= MapCellCount || !Explored[index])
 				continue;
 
 			// Explored cells never fall back to the black shroud; the native fog
@@ -579,7 +589,7 @@ namespace Fog
 
 			const int index = MapClass::GetCellIndex(pCell->MapCoords);
 
-			if (index < 0 || index >= 512 * 512 || !Explored[index])
+			if (index < 0 || index >= MapCellCount || !Explored[index])
 				continue;
 
 			pCell->Flags |= (CellFlags::CenterRevealed | CellFlags::EdgeRevealed);
@@ -608,7 +618,7 @@ namespace Fog
 	// forced to -1, so the independently built InSight map is used instead.
 	bool IsCellInSight(CellClass* pCell)
 	{
-		if (AutoSpreadEnabled())
+		if (UsesNativeFog())
 			return pCell->Foggedness == -1;
 
 		return InSightAt(pCell->MapCoords);
@@ -620,7 +630,7 @@ namespace Fog
 
 		const int key = MapClass::GetCellIndex(pCell->MapCoords);
 
-		if (key < 0 || key >= 512 * 512)
+		if (key < 0 || key >= MapCellCount)
 			return false;
 
 		return ProducerMask[key] != 0;

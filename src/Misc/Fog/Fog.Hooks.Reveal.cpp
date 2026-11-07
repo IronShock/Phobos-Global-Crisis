@@ -34,20 +34,18 @@ DEFINE_HOOK(0x4A9CA0, Fog_RevealFogShroud, 0x8)
 
 	// Once explored, a cell must never fall back to the black shroud layer: clamp
 	// the computed occlusion to fog. This is what keeps temporary reveals (fire,
-	// gap generators, attack impact) from turning into black shroud afterwards.
+	// gap generators) from turning into black shroud afterwards.
 	{
-		Fog::EnsureExplored();
-
 		const int exploredIndex = MapClass::GetCellIndex(*pCellStruct);
-		const bool inRange = exploredIndex >= 0 && exploredIndex < 512 * 512;
+		const bool inRange = exploredIndex >= 0 && exploredIndex < Fog::MapCellCount;
 		const bool explored = inRange
 			&& (Fog::IsExploredIndex(exploredIndex) || (flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)));
 
 		if (explored)
 		{
-			Fog::MarkExplored(*pCellStruct, exploredIndex);
+			Fog::MarkExplored(exploredIndex);
 
-			if (!Fog::AutoSpreadEnabled())
+			if (!Fog::UsesNativeFog())
 			{
 				// AutoSpread=no: an explored cell never re-fogs. Keep it exactly as
 				// if it were in sight so no snapshot/freeze logic kicks in.
@@ -204,6 +202,9 @@ DEFINE_HOOK(0x4ADFF0, Fog_AllToSee, 0x5)
 			if (pTechno->WhatAmI() != AbstractType::Building || !notForBuilding)
 			{
 				const auto pOwner = pTechno->Owner;
+
+				if (!pOwner)
+					continue;
 
 				if (pOwner->IsControlledByCurrentPlayer())
 				{

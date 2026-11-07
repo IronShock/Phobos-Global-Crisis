@@ -44,16 +44,21 @@
 // Shared fog-of-war state and queries. Hooks live in the Fog.Hooks.* units.
 namespace Fog
 {
+	constexpr int MapSize = 512;
+	constexpr int MaxMapCoord = MapSize - 1;
+	constexpr int MapCellCount = MapSize * MapSize;
+
 	bool Active();
-	bool AutoSpreadEnabled();
+	bool UsesNativeFog();
 	int FogFrame();
+	CellStruct CoordsToCellWithLevel(const CoordStruct& coords);
 
 	void ClearAllFog();
 
 	// Explored-once bookkeeping.
 	void EnsureExplored();
 	void ResetExplored();
-	void MarkExplored(const CellStruct& cell, int index);
+	void MarkExplored(int index);
 	void ScanExploredCells();
 	bool IsExploredIndex(int index);
 	bool IsExploredCoords(const CellStruct& cell);

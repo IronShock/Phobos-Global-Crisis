@@ -87,7 +87,7 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 
 	// Only the custom AutoSpread=no renderer needs the independent sight map.
 	// Global mode runs the engine's native fog and must not rebuild it.
-	if (!Fog::AutoSpreadEnabled())
+	if (!Fog::UsesNativeFog())
 	{
 		if (Fog::SightDirty || (Unsorted::CurrentFrame % 3) == 0)
 		{

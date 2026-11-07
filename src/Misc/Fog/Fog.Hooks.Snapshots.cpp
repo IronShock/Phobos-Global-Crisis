@@ -1,8 +1,8 @@
 #include "Fog.h"
 
 // ============================================================================
-// Stage C2: frozen fog snapshots (buildings and static objects keep their last
-// visible state while inside fog; units are hidden by IsLocationFogged).
+// Frozen fog snapshots: buildings and static objects keep their last visible
+// state while inside fog; units are hidden by IsLocationFogged.
 // ============================================================================
 
 namespace FoggedObjectHelper
@@ -46,21 +46,6 @@ namespace FoggedObjectHelper
 		pVector->CapacityIncrement = 1;
 		FoggedObjectHelper::SetVectorCapacity(pVector, 1);
 		return pVector;
-	}
-	void ClearAllFog()
-	{
-		MapClass::Instance.CellIteratorReset();
-		for (auto pCell = MapClass::Instance.CellIteratorNext(); pCell; pCell = MapClass::Instance.CellIteratorNext())
-		{
-			pCell->ShroudCounter = 0;
-			pCell->GapsCoveringThisCell = 0;
-			pCell->AltFlags |= (AltCellFlags::Mapped | AltCellFlags::NoFog);
-			pCell->Flags |= (CellFlags::CenterRevealed | CellFlags::EdgeRevealed);
-			pCell->Flags &= ~CellFlags::Fogged;
-			pCell->ClearFoggedObjects();
-		}
-		MapClass::Instance.sub_657CE0();
-		MapClass::Instance.MarkNeedsRedraw(2);
 	}
 	static FoggedObjectClass* __fastcall CreateFoggedOverlay(void* pThis, void* _, const CoordStruct& coords, int OverlayTypeIndex, int OverlayData) JMP_THIS(0x4D0980);
 	static FoggedObjectClass* __fastcall CreateFoggedSmudge(void* pThis, void* _, const CoordStruct& coords, int SmudgeTypeIndex, int SmudgeData) JMP_THIS(0x4D0C40);
@@ -146,8 +131,8 @@ namespace FoggedObjectHelper
 			const bool result = FoggedObjectHelper::ObjectUnlimbo(this, coords, dir);
 			if (result && ScenarioClass::Instance->SpecialFlags.FogOfWar)
 			{
-				const auto pCell = MapClass::Instance.GetCellAt(coords);
-				if (this->IsAlive && (pCell->Flags & CellFlags::Fogged))
+				const auto pCell = MapClass::Instance.TryGetCellAt(coords);
+				if (pCell && this->IsAlive && (pCell->Flags & CellFlags::Fogged))
 				{
 					if (!pCell->FoggedObjects)
 						pCell->FoggedObjects = FoggedObjectHelper::CreateGameDynamicVector();
@@ -166,8 +151,8 @@ namespace FoggedObjectHelper
 			const bool result = FoggedObjectHelper::ObjectUnlimbo(this, coords, dir);
 			if (result && ScenarioClass::Instance->SpecialFlags.FogOfWar)
 			{
-				const auto pCell = MapClass::Instance.GetCellAt(coords);
-				if (pCell->OverlayTypeIndex != -1 && (pCell->Flags & CellFlags::Fogged))
+				const auto pCell = MapClass::Instance.TryGetCellAt(coords);
+				if (pCell && pCell->OverlayTypeIndex != -1 && (pCell->Flags & CellFlags::Fogged))
 				{
 					if (!pCell->FoggedObjects)
 						pCell->FoggedObjects = FoggedObjectHelper::CreateGameDynamicVector();
@@ -186,8 +171,8 @@ namespace FoggedObjectHelper
 			const bool result = FoggedObjectHelper::ObjectUnlimbo(this, coords, dir);
 			if (result && ScenarioClass::Instance->SpecialFlags.FogOfWar)
 			{
-				const auto pCell = MapClass::Instance.GetCellAt(coords);
-				if (pCell->SmudgeTypeIndex != -1 && (pCell->Flags & CellFlags::Fogged))
+				const auto pCell = MapClass::Instance.TryGetCellAt(coords);
+				if (pCell && pCell->SmudgeTypeIndex != -1 && (pCell->Flags & CellFlags::Fogged))
 				{
 					if (!pCell->FoggedObjects)
 						pCell->FoggedObjects = FoggedObjectHelper::CreateGameDynamicVector();
