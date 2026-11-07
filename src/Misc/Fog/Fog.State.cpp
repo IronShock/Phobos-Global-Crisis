@@ -732,6 +732,37 @@ namespace Fog
 				}
 			}
 		}
+
+		struct FogLevelCounts
+		{
+			int Visible = 0;
+			int Gradient = 0;
+			int Dense = 0;
+		};
+
+		FogLevelCounts CountFogLevels()
+		{
+			FogLevelCounts counts;
+
+			for (int index : ExploredList)
+			{
+				CellStruct cell {
+					static_cast<short>(index & (MapSize - 1)),
+					static_cast<short>(index >> 9) };
+
+				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+				{
+					if (pCell->Foggedness == -1)
+						++counts.Visible;
+					else if (pCell->Foggedness == -2)
+						++counts.Dense;
+					else
+						++counts.Gradient;
+				}
+			}
+
+			return counts;
+		}
 	}
 
 	void OnGameLoaded()
@@ -785,34 +816,17 @@ namespace Fog
 			UpdateProducers();
 
 		InstallIsLocationFogged();
+
+		auto const pre = CountFogLevels();
 		RebuildFogGradient();
+		auto const post = CountFogLevels();
 
-		{
-			int visible = 0, gradient = 0, dense = 0;
-
-			for (int index : ExploredList)
-			{
-				CellStruct cell {
-					static_cast<short>(index & (MapSize - 1)),
-					static_cast<short>(index >> 9) };
-
-				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
-				{
-					if (pCell->Foggedness == -1)
-						++visible;
-					else if (pCell->Foggedness == -2)
-						++dense;
-					else
-						++gradient;
-				}
-			}
-
-			Debug::Log("[FogLoad] active=%d auto=%d native=%d global=%d buildings=%d explored=%d vis=%d grad=%d dense=%d\n",
-				static_cast<int>(Active()), static_cast<int>(Phobos::Config::TSFog_AutoSpread),
-				static_cast<int>(UsesNativeFog()), static_cast<int>(AnyGlobalProducer),
-				BuildingClass::Array.Count, static_cast<int>(ExploredList.size()),
-				visible, gradient, dense);
-		}
+		Debug::Log("[FogLoad] active=%d auto=%d native=%d global=%d buildings=%d explored=%d pre(vis=%d grad=%d dense=%d) post(vis=%d grad=%d dense=%d)\n",
+			static_cast<int>(Active()), static_cast<int>(Phobos::Config::TSFog_AutoSpread),
+			static_cast<int>(UsesNativeFog()), static_cast<int>(AnyGlobalProducer),
+			BuildingClass::Array.Count, static_cast<int>(ExploredList.size()),
+			pre.Visible, pre.Gradient, pre.Dense,
+			post.Visible, post.Gradient, post.Dense);
 
 		MapClass::Instance.MarkNeedsRedraw(2);
 	}

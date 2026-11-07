@@ -240,6 +240,7 @@
 	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Reveal.cpp" />
 	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Snapshots.cpp" />
 	<ClCompile Include="src\Misc\Fog\Fog.State.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Zoom.cpp" />
     <ClCompile Include="src\Misc\Selection.cpp" />
     <ClCompile Include="src\Utilities\Anchor.cpp" />
     <ClCompile Include="src\Utilities\Debug.cpp" />
