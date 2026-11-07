@@ -1289,17 +1289,12 @@ Power loss pauses the growth; destroying the building clears its radius.
 and allied real sight stays clear, unexplored cells stay black, and only enemies
 outside real sight are hidden. `Range`, `Grow` and power are ignored.
 
-### Impact reveal
+### Animation visibility
 
 ```ini
 [General]
-TSFog.ImpactReveal=yes  ; a detonation briefly reveals the impact area
-TSFog.ImpactRadius=2    ; cells
-TSFog.ImpactFrames=45   ; duration in frames
 TSFog.AllowAnim=no      ; draw warhead animations inside explored fog
 ```
-
-### Animation visibility
 
 `TSFog.AllowAnim=yes` keeps combat animations drawing inside explored fog:
 warhead `AnimList` / `SplashList` / `Crit.AnimList`, weapon `Anim` /
@@ -1334,7 +1329,6 @@ Anims=DUSTFOGA,LuzDisparomed
 `RemoveShroudGlobally`, `ReverseMove`, `Rock.CanBeBuiltOn`, `SmudgeCapacity`,
 `SmoothMove`, `TA.VirtualUnit`, `TacticalGear`, `TacticalPause`,
 `TSFog`, `TSFog.AllowAnim`, `TSFog.AutoSpread`, `TSFog.ForceAll`, `TSFog.FogFrame`,
-`TSFog.ImpactFrames`, `TSFog.ImpactRadius`, `TSFog.ImpactReveal`,
 `TSFog.RevealAll`,
 `TacticalPause.BlockActions.Difficulty`, `Tiberium.CanBeBuiltOn`,
 `UrbanCombat.AttackBuff`, `UrbanCombat.AttOutsideMulti`,

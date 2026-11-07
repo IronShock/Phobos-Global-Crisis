@@ -107,9 +107,6 @@ public:
 		static bool TSFog_RevealAllClear;
 		static bool TSFog_ForceAll;
 		static int TSFog_FogFrame;
-		static bool TSFog_ImpactReveal;
-		static int TSFog_ImpactRadius;
-		static int TSFog_ImpactFrames;
 		static bool TSFog_AllowAnim;
 		static bool TSFog_AutoSpread;
 		static bool ArtImageSwap;

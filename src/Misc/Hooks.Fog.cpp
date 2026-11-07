@@ -84,11 +84,6 @@ namespace Fog
 	std::vector<unsigned char> Explored;
 	std::vector<int> ExploredList;
 
-	// Engine-computed fog frame per cell, captured before AutoSpread=no forces the
-	// cell to stay clear. Kept for diagnostics; InSight is the authoritative
-	// "real sight" source in AutoSpread=no.
-	std::vector<signed char> RealFog;
-
 	// Friendly line-of-sight bitmap. AutoSpread=no stops the engine from clearing
 	// its own reveal flags, so the engine's occlusion result cannot tell us what
 	// the player can actually see. This map is rebuilt from friendly/allied
@@ -110,9 +105,6 @@ namespace Fog
 		if (Explored.empty())
 			Explored.assign(512 * 512, 0);
 
-		if (RealFog.empty())
-			RealFog.assign(512 * 512, -1);
-
 		if (InSight.empty())
 			InSight.assign(512 * 512, 0);
 
@@ -122,7 +114,6 @@ namespace Fog
 	{
 		Explored.assign(512 * 512, 0);
 		ExploredList.clear();
-		RealFog.assign(512 * 512, -1);
 		InSight.assign(512 * 512, 0);
 		FogAnimPostRenderInProgress = false;
 		SightDirty = true;
@@ -157,20 +148,6 @@ namespace Fog
 	int FogFrame()
 	{
 		return Phobos::Config::TSFog_FogFrame;
-	}
-
-	void SetVisible(CellClass* pCell, const CellStruct& cell)
-	{
-		if (pCell->Foggedness == -1 && pCell->Visibility == -1 && !(pCell->Flags & CellFlags::Fogged))
-			return;
-
-		pCell->Flags &= ~CellFlags::Fogged;
-		pCell->Flags |= CellFlags::CenterRevealed;
-		pCell->Visibility = -1;
-		pCell->Foggedness = -1;
-
-		MarkExplored(cell, MapClass::GetCellIndex(cell));
-		TacticalClass::Instance->RegisterCellAsVisible(pCell);
 	}
 
 	// --- FogProducer -------------------------------------------------------
@@ -215,7 +192,6 @@ namespace Fog
 
 	void ConvertToGlobalFog();
 	void ConvertFromGlobalFog();
-	void ResetImpacts();
 
 	// AutoSpread=yes or an active Global producer both mean "let the engine's
 	// normal fog logic run". The custom AutoSpread=no path (InSight map, forced
@@ -503,25 +479,6 @@ namespace Fog
 		return key >= 0 && key < 512 * 512 && Explored[key] != 0;
 	}
 
-	signed char RealFogAt(const CellStruct& cell)
-	{
-		EnsureExplored();
-
-		const int key = MapClass::GetCellIndex(cell);
-
-		return (key >= 0 && key < 512 * 512) ? RealFog[key] : -1;
-	}
-
-	void SetRealFog(const CellStruct& cell, signed char value)
-	{
-		EnsureExplored();
-
-		const int key = MapClass::GetCellIndex(cell);
-
-		if (key >= 0 && key < 512 * 512)
-			RealFog[key] = value;
-	}
-
 	bool InSightAt(const CellStruct& cell)
 	{
 		EnsureExplored();
@@ -603,8 +560,6 @@ namespace Fog
 	// hook: it writes cell state.
 	void ConvertToGlobalFog()
 	{
-		Debug::Log("[Fog] global mode: switching to native fog\n");
-
 		ScanExploredCells();
 		UpdateSightMap();
 		SightDirty = false;
@@ -654,8 +609,6 @@ namespace Fog
 	// cleaned up.
 	void ConvertFromGlobalFog()
 	{
-		Debug::Log("[Fog] global mode: switching back to AutoSpread=no\n");
-
 		auto& map = MapClass::Instance;
 		map.CellIteratorReset();
 
@@ -833,10 +786,6 @@ namespace Fog
 		}
 
 		WarheadAnimTypesBuilt = true;
-		Debug::Log("[FogAnimSet] warheads=%d weapons=%d bullets=%d animTypes=%d registry=%d\n",
-			WarheadTypeClass::Array.Count, WeaponTypeClass::Array.Count,
-			BulletTypeClass::Array.Count, static_cast<int>(WarheadAnimTypes.size()),
-			static_cast<int>(FogAnimRegistry.size()));
 	}
 
 	bool IsWarheadAnim(AnimClass* pAnim)
@@ -958,186 +907,6 @@ namespace Fog
 
 			++drawn;
 		}
-
-		static int lastLogFrame = -1000;
-
-		if (Unsorted::CurrentFrame - lastLogFrame >= 60)
-		{
-			lastLogFrame = Unsorted::CurrentFrame;
-			Debug::Log("[FogAnimRedraw] frame=%d anims=%d\n",
-				Unsorted::CurrentFrame, drawn);
-		}
-	}
-
-	void LogDrawDebug(const char* tag, CellClass* pCell, int eaxIn, int eaxOut)
-	{
-		static int lastFrame = -1000;
-
-		if (Unsorted::CurrentFrame - lastFrame < 20)
-			return;
-
-		lastFrame = Unsorted::CurrentFrame;
-
-		Debug::Log("[FogDraw] %s cell=(%d,%d) vis=%d fog=%d real=%d sight=%d flags=0x%08X alt=0x%08X impact=%d prod=%d auto=%d exp=%d in=%d out=%d\n",
-			tag,
-			static_cast<int>(pCell->MapCoords.X), static_cast<int>(pCell->MapCoords.Y),
-			static_cast<int>(pCell->Visibility), static_cast<int>(pCell->Foggedness),
-			static_cast<int>(RealFogAt(pCell->MapCoords)),
-			static_cast<int>(InSightAt(pCell->MapCoords)),
-			static_cast<unsigned>(pCell->Flags),
-			static_cast<unsigned>(pCell->AltFlags),
-			static_cast<int>(IsProducerCell(pCell)),
-			static_cast<int>(AutoSpreadEnabled()),
-			static_cast<int>(IsExploredCell(pCell)), eaxIn, eaxOut);
-	}
-
-	// Temporary reveal around a detonation, then fall back to fog. The original
-	// cell state is saved so the engine's native fog/snapshot state is restored
-	// exactly, even when several impacts overlap.
-	struct ImpactReveal
-	{
-		int ExpireFrame;
-		std::vector<CellStruct> Cells;
-	};
-
-	struct ImpactCellState
-	{
-		CellFlags Flags = CellFlags::Empty;
-		char Visibility = -1;
-		char Foggedness = -1;
-		int RefCount = 0;
-	};
-
-	std::vector<ImpactReveal> Impacts;
-	std::unordered_map<int, ImpactCellState> ImpactCells;
-
-	void ResetImpacts()
-	{
-		Impacts.clear();
-		ImpactCells.clear();
-	}
-
-	void AddImpactReveal(const CoordStruct& coords)
-	{
-		if (!Phobos::Config::TSFog_ImpactReveal)
-			return;
-
-		const CellStruct center = CellClass::Coord2Cell(coords);
-		const int radius = Phobos::Config::TSFog_ImpactRadius;
-		const int radius2 = radius * radius;
-
-		ImpactReveal impact;
-		impact.ExpireFrame = Unsorted::CurrentFrame + Phobos::Config::TSFog_ImpactFrames;
-
-		for (int dy = -radius; dy <= radius; ++dy)
-		{
-			for (int dx = -radius; dx <= radius; ++dx)
-			{
-				if (dx * dx + dy * dy > radius2)
-					continue;
-
-				const CellStruct cell { static_cast<short>(center.X + dx),
-					static_cast<short>(center.Y + dy) };
-				auto const pCell = MapClass::Instance.TryGetCellAt(cell);
-
-				if (!pCell)
-					continue;
-
-				const int index = MapClass::GetCellIndex(cell);
-
-				if (index < 0 || index >= 512 * 512)
-					continue;
-
-				auto [it, inserted] = ImpactCells.try_emplace(index);
-
-				if (inserted)
-				{
-					it->second.Flags = pCell->Flags;
-					it->second.Visibility = pCell->Visibility;
-					it->second.Foggedness = pCell->Foggedness;
-				}
-
-				++it->second.RefCount;
-				SetVisible(pCell, cell);
-				impact.Cells.push_back(cell);
-			}
-		}
-
-		if (!impact.Cells.empty())
-		{
-			static int lastLogFrame = -1000;
-
-			if (Unsorted::CurrentFrame - lastLogFrame >= 30)
-			{
-				lastLogFrame = Unsorted::CurrentFrame;
-				Debug::Log("[Fog] impact reveal at (%d,%d) r=%d cells=%d\n",
-					static_cast<int>(center.X), static_cast<int>(center.Y), radius,
-					static_cast<int>(impact.Cells.size()));
-			}
-
-			Impacts.push_back(std::move(impact));
-		}
-	}
-
-	void ApplyImpacts()
-	{
-		if (Impacts.empty())
-			return;
-
-		for (auto it = Impacts.begin(); it != Impacts.end(); )
-		{
-			if (Unsorted::CurrentFrame < it->ExpireFrame)
-			{
-				++it;
-				continue;
-			}
-
-			for (auto const& cell : it->Cells)
-			{
-				const int index = MapClass::GetCellIndex(cell);
-				auto const stateIt = ImpactCells.find(index);
-
-				if (stateIt == ImpactCells.end())
-					continue;
-
-				if (--stateIt->second.RefCount > 0)
-					continue;
-
-				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
-				{
-					pCell->Flags = stateIt->second.Flags;
-					pCell->Visibility = stateIt->second.Visibility;
-					pCell->Foggedness = stateIt->second.Foggedness;
-					TacticalClass::Instance->RegisterCellAsVisible(pCell);
-				}
-
-				ImpactCells.erase(stateIt);
-			}
-
-			it = Impacts.erase(it);
-		}
-	}
-
-	// Diagnostic: one producer-cell visibility decision every 20 frames.
-	void LogHideDebug(const char* tag, CellClass* pCell, bool hide)
-	{
-		static int lastFrame = -1000;
-
-		if (Unsorted::CurrentFrame - lastFrame < 20)
-			return;
-
-		lastFrame = Unsorted::CurrentFrame;
-
-		Debug::Log("[FogHide] %s cell=(%d,%d) prod=%d real=%d sight=%d fog=%d flags=0x%08X hide=%d auto=%d\n",
-			tag,
-			static_cast<int>(pCell->MapCoords.X), static_cast<int>(pCell->MapCoords.Y),
-			static_cast<int>(IsProducerCell(pCell)),
-			static_cast<int>(RealFogAt(pCell->MapCoords)),
-			static_cast<int>(InSightAt(pCell->MapCoords)),
-			static_cast<int>(pCell->Foggedness),
-			static_cast<unsigned>(pCell->Flags),
-			static_cast<int>(hide),
-			static_cast<int>(AutoSpreadEnabled()));
 	}
 
 	// Real MapClass::IsLocationFogged. gamemd ships a stub there (`xor al,al; ret 4`)
@@ -1199,9 +968,6 @@ namespace Fog
 			}
 		}
 
-		if (producer)
-			LogHideDebug("producer", pCell, hide);
-
 		return hide;
 	}
 
@@ -1249,19 +1015,11 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 
 	fog = fog && Phobos::Config::TSFog;
 
-	Debug::Log("[Fog] scenario read: map=%d mode=%d force=%d tsfog=%d -> %d\n",
-		static_cast<int>(ScenarioClass::Instance->SpecialFlags.FogOfWar),
-		static_cast<int>(GameModeOptionsClass::Instance.FogOfWar),
-		static_cast<int>(Phobos::Config::TSFog_ForceAll),
-		static_cast<int>(Phobos::Config::TSFog), static_cast<int>(fog));
-	Debug::Log("[Fog] config: auto=%d\n", static_cast<int>(Fog::AutoSpreadEnabled()));
-
 	GameModeOptionsClass::Instance.FogOfWar = fog;
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
 
 	Fog::ResetExplored();
 	Fog::ResetProducers();
-	Fog::ResetImpacts();
 
 	if (Phobos::Config::TSFog_AllowAnim)
 		Fog::RebuildWarheadAnimTypes();
@@ -1516,10 +1274,6 @@ DEFINE_HOOK(0x577EE9, Fog_RevealWholeMap_ClearCell, 0x5)
 // next spread pass re-fog it.
 DEFINE_HOOK(0x577F14, Fog_RevealWholeMap_After, 0x5)
 {
-	Debug::Log("[Fog] RevealWholeMap: active=%d clear=%d\n",
-		static_cast<int>(Fog::Active()),
-		static_cast<int>(Phobos::Config::TSFog_RevealAllClear));
-
 	if (!Fog::Active() || !Phobos::Config::TSFog_RevealAllClear)
 		return 0;
 
@@ -2302,9 +2056,9 @@ DEFINE_FUNCTION_JUMP(CALL, 0x71D012, FoggedObjectHelper::TerrainClassFake::Terra
 
 // --- Per-frame fog driver ---
 //
-// Impact reveals expire here, the gap coverage mask is rebuilt and newly revealed
-// cells are remembered. No cell fields are touched from this hook, so the normal
-// fog path stays exactly as the engine renders it.
+// FogProducer coverage is refreshed and newly revealed cells are remembered.
+// No cell fields are touched from this hook, so the normal fog path stays
+// exactly as the engine renders it.
 DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 {
 	if (!Fog::Active())
@@ -2325,30 +2079,9 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 		}
 	}
 
-	// Impact reveals expire quickly and must disappear the moment they do.
-	Fog::ApplyImpacts();
-
 	// Remember revealed cells while their reveal flags are still set.
 	if ((Unsorted::CurrentFrame % 15) == 0)
 		Fog::ScanExploredCells();
-
-	return 0;
-}
-
-// A detonation briefly reveals the impact area, which then falls back to fog
-// (or stays visible if something friendly is watching it) thanks to the explored
-// clamp in the reveal hook.
-DEFINE_HOOK(0x4690B6, Fog_BulletDetonate_ImpactReveal, 0x6)
-{
-	if (!Fog::Active() || !Phobos::Config::TSFog_ImpactReveal)
-		return 0;
-
-	// 0x4690B6 is after `push ebp; mov ebp, esp; and esp, -8`; the CoordStruct
-	// argument lives at [ebp+8], not at [esp+4].
-	GET_BASE(const CoordStruct*, pCoords, 0x8);
-
-	if (pCoords)
-		Fog::AddImpactReveal(*pCoords);
 
 	return 0;
 }
@@ -2382,24 +2115,6 @@ DEFINE_HOOK(0x422FEC, AnimClass_DrawIt_AllowAnim, 0x6)
 	const bool registry = Fog::IsRegistryAnim(pThis);
 	const bool allow = explored && mapped && (combat || registry);
 	const bool fogged = Fog::IsFoggedAllowedAnim(pThis, pCell, false);
-
-	{
-		static std::unordered_map<AnimTypeClass*, int> lastLogFrame;
-		auto& lastFrame = lastLogFrame[pThis->Type];
-
-		if (Unsorted::CurrentFrame - lastFrame >= 60)
-		{
-			lastFrame = Unsorted::CurrentFrame;
-
-			Debug::Log("[FogAnim] type=%s cell=(%d,%d) explored=%d mapped=%d combat=%d registry=%d allow=%d fogged=%d\n",
-				pThis->Type->get_ID(),
-				pCell ? static_cast<int>(pCell->MapCoords.X) : -1,
-				pCell ? static_cast<int>(pCell->MapCoords.Y) : -1,
-				static_cast<int>(explored), static_cast<int>(mapped),
-				static_cast<int>(combat), static_cast<int>(registry),
-				static_cast<int>(allow), static_cast<int>(fogged));
-		}
-	}
 
 	// Skip the normal object pass for fogged allowed animations; the
 	// post-render pass draws them above fog instead, exactly once.
@@ -2440,8 +2155,6 @@ DEFINE_HOOK(0x480223, Fog_Producer_VisibilityFrame, 0x8)
 	if (Fog::AutoSpreadEnabled())
 		return 0;
 
-	const int eaxIn = static_cast<int>(R->EAX());
-
 	if (!Fog::IsExploredCell(pCell) || !Fog::IsMappedCell(pCell)
 		|| pCell->Visibility == -1)
 	{
@@ -2453,7 +2166,6 @@ DEFINE_HOOK(0x480223, Fog_Producer_VisibilityFrame, 0x8)
 		// Producer fog is rendered by the fog layer. Clear any residual shroud
 		// so an explored cell never shows black under the producer fog.
 		R->EAX(0);
-		Fog::LogDrawDebug("vis", pCell, eaxIn, static_cast<int>(R->EAX()));
 		return 0;
 	}
 
@@ -2471,15 +2183,12 @@ DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 	if (Fog::AutoSpreadEnabled())
 		return 0;
 
-	const int eaxIn = static_cast<int>(R->EAX());
-
 	if (!Fog::IsExploredCell(pCell) || !Fog::IsMappedCell(pCell))
 		return 0;
 
 	if (Fog::IsProducerCell(pCell))
 	{
 		R->EAX(Fog::IsCellInSight(pCell) ? 0 : Fog::FogFrame());
-		Fog::LogDrawDebug("fog", pCell, eaxIn, static_cast<int>(R->EAX()));
 		return 0;
 	}
 
@@ -2488,7 +2197,6 @@ DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 
 	R->EAX(0);
 
-	Fog::LogDrawDebug("fog", pCell, eaxIn, static_cast<int>(R->EAX()));
 	return 0;
 }
 
@@ -2504,15 +2212,12 @@ DEFINE_HOOK(0x48028B, Fog_Producer_FogFrameNormal, 0x5)
 	if (Fog::AutoSpreadEnabled())
 		return 0;
 
-	const int eaxIn = static_cast<int>(R->EAX());
-
 	if (!Fog::IsExploredCell(pCell) || !Fog::IsMappedCell(pCell))
 		return 0;
 
 	if (Fog::IsProducerCell(pCell))
 	{
 		R->EAX(Fog::IsCellInSight(pCell) ? 0 : Fog::FogFrame());
-		Fog::LogDrawDebug("fog2", pCell, eaxIn, static_cast<int>(R->EAX()));
 		return 0;
 	}
 
@@ -2521,7 +2226,6 @@ DEFINE_HOOK(0x48028B, Fog_Producer_FogFrameNormal, 0x5)
 
 	R->EAX(0);
 
-	Fog::LogDrawDebug("fog2", pCell, eaxIn, static_cast<int>(R->EAX()));
 	return 0;
 }
 
@@ -2531,9 +2235,7 @@ DEFINE_HOOK(0x48028B, Fog_Producer_FogFrameNormal, 0x5)
 // neighbours' reveal flags and writes them back into the cell. Overriding only
 // the draw frame leaves that logic running, so cells keep fading to 34/48/-2 and
 // FogCell() freezes buildings and hides objects. These two exit hooks return -1
-// for explored cells on the fog layer, which keeps the cell fully live, and store
-// the engine's original value in RealFog so the FogProducer still knows which
-// cells are genuinely in sight.
+// for explored cells on the fog layer, which keeps the cell fully live.
 //
 // AutoSpread=yes and an active Global producer both fall through to the engine's
 // native result: the global path must not keep a second visibility model.
@@ -2560,10 +2262,6 @@ DEFINE_HOOK(0x6D8AC6, Fog_GetOcclusion_ClearExplored, 0x7)
 	if (!Fog::IsExploredCoords(*pCoords))
 		return 0;
 
-	const int mask = static_cast<int>(R->EBP()) & 0xFF;
-	const signed char result = *reinterpret_cast<const signed char*>(0x7F4194 + mask);
-
-	Fog::SetRealFog(*pCoords, result);
 	R->EAX(-1);
 
 	return ContinueAfterLookup;
@@ -2590,7 +2288,6 @@ DEFINE_HOOK(0x6D8AD4, Fog_GetOcclusion_ClearExplored_Early, 0x5)
 	if (!Fog::IsExploredCoords(*pCoords))
 		return 0;
 
-	Fog::SetRealFog(*pCoords, static_cast<signed char>(R->EDI()));
 	R->EDI(-1);
 
 	return 0;
@@ -2619,33 +2316,4 @@ DEFINE_HOOK(0x4ACC55, Fog_AutoSpread_SkipFogCell, 0x6)
 		return 0;
 
 	return SkipToEpilogue;
-}
-
-// Diagnostic: confirm the per-cell fog update function is reached at runtime.
-DEFINE_HOOK(0x4801F0, FogDbg_CellFogCalc, 0x5)
-{
-	if (!Fog::Active())
-		return 0;
-
-	GET(CellClass*, pCell, ECX);
-
-	if (pCell->Visibility == -1 && pCell->Foggedness == -1)
-		return 0;
-
-	static int lastFrame = -1000;
-
-	if (Unsorted::CurrentFrame - lastFrame < 20)
-		return 0;
-
-	lastFrame = Unsorted::CurrentFrame;
-
-	Debug::Log("[FogCell] cell=(%d,%d) vis=%d fog=%d flags=0x%08X alt=0x%08X exp=%d prod=%d auto=%d\n",
-		static_cast<int>(pCell->MapCoords.X), static_cast<int>(pCell->MapCoords.Y),
-		static_cast<int>(pCell->Visibility), static_cast<int>(pCell->Foggedness),
-		static_cast<unsigned>(pCell->Flags), static_cast<unsigned>(pCell->AltFlags),
-		static_cast<int>(Fog::IsExploredCell(pCell)),
-		static_cast<int>(Fog::IsProducerCell(pCell)),
-		static_cast<int>(Fog::AutoSpreadEnabled()));
-
-	return 0;
 }

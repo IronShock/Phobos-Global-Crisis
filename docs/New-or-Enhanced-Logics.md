@@ -3486,9 +3486,6 @@ TSFog.AutoSpread=yes            ; boolean - no = explored cells stay fully visib
                                 ; after leaving sight (units stay live); only
                                 ; FogProducer spreads fog
 
-TSFog.ImpactReveal=yes          ; boolean - a detonation briefly reveals the impact area
-TSFog.ImpactRadius=2            ; integer - cells
-TSFog.ImpactFrames=45           ; integer - duration in frames
 TSFog.AllowAnim=no              ; boolean - draw warhead animations inside explored fog
 ```
 

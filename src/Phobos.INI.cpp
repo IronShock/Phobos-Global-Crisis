@@ -70,9 +70,6 @@ bool Phobos::Config::TSFog = true;
 bool Phobos::Config::TSFog_RevealAllClear = true;
 bool Phobos::Config::TSFog_ForceAll = false;
 int Phobos::Config::TSFog_FogFrame = 34;
-bool Phobos::Config::TSFog_ImpactReveal = true;
-int Phobos::Config::TSFog_ImpactRadius = 2;
-int Phobos::Config::TSFog_ImpactFrames = 45;
 bool Phobos::Config::TSFog_AllowAnim = false;
 bool Phobos::Config::TSFog_AutoSpread = true;
 bool Phobos::Config::ShowPlanningPath = false;
@@ -676,11 +673,6 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 	// transparent depending on fog.shp.
 	Phobos::Config::TSFog_FogFrame = std::clamp(
 		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.FogFrame", 34), 0, 48);
-	Phobos::Config::TSFog_ImpactReveal = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.ImpactReveal", true);
-	Phobos::Config::TSFog_ImpactRadius = std::clamp(
-		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.ImpactRadius", 2), 0, 8);
-	Phobos::Config::TSFog_ImpactFrames = std::clamp(
-		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.ImpactFrames", 45), 5, 300);
 	// [General] TSFog.AllowAnim: draw warhead animations (AnimList/SplashList/
 	// Crit.AnimList) and AnimType AllowAnim=yes anims inside explored fog.
 	Phobos::Config::TSFog_AllowAnim = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.AllowAnim", false);
