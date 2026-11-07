@@ -7,6 +7,10 @@ namespace Fog
 	// fog. This is installed as a 5-byte JMP over the stub once the port is active.
 	bool __fastcall IsLocationFoggedImpl(MapClass* pThis, void* /*edx*/, const CoordStruct& coords)
 	{
+		// Consume the per-object context once, before any early return.
+		const DWORD drawUniqueID = CurrentDrawUniqueID;
+		CurrentDrawUniqueID = 0;
+
 		if (!Active())
 			return false;
 
@@ -14,6 +18,11 @@ namespace Fog
 		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
 
 		if (!pCell)
+			return false;
+
+		// RevealFirer: draw only the firing enemy itself, even when other objects
+		// share the cell.
+		if (drawUniqueID != 0 && IsFirerRevealed(drawUniqueID, cell))
 			return false;
 
 		const bool producer = IsProducerCell(pCell);

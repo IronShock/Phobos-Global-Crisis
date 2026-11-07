@@ -37,8 +37,10 @@
 #include <Ext/TerrainType/Body.h>
 #include <Ext/WarheadType/Body.h>
 
+#include <algorithm>
 #include <cstring>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 // Shared fog-of-war state and queries. Hooks live in the Fog.Hooks.* units.
@@ -74,6 +76,13 @@ namespace Fog
 	void ResetProducers();
 	void UpdateProducers();
 	bool IsProducerCell(CellClass* pCell);
+
+	// RevealFirer: temporary visibility of an enemy firing from fog.
+	void RevealFirer(TechnoClass* pFirer);
+	bool IsFirerRevealed(DWORD uniqueID, const CellStruct& cell);
+	void UpdateFirerReveals();
+	void ResetFirerReveals();
+	extern DWORD CurrentDrawUniqueID;
 
 	// Animation visibility (defined in Fog.Hooks.Anim.cpp).
 	void RebuildWarheadAnimTypes();

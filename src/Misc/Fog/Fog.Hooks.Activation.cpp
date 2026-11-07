@@ -20,6 +20,7 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 
 	Fog::ResetExplored();
 	Fog::ResetProducers();
+	Fog::ResetFirerReveals();
 
 	if (Phobos::Config::TSFog_AllowAnim)
 		Fog::RebuildWarheadAnimTypes();
@@ -99,6 +100,8 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 	// Remember revealed cells while their reveal flags are still set.
 	if ((Unsorted::CurrentFrame % 15) == 0)
 		Fog::ScanExploredCells();
+
+	Fog::UpdateFirerReveals();
 
 	return 0;
 }

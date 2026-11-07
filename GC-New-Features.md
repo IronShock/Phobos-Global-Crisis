@@ -1234,6 +1234,8 @@ A Tiberian Sun-style fog of war layered on the engine's fog:
 - An "Reveal all" trigger clears both shroud and fog; by default fog stays off
   for the rest of the scenario.
 - Vanilla gap generators are untouched and still create black shroud.
+- `RevealFirer` lets enemy units firing from explored fog briefly reveal
+  themselves without clearing the fog layer.
 
 ### Activation
 
@@ -1249,6 +1251,8 @@ TSFog.RevealAll=clear ; clear = Reveal All also stops fog for the scenario
                       ; keep  = only clear the current fog
 TSFog.FogFrame=34     ; fog frame used by FogProducer when AutoSpread=no
                       ; (AutoSpread=yes keeps the engine's per-cell frames)
+RevealFirer=no        ; enemy fire reveals the firing unit in fog
+RevealFirer.Frames=45 ; reveal duration in frames
 ```
 
 ### Fog spread
@@ -1289,6 +1293,21 @@ Power loss pauses the growth; destroying the building clears its radius.
 and allied real sight stays clear, unexplored cells stay black, and only enemies
 outside real sight are hidden. `Range`, `Grow` and power are ignored.
 
+### Firing reveal
+
+`RevealFirer=yes` disables the vanilla shroud reveal on fire and replaces it with
+a fog-aware reveal. When an enemy unit fires from an explored fog cell, the
+firing unit itself becomes visible for `RevealFirer.Frames` frames while the fog
+stays. Only the firing unit is shown; other units in the cell remain hidden.
+Cloaked, submerged and underground units are not revealed. For buildings the
+whole foundation is marked but the frozen snapshot is kept.
+
+```ini
+[General]
+RevealFirer=no        ; enemy fire reveals the firing unit in fog
+RevealFirer.Frames=45 ; reveal duration in frames
+```
+
 ### Animation visibility
 
 ```ini
@@ -1326,7 +1345,8 @@ Anims=DUSTFOGA,LuzDisparomed
 `DisableLoadGame.Difficulty`, `DisableSaveGame.Difficulty`,
 `ExtendedAircraftMissions`, `LockGameSpeed.Difficulty`,
 `MissileSpawnAttackCell`, `MovePositionIndicator.ShowEnemy`,
-`RemoveShroudGlobally`, `ReverseMove`, `Rock.CanBeBuiltOn`, `SmudgeCapacity`,
+`RemoveShroudGlobally`, `ReverseMove`, `RevealFirer`, `RevealFirer.Frames`,
+`Rock.CanBeBuiltOn`, `SmudgeCapacity`,
 `SmoothMove`, `TA.VirtualUnit`, `TacticalGear`, `TacticalPause`,
 `TSFog`, `TSFog.AllowAnim`, `TSFog.AutoSpread`, `TSFog.ForceAll`, `TSFog.FogFrame`,
 `TSFog.RevealAll`,

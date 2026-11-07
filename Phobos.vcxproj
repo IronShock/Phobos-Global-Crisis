@@ -235,6 +235,7 @@
 	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Activation.cpp" />
 	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Anim.cpp" />
 	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Draw.cpp" />
+	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Fire.cpp" />
 	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Reveal.cpp" />
 	<ClCompile Include="src\Misc\Fog\Fog.Hooks.Snapshots.cpp" />
 	<ClCompile Include="src\Misc\Fog\Fog.State.cpp" />

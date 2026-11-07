@@ -636,4 +636,176 @@ namespace Fog
 		return ProducerMask[key] != 0;
 	}
 
+	namespace
+	{
+		struct FirerReveal
+		{
+			DWORD UniqueID;
+			int ExpireFrame;
+			bool IsBuilding;
+			std::vector<CellStruct> Cells;
+		};
+
+		std::vector<FirerReveal> FirerReveals;
+
+		void MarkFirerCellsDirty(const std::vector<CellStruct>& cells)
+		{
+			for (auto const& cell : cells)
+			{
+				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+					TacticalClass::Instance->RegisterCellAsVisible(pCell);
+			}
+		}
+
+		// Native fog is authoritative in Foggedness; the custom AutoSpread=no
+		// renderer keeps explored cells at -1 and draws producer fog separately.
+		bool IsCellFoggedForFirerReveal(CellClass* pCell)
+		{
+			if (UsesNativeFog())
+				return pCell->Foggedness != -1;
+
+			return IsProducerCell(pCell) && !InSightAt(pCell->MapCoords);
+		}
+	}
+
+	DWORD CurrentDrawUniqueID = 0;
+
+	void ResetFirerReveals()
+	{
+		FirerReveals.clear();
+		CurrentDrawUniqueID = 0;
+	}
+
+	bool IsFirerRevealed(DWORD uniqueID, const CellStruct& cell)
+	{
+		if (uniqueID == 0)
+			return false;
+
+		for (auto const& reveal : FirerReveals)
+		{
+			// Buildings keep their frozen snapshot; never draw the live building.
+			if (reveal.IsBuilding)
+				continue;
+
+			if (reveal.UniqueID != uniqueID || Unsorted::CurrentFrame >= reveal.ExpireFrame)
+				continue;
+
+			for (auto const& revealCell : reveal.Cells)
+			{
+				if (revealCell == cell)
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	void RevealFirer(TechnoClass* pFirer)
+	{
+		if (!Phobos::Config::RevealFirer || !Active() || !pFirer || !HouseClass::CurrentPlayer)
+			return;
+
+		if (!pFirer->IsAlive || pFirer->InLimbo || !pFirer->IsOnMap)
+			return;
+
+		const auto pOwner = pFirer->Owner;
+
+		if (!pOwner || pOwner->IsControlledByCurrentPlayer()
+			|| pOwner->IsAlliedWith(HouseClass::CurrentPlayer))
+		{
+			return;
+		}
+
+		if (pFirer->CloakState == CloakState::Cloaked
+			|| pFirer->CloakState == CloakState::Cloaking)
+		{
+			return;
+		}
+
+		if (pFirer->InWhichLayer() == Layer::Underground)
+			return;
+
+		// Submarines and other submerged objects are not revealed either.
+		if (!pFirer->IsSurfaced())
+			return;
+
+		std::vector<CellStruct> candidates;
+		const bool isBuilding = pFirer->WhatAmI() == AbstractType::Building;
+
+		if (isBuilding)
+		{
+			const auto pBuilding = static_cast<BuildingClass*>(pFirer);
+			const auto pFoundation = pBuilding->GetFoundationData(false);
+			const auto base = pBuilding->GetMapCoords();
+			const CellStruct foundationEnd { 0x7FFF, 0x7FFF };
+
+			for (auto pOffset = pFoundation; pOffset && *pOffset != foundationEnd; ++pOffset)
+				candidates.push_back(base + *pOffset);
+		}
+		else
+		{
+			candidates.push_back(pFirer->GetMapCoords());
+		}
+
+		// The object draw path resolves the render coordinates, which can differ
+		// from the base cell for tall buildings; include both.
+		candidates.push_back(CoordsToCellWithLevel(pFirer->GetCoords()));
+
+		std::vector<CellStruct> revealCells;
+		revealCells.reserve(candidates.size());
+
+		for (auto const& cell : candidates)
+		{
+			if (std::find(revealCells.begin(), revealCells.end(), cell) != revealCells.end())
+				continue;
+
+			auto const pCell = MapClass::Instance.TryGetCellAt(cell);
+
+			if (!pCell || !IsExploredCoords(cell) || !IsCellFoggedForFirerReveal(pCell))
+				continue;
+
+			revealCells.push_back(cell);
+		}
+
+		if (revealCells.empty())
+			return;
+
+		const int expireFrame = Unsorted::CurrentFrame + Phobos::Config::RevealFirer_Frames;
+		const DWORD uniqueID = pFirer->UniqueID;
+
+		for (auto& reveal : FirerReveals)
+		{
+			if (reveal.UniqueID != uniqueID)
+				continue;
+
+			MarkFirerCellsDirty(reveal.Cells);
+			reveal.Cells = revealCells;
+			reveal.ExpireFrame = expireFrame;
+			reveal.IsBuilding = isBuilding;
+			MarkFirerCellsDirty(reveal.Cells);
+			return;
+		}
+
+		MarkFirerCellsDirty(revealCells);
+		FirerReveals.push_back(FirerReveal { uniqueID, expireFrame, isBuilding, std::move(revealCells) });
+	}
+
+	void UpdateFirerReveals()
+	{
+		if (FirerReveals.empty())
+			return;
+
+		for (auto it = FirerReveals.begin(); it != FirerReveals.end(); )
+		{
+			if (Unsorted::CurrentFrame < it->ExpireFrame)
+			{
+				++it;
+				continue;
+			}
+
+			MarkFirerCellsDirty(it->Cells);
+			it = FirerReveals.erase(it);
+		}
+	}
+
 }

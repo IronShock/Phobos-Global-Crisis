@@ -109,6 +109,8 @@ public:
 		static int TSFog_FogFrame;
 		static bool TSFog_AllowAnim;
 		static bool TSFog_AutoSpread;
+		static bool RevealFirer;
+		static int RevealFirer_Frames;
 		static bool ArtImageSwap;
 		static bool ShowPlacementPreview;
 		static bool EnableBuildingPlacementPreview;
