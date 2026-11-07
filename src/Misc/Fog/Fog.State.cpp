@@ -676,6 +676,46 @@ namespace Fog
 		CurrentDrawUniqueID = 0;
 	}
 
+	// Loading a save restores the engine's cell fog state but not necessarily the
+	// scenario fog flag or the custom bitmaps. Restore both before the first
+	// frame, otherwise IsLocationFogged would consider every object visible while
+	// the saved fog layer is still drawn.
+	void OnGameLoaded()
+	{
+		if (!Phobos::Config::TSFog)
+			return;
+
+		bool fog = ScenarioClass::Instance->SpecialFlags.FogOfWar;
+
+		if (!SessionClass::IsCampaign())
+			fog = fog || GameModeOptionsClass::Instance.FogOfWar;
+
+		if (!fog && Phobos::Config::TSFog_ForceAll)
+			fog = true;
+
+		GameModeOptionsClass::Instance.FogOfWar = fog;
+		ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
+
+		ResetFirerReveals();
+
+		if (!fog)
+			return;
+
+		// The custom bitmaps are not part of the save; rebuild them from the
+		// restored cell state and the loaded objects.
+		ResetExplored();
+		ScanExploredCells();
+		UpdateSightMap();
+		SightDirty = false;
+
+		ResetProducers();
+		UpdateProducers();
+
+		InstallIsLocationFogged();
+
+		MapClass::Instance.MarkNeedsRedraw(2);
+	}
+
 	bool IsFirerRevealed(DWORD uniqueID, const CellStruct& cell)
 	{
 		if (uniqueID == 0)

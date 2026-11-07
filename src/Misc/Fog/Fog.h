@@ -84,6 +84,7 @@ namespace Fog
 	bool IsCellVisibleBuilding(CellClass* pCell);
 	void UpdateFirerReveals();
 	void ResetFirerReveals();
+	void OnGameLoaded();
 	extern DWORD CurrentDrawUniqueID;
 
 	// Animation visibility (defined in Fog.Hooks.Anim.cpp).
