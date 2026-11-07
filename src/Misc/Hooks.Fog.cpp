@@ -77,16 +77,25 @@ namespace Fog
 	std::vector<unsigned char> Explored;
 	std::vector<int> ExploredList;
 
+	// Engine-computed fog frame per cell, captured before AutoSpread=no forces the
+	// cell to stay clear. Still tells us which cells are genuinely in sight, which
+	// the FogProducer needs ("never fog a cell the player can currently see").
+	std::vector<signed char> RealFog;
+
 	void EnsureExplored()
 	{
 		if (Explored.empty())
 			Explored.assign(512 * 512, 0);
+
+		if (RealFog.empty())
+			RealFog.assign(512 * 512, -1);
 	}
 
 	void ResetExplored()
 	{
 		Explored.assign(512 * 512, 0);
 		ExploredList.clear();
+		RealFog.assign(512 * 512, -1);
 	}
 
 	void MarkExplored(const CellStruct& cell, int index)
@@ -248,13 +257,48 @@ namespace Fog
 		}
 	}
 
-	bool IsExploredCell(CellClass* pCell)
+	bool IsExploredCoords(const CellStruct& cell)
 	{
 		EnsureExplored();
 
-		const int key = MapClass::GetCellIndex(pCell->MapCoords);
+		const int key = MapClass::GetCellIndex(cell);
 
 		return key >= 0 && key < 512 * 512 && Explored[key] != 0;
+	}
+
+	signed char RealFogAt(const CellStruct& cell)
+	{
+		EnsureExplored();
+
+		const int key = MapClass::GetCellIndex(cell);
+
+		return (key >= 0 && key < 512 * 512) ? RealFog[key] : -1;
+	}
+
+	void SetRealFog(const CellStruct& cell, signed char value)
+	{
+		EnsureExplored();
+
+		const int key = MapClass::GetCellIndex(cell);
+
+		if (key >= 0 && key < 512 * 512)
+			RealFog[key] = value;
+	}
+
+	bool IsExploredCell(CellClass* pCell)
+	{
+		return IsExploredCoords(pCell->MapCoords);
+	}
+
+	// Normal fog: the engine's live Foggedness tells us whether the cell is lit.
+	// AutoSpread=no: Foggedness is forced to -1 for every explored cell, so the
+	// pre-override engine value in RealFog is the only "in sight" indicator left.
+	bool IsCellInSight(CellClass* pCell)
+	{
+		if (Phobos::Config::TSFog_AutoSpread)
+			return pCell->Foggedness == -1;
+
+		return RealFogAt(pCell->MapCoords) == -1;
 	}
 
 	bool IsProducerCell(CellClass* pCell)
@@ -353,6 +397,22 @@ namespace Fog
 		const CellStruct cell { static_cast<short>((coords.X >> 8) - extra),
 			static_cast<short>((coords.Y >> 8) - extra) };
 		const auto pCell = MapClass::Instance.GetCellAt(cell);
+
+		if (!Phobos::Config::TSFog_AutoSpread)
+		{
+			// Explored terrain, buildings and units stay fully live. Only real fog
+			// created by a FogProducer (outside actual sight) hides objects.
+			if (!IsProducerCell(pCell) || RealFogAt(cell) == -1)
+				return false;
+
+			for (auto const& offset : Unsorted::AdjacentCell)
+			{
+				if (RealFogAt(cell + offset) == -1)
+					return false;
+			}
+
+			return true;
+		}
 
 		if (!(pCell->Flags & CellFlags::Fogged) || pCell->Foggedness == -1)
 			return false;
@@ -478,7 +538,16 @@ DEFINE_HOOK(0x4A9CA0, Fog_RevealFogShroud, 0x8)
 		{
 			Fog::MarkExplored(*pCellStruct, exploredIndex);
 
-			if (newVisibility == -2)
+			if (!Phobos::Config::TSFog_AutoSpread)
+			{
+				// AutoSpread=no: an explored cell never re-fogs. Keep it exactly as
+				// if it were in sight so no snapshot/freeze logic kicks in.
+				newFoggedness = -1;
+
+				if (newVisibility == -2)
+					newVisibility = -1;
+			}
+			else if (newVisibility == -2)
 			{
 				newVisibility = -1;
 
@@ -1532,15 +1601,18 @@ DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 
 	const int eaxIn = static_cast<int>(R->EAX());
 
-	if (!Fog::IsExploredCell(pCell) || pCell->Foggedness == -1)
+	if (!Fog::IsExploredCell(pCell))
 		return 0;
 
-	if (Fog::IsProducerCell(pCell))
+	if (Fog::IsProducerCell(pCell) && !Fog::IsCellInSight(pCell))
 	{
 		R->EAX(Fog::FogFrame());
 		Fog::LogDrawDebug("fog", pCell, eaxIn, static_cast<int>(R->EAX()));
 		return 0;
 	}
+
+	if (pCell->Foggedness == -1)
+		return 0;
 
 	if (!Phobos::Config::TSFog_AutoSpread)
 		R->EAX(0);
@@ -1562,21 +1634,102 @@ DEFINE_HOOK(0x48028B, Fog_Producer_FogFrameNormal, 0x5)
 
 	const int eaxIn = static_cast<int>(R->EAX());
 
-	if (!Fog::IsExploredCell(pCell) || pCell->Foggedness == -1)
+	if (!Fog::IsExploredCell(pCell))
 		return 0;
 
-	if (Fog::IsProducerCell(pCell))
+	if (Fog::IsProducerCell(pCell) && !Fog::IsCellInSight(pCell))
 	{
 		R->EAX(Fog::FogFrame());
 		Fog::LogDrawDebug("fog2", pCell, eaxIn, static_cast<int>(R->EAX()));
 		return 0;
 	}
 
+	if (pCell->Foggedness == -1)
+		return 0;
+
 	if (!Phobos::Config::TSFog_AutoSpread)
 		R->EAX(0);
 
 	Fog::LogDrawDebug("fog2", pCell, eaxIn, static_cast<int>(R->EAX()));
 	return 0;
+}
+
+// --- AutoSpread=no: stop the engine fog logic, not just the drawing ---
+//
+// 0x6D8700 (GetOcclusion) recomputes Visibility/Foggedness every frame from the
+// neighbours' reveal flags and writes them back into the cell. Overriding only
+// the draw frame leaves that logic running, so cells keep fading to 34/48/-2 and
+// FogCell() freezes buildings and hides objects. These two exit hooks return -1
+// for explored cells on the fog layer, which keeps the cell fully live, and store
+// the engine's original value in RealFog so the FogProducer still knows which
+// cells are genuinely in sight.
+DEFINE_HOOK(0x6D8AC6, Fog_GetOcclusion_ClearExplored, 0x7)
+{
+	enum { ContinueAfterLookup = 0x6D8ACD };
+
+	if (!Fog::Active() || Phobos::Config::TSFog_AutoSpread)
+		return 0;
+
+	GET_STACK(char, fogLayer, STACK_OFFSET(0x0, 0x18));
+
+	if (!fogLayer)
+		return 0;
+
+	GET(CellStruct*, pCoords, ESI);
+
+	if (!pCoords || !Fog::IsExploredCoords(*pCoords))
+		return 0;
+
+	const int mask = static_cast<int>(R->EBP()) & 0xFF;
+	const signed char result = *reinterpret_cast<const signed char*>(0x7F4194 + mask);
+
+	Fog::SetRealFog(*pCoords, result);
+	R->EAX(-1);
+
+	return ContinueAfterLookup;
+}
+
+DEFINE_HOOK(0x6D8AD4, Fog_GetOcclusion_ClearExplored_Early, 0x5)
+{
+	if (!Fog::Active() || Phobos::Config::TSFog_AutoSpread)
+		return 0;
+
+	GET_STACK(char, fogLayer, STACK_OFFSET(0x0, 0x18));
+
+	if (!fogLayer)
+		return 0;
+
+	GET(CellStruct*, pCoords, ESI);
+
+	if (!pCoords || !Fog::IsExploredCoords(*pCoords))
+		return 0;
+
+	Fog::SetRealFog(*pCoords, static_cast<signed char>(R->EDI()));
+	R->EDI(-1);
+
+	return 0;
+}
+
+// The periodic fog-spread pass calls this for cells that are edge-revealed but no
+// longer centered on sight: it clears the reveal flags, forces Foggedness=-2 and
+// creates the frozen snapshots (FogCell). With AutoSpread=no explored cells must
+// never enter it, otherwise the engine keeps "fogging" them logically even though
+// the overlay is drawn transparent.
+DEFINE_HOOK(0x4ACC50, Fog_AutoSpread_SkipFogCell, 0x5)
+{
+	if (!Fog::Active() || Phobos::Config::TSFog_AutoSpread)
+		return 0;
+
+	GET_STACK(CellStruct*, pCellStruct, STACK_OFFSET(0x0, 0x4));
+
+	if (!pCellStruct || !Fog::IsExploredCoords(*pCellStruct))
+		return 0;
+
+	// Skip the whole thiscall routine, emulating its `ret 4`.
+	const auto retAddr = *reinterpret_cast<uintptr_t*>(R->ESP());
+	R->ESP(R->ESP() + 8);
+
+	return retAddr;
 }
 
 // Diagnostic: confirm the per-cell fog update function is reached at runtime.
