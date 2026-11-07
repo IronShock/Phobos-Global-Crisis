@@ -54,6 +54,7 @@ public:
 		Valueable<AffectedHouse> VisibleTo;
 		Valueable<bool> VisibleTo_ConsiderInvokerAsOwner;
 		Valueable<bool> RestrictVisibilityIfCloaked;
+		Valueable<bool> AllowAnim;
 		Valueable<bool> DetachOnCloak;
 		Valueable<bool> ConstrainFireAnimsToCellSpots;
 		Nullable<LandTypeFlags> FireAnimDisallowedLandTypes;
@@ -95,6 +96,7 @@ public:
 			, VisibleTo { AffectedHouse::All }
 			, VisibleTo_ConsiderInvokerAsOwner { false }
 			, RestrictVisibilityIfCloaked { false }
+			, AllowAnim { false }
 			, DetachOnCloak { true }
 			, ConstrainFireAnimsToCellSpots { true }
 			, FireAnimDisallowedLandTypes {}

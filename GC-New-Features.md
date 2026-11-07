@@ -1247,7 +1247,8 @@ TSFog=yes             ; master switch
 TSFog.ForceAll=no     ; yes = enable fog even for maps with FogOfWar=no (testing)
 TSFog.RevealAll=clear ; clear = Reveal All also stops fog for the scenario
                       ; keep  = only clear the current fog
-TSFog.FogFrame=8      ; fog frame used by FogProducer (0 dense .. 48 almost clear)
+TSFog.FogFrame=34     ; fog frame used by FogProducer when AutoSpread=no
+                      ; (AutoSpread=yes keeps the engine's per-cell frames)
 ```
 
 ### Fog spread
@@ -1255,27 +1256,38 @@ TSFog.FogFrame=8      ; fog frame used by FogProducer (0 dense .. 48 almost clea
 ```ini
 [General]
 TSFog.AutoSpread=yes  ; yes = normal automatic fog of war
-                      ; no  = explored cells stay visible after leaving sight
-                      ;       (units are still hidden); only FogProducer spreads fog
+                      ; no  = explored cells stay fully visible after leaving
+                      ;       sight (units stay live); only FogProducer spreads fog
 ```
 
 ### FogProducer
 
 A building can act as a fog source that spreads fog outward from itself. It is
-only active while fog of war is enabled, and a cell the player can currently see
-is never fogged.
+only active while fog of war is enabled. Every explored cell in its area that is
+outside real friendly sight is fogged; cells the player can currently see stay
+clear, and only objects in genuinely unseen cells are hidden.
+
+A non-global producer only adds fog to its radius in `TSFog.AutoSpread=no`.
+`FogProducer.Global=yes` forces the engine's normal fog over the whole map every
+frame; own/allied real sight stays clear, unexplored cells stay black, and only
+enemies outside real sight are hidden.
 
 ```ini
 [BUILDINGTYPE]
 FogProducer=no        ; master switch for this building
-FogProducer.Range=10  ; maximum radius in cells
+FogProducer.Global=no ; yes = normal fog over the whole map every frame;
+                      ; real sight stays clear, unexplored stays black
+FogProducer.Range=10  ; maximum radius in cells when Global=no
 FogProducer.Speed=30  ; frames per spread step
-FogProducer.Step=1    ; cells added per step
+FogProducer.Step=1    ; radius added per step
 FogProducer.Grow=yes  ; yes = radius grows from 0 outward
-                      ; no  = the whole Range is fogged immediately
+                      ; no  = the whole radius is fogged immediately
 ```
 
 Power loss pauses the growth; destroying the building clears its radius.
+`Global=yes` forces the engine's normal fog over the whole map every frame. Own
+and allied real sight stays clear, unexplored cells stay black, and only enemies
+outside real sight are hidden. `Range`, `Grow` and power are ignored.
 
 ### Impact reveal
 
@@ -1284,6 +1296,29 @@ Power loss pauses the growth; destroying the building clears its radius.
 TSFog.ImpactReveal=yes  ; a detonation briefly reveals the impact area
 TSFog.ImpactRadius=2    ; cells
 TSFog.ImpactFrames=45   ; duration in frames
+TSFog.AllowAnim=no      ; draw warhead animations inside explored fog
+```
+
+### Animation visibility
+
+`TSFog.AllowAnim=yes` keeps combat animations drawing inside explored fog:
+warhead `AnimList` / `SplashList` / `Crit.AnimList`, weapon `Anim` /
+`OccupantAnim` / `AssaultAnim` / `OpenToppedAnim`, and bullet `Trailer`, together
+with all animations linked from them (`TrailerAnim`, `ExpireAnim`, `BounceAnim`,
+`Spawns`, `Next`, Phobos splash/wake/fire animations). Unexplored black shroud
+still hides the animation.
+
+Additional animation names can be registered in `[FogAnim]`; every name listed
+there is allowed even if it is not reached through a combat field. Both the
+comma-list and numeric-key forms are accepted (the section may be in rules or
+art INI):
+
+```ini
+[FogAnim]
+Anims=DUSTFOGA,LuzDisparomed
+; or:
+; 0=DUSTFOGA
+; 1=LuzDisparomed
 ```
 
 ## Full INI key index
@@ -1298,7 +1333,7 @@ TSFog.ImpactFrames=45   ; duration in frames
 `MissileSpawnAttackCell`, `MovePositionIndicator.ShowEnemy`,
 `RemoveShroudGlobally`, `ReverseMove`, `Rock.CanBeBuiltOn`, `SmudgeCapacity`,
 `SmoothMove`, `TA.VirtualUnit`, `TacticalGear`, `TacticalPause`,
-`TSFog`, `TSFog.AutoSpread`, `TSFog.ForceAll`, `TSFog.FogFrame`,
+`TSFog`, `TSFog.AllowAnim`, `TSFog.AutoSpread`, `TSFog.ForceAll`, `TSFog.FogFrame`,
 `TSFog.ImpactFrames`, `TSFog.ImpactRadius`, `TSFog.ImpactReveal`,
 `TSFog.RevealAll`,
 `TacticalPause.BlockActions.Difficulty`, `Tiberium.CanBeBuiltOn`,
@@ -1318,8 +1353,8 @@ TSFog.ImpactFrames=45   ; duration in frames
 `Armor.*Multiplier`, `AttackMove*`, `BattlePoints`, `Image.Empty`,
 `PassengersPipOffset`, `PassengersPipSize`, `PenetratesTransport*`, `PipScale`,
 `PipScale2`, `RadarSignal*`, `ShowMovePositionIndicator`, `SmoothMove`, `UrbanCombat`,
-`WaterImage.Empty`, `FogProducer`, `FogProducer.Grow`, `FogProducer.Range`,
-`FogProducer.Speed`, `FogProducer.Step`
+`WaterImage.Empty`, `FogProducer`, `FogProducer.Global`, `FogProducer.Grow`,
+`FogProducer.Range`, `FogProducer.Speed`, `FogProducer.Step`
 
 ### `rulesmd.ini` → other sections
 `[LoadBar]` (`Enable`, `MaxPerFrame`, `*.Default`),
@@ -1332,7 +1367,8 @@ including `Color.Gradient*`, text, visibility), `[LoadBarAssignments]`,
 `SpyPlane.Type` / `ParaDrop.Aircraft` / `SpawnPoints*`,
 `[OverlayType] CanBeBuiltOn` / `CanBeBuiltOn.Remove` / `CustomPalette` /
 `IgnoreObject`, `[SmudgeType] Unclearable` / `CustomPalette` / `DrawObject`,
-`[AnimType] CreateOverlay*` / `CreateSmudge*`, `[WeaponType] Next` / `ExtraFire*`
+`[AnimType] CreateOverlay*` / `CreateSmudge*`, `[WeaponType] Next` / `ExtraFire*`,
+`[FogAnim] Anims` / numeric animation-name keys
 
 ### `RA2MD.INI` → `[Phobos]`
 `ContinueGameOnExit`, `Formation*`, `MessageApplyHoverState`,

@@ -26,6 +26,7 @@ public:
 		Valueable<int> FogProducer_Speed;
 		Valueable<int> FogProducer_Step;
 		Valueable<bool> FogProducer_Grow;
+		Valueable<bool> FogProducer_Global;
 		ValueableIdxVector<SuperWeaponTypeClass> SuperWeapons;
 
 		Valueable<double> PowerPlant_DamageFactor;
@@ -120,6 +121,7 @@ public:
 			, FogProducer_Speed { 30 }
 			, FogProducer_Step { 1 }
 			, FogProducer_Grow { true }
+			, FogProducer_Global { false }
 			, PowerPlant_DamageFactor { 1.0 }
 			, PowerPlantEnhancer_Buildings {}
 			, PowerPlantEnhancer_Amount { 0 }

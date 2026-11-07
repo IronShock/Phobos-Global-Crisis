@@ -3479,27 +3479,64 @@ In `rulesmd.ini`:
 TSFog=yes                       ; boolean - master switch
 TSFog.ForceAll=no               ; boolean - enable fog even for maps with FogOfWar=no (testing)
 TSFog.RevealAll=clear           ; clear|keep - Reveal All also stops fog for the scenario
-TSFog.FogFrame=8                ; integer - fog frame used by FogProducer (0 dense .. 48 almost clear)
+TSFog.FogFrame=34               ; integer - producer fog frame in AutoSpread=no;
+                                ; AutoSpread=yes keeps the engine's own frames
 
-TSFog.AutoSpread=yes            ; boolean - no = explored cells stay visible after leaving
-                                ; sight (units are still hidden); only FogProducer spreads fog
+TSFog.AutoSpread=yes            ; boolean - no = explored cells stay fully visible
+                                ; after leaving sight (units stay live); only
+                                ; FogProducer spreads fog
 
 TSFog.ImpactReveal=yes          ; boolean - a detonation briefly reveals the impact area
 TSFog.ImpactRadius=2            ; integer - cells
 TSFog.ImpactFrames=45           ; integer - duration in frames
+TSFog.AllowAnim=no              ; boolean - draw warhead animations inside explored fog
 ```
 
 Fog producers spread fog outward from themselves. They only work while fog of war
-is enabled and never fog a cell the player can currently see:
+is enabled. Every explored cell in their area that is outside real friendly sight
+is fogged; cells the player can currently see stay clear, and only objects in
+genuinely unseen cells are hidden:
+
+A non-global producer only adds fog to its radius in `TSFog.AutoSpread=no`.
+`FogProducer.Global=yes` forces the engine's normal fog over the whole map every
+frame; own/allied real sight stays clear, unexplored cells stay black, and only
+enemies outside real sight are hidden.
 
 ```ini
 [BUILDINGTYPE]
 FogProducer=no                  ; boolean - master switch for this building
-FogProducer.Range=10            ; integer - maximum radius in cells
+FogProducer.Global=no           ; boolean - yes = normal fog over the whole map
+                                ; every frame (real sight stays clear)
+FogProducer.Range=10            ; integer - maximum radius in cells when Global=no
 FogProducer.Speed=30            ; integer - frames per spread step
-FogProducer.Step=1              ; integer - cells added per step
+FogProducer.Step=1              ; integer - radius added per step
 FogProducer.Grow=yes            ; boolean - yes = radius grows from 0 outward,
-                                ;           no = the whole Range is fogged immediately
+                                ;           no = the whole radius is fogged immediately
 ```
 
 Power loss pauses the growth; destroying the building clears its radius.
+`Global=yes` forces the engine's normal fog over the whole map every frame. Own
+and allied real sight stays clear, unexplored cells stay black, and only enemies
+outside real sight are hidden. `Range`, `Grow` and power are ignored.
+
+### Animation visibility
+
+`TSFog.AllowAnim=yes` keeps combat animations drawing inside explored fog:
+warhead `AnimList` / `SplashList` / `Crit.AnimList`, weapon `Anim` /
+`OccupantAnim` / `AssaultAnim` / `OpenToppedAnim`, and bullet `Trailer`, together
+with all animations linked from them (`TrailerAnim`, `ExpireAnim`, `BounceAnim`,
+`Spawns`, `Next`, Phobos splash/wake/fire animations). Unexplored black shroud
+still hides the animation.
+
+Additional animation names can be registered in `[FogAnim]`; every name listed
+there is allowed even if it is not reached through a combat field. Both the
+comma-list and numeric-key forms are accepted (the section may be in rules or
+art INI):
+
+```ini
+[FogAnim]
+Anims=DUSTFOGA,LuzDisparomed
+; or:
+; 0=DUSTFOGA
+; 1=LuzDisparomed
+```

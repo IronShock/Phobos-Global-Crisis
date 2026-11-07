@@ -142,6 +142,7 @@ void BuildingTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->FogProducer_Speed.Read(exINI, pSection, "FogProducer.Speed");
 	this->FogProducer_Step.Read(exINI, pSection, "FogProducer.Step");
 	this->FogProducer_Grow.Read(exINI, pSection, "FogProducer.Grow");
+	this->FogProducer_Global.Read(exINI, pSection, "FogProducer.Global");
 	this->PowerPlant_DamageFactor.Read(exINI, pSection, "PowerPlant.DamageFactor");
 	this->PowerPlantEnhancer_Buildings.Read(exINI, pSection, "PowerPlantEnhancer.PowerPlants");
 	this->PowerPlantEnhancer_Amount.Read(exINI, pSection, "PowerPlantEnhancer.Amount");

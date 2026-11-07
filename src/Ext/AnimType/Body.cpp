@@ -110,6 +110,7 @@ void AnimTypeExt::ExtData::LoadFromINIFile(CCINIClass* pINI)
 	this->VisibleTo.Read(exINI, pID, "VisibleTo");
 	this->VisibleTo_ConsiderInvokerAsOwner.Read(exINI, pID, "VisibleTo.ConsiderInvokerAsOwner");
 	this->RestrictVisibilityIfCloaked.Read(exINI, pID, "RestrictVisibilityIfCloaked");
+	this->AllowAnim.Read(exINI, pID, "AllowAnim");
 	this->DetachOnCloak.Read(exINI, pID, "DetachOnCloak");
 	this->ConstrainFireAnimsToCellSpots.Read(exINI, pID, "ConstrainFireAnimsToCellSpots");
 	this->FireAnimDisallowedLandTypes.Read(exINI, pID, "FireAnimDisallowedLandTypes");
@@ -201,6 +202,7 @@ void AnimTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->VisibleTo)
 		.Process(this->VisibleTo_ConsiderInvokerAsOwner)
 		.Process(this->RestrictVisibilityIfCloaked)
+		.Process(this->AllowAnim)
 		.Process(this->DetachOnCloak)
 		.Process(this->ConstrainFireAnimsToCellSpots)
 		.Process(this->FireAnimDisallowedLandTypes)
