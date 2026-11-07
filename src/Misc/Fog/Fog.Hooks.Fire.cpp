@@ -15,7 +15,7 @@ namespace
 {
 	bool RevealFirerActive()
 	{
-		return Phobos::Config::RevealFirer && Fog::Active();
+		return Phobos::Config::TSFog_RevealFirer && Fog::Active();
 	}
 }
 

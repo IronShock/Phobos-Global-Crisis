@@ -702,7 +702,7 @@ namespace Fog
 
 	void RevealFirer(TechnoClass* pFirer)
 	{
-		if (!Phobos::Config::RevealFirer || !Active() || !pFirer || !HouseClass::CurrentPlayer)
+		if (!Phobos::Config::TSFog_RevealFirer || !Active() || !pFirer || !HouseClass::CurrentPlayer)
 			return;
 
 		if (!pFirer->IsAlive || pFirer->InLimbo || !pFirer->IsOnMap)
@@ -770,7 +770,7 @@ namespace Fog
 		if (revealCells.empty())
 			return;
 
-		const int expireFrame = Unsorted::CurrentFrame + Phobos::Config::RevealFirer_Frames;
+		const int expireFrame = Unsorted::CurrentFrame + Phobos::Config::TSFog_RevealFirer_Frames;
 		const DWORD uniqueID = pFirer->UniqueID;
 
 		for (auto& reveal : FirerReveals)

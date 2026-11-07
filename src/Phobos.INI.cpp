@@ -72,8 +72,8 @@ bool Phobos::Config::TSFog_ForceAll = false;
 int Phobos::Config::TSFog_FogFrame = 34;
 bool Phobos::Config::TSFog_AllowAnim = false;
 bool Phobos::Config::TSFog_AutoSpread = true;
-bool Phobos::Config::RevealFirer = false;
-int Phobos::Config::RevealFirer_Frames = 45;
+bool Phobos::Config::TSFog_RevealFirer = false;
+int Phobos::Config::TSFog_RevealFirer_Frames = 45;
 bool Phobos::Config::ShowPlanningPath = false;
 bool Phobos::Config::ArtImageSwap = false;
 bool Phobos::Config::ShowPlacementPreview = false;
@@ -681,11 +681,11 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 	// [General] TSFog.AutoSpread: when off, fog no longer reconceals an explored
 	// area on its own; only FogProducer buildings spread fog.
 	Phobos::Config::TSFog_AutoSpread = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.AutoSpread", true);
-	// [General] RevealFirer: replace the vanilla shroud reveal on fire with a
+	// [General] TSFog.RevealFirer: replace the vanilla shroud reveal on fire with a
 	// fog-aware reveal of enemy firers (one cell, fog layer kept).
-	Phobos::Config::RevealFirer = pINI_RULESMD->ReadBool(GameStrings::General, "RevealFirer", false);
-	Phobos::Config::RevealFirer_Frames = std::clamp(
-		pINI_RULESMD->ReadInteger(GameStrings::General, "RevealFirer.Frames", 45), 5, 300);
+	Phobos::Config::TSFog_RevealFirer = pINI_RULESMD->ReadBool(GameStrings::General, "TSFog.RevealFirer", false);
+	Phobos::Config::TSFog_RevealFirer_Frames = std::clamp(
+		pINI_RULESMD->ReadInteger(GameStrings::General, "TSFog.RevealFirer.Frames", 45), 5, 300);
 
 	Phobos::Misc::CustomGS = pINI_RULESMD->ReadBool(GameStrings::General, "CustomGS", false);
 

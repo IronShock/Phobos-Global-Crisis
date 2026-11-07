@@ -3488,8 +3488,8 @@ TSFog.AutoSpread=yes            ; boolean - no = explored cells stay fully visib
 
 TSFog.AllowAnim=no              ; boolean - draw warhead animations inside explored fog
 
-RevealFirer=no                  ; boolean - enemy fire reveals the firing unit in fog
-RevealFirer.Frames=45           ; integer - reveal duration in frames (5..300)
+TSFog.RevealFirer=no                  ; boolean - enemy fire reveals the firing unit in fog
+TSFog.RevealFirer.Frames=45           ; integer - reveal duration in frames (5..300)
 ```
 
 Fog producers spread fog outward from themselves. They only work while fog of war
@@ -3521,10 +3521,10 @@ outside real sight are hidden. `Range`, `Grow` and power are ignored.
 
 ### Firing reveal
 
-`RevealFirer=yes` disables the vanilla shroud reveal performed by
+`TSFog.RevealFirer=yes` disables the vanilla shroud reveal performed by
 `TechnoClass::Fire` and replaces it with a fog-aware version. When an enemy unit
 (not owned by or allied with the local player) fires from an explored fog cell,
-the firing unit itself becomes visible for `RevealFirer.Frames` frames while the
+the firing unit itself becomes visible for `TSFog.RevealFirer.Frames` frames while the
 fog layer stays in place. Only the firing unit is shown; other units sharing the
 cell remain hidden. Cloaked, submerged and underground units are not revealed.
 For buildings the whole foundation is marked, but the frozen fog snapshot is
