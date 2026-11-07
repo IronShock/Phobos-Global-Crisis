@@ -680,6 +680,60 @@ namespace Fog
 	// scenario fog flag or the custom bitmaps. Restore both before the first
 	// frame, otherwise IsLocationFogged would consider every object visible while
 	// the saved fog layer is still drawn.
+	namespace
+	{
+		bool DetectGlobalProducerOnMap()
+		{
+			for (auto pBuilding : BuildingClass::Array)
+			{
+				if (!pBuilding || !pBuilding->IsAlive || pBuilding->InLimbo || !pBuilding->Type)
+					continue;
+
+				auto const pExt = BuildingTypeExt::ExtMap.TryFind(pBuilding->Type);
+
+				if (pExt && pExt->FogProducer.Get() && pExt->FogProducer_Global.Get()
+					&& !pExt->FogProducer_Grow.Get())
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		// Recompute the native per-cell fog frames from the restored reveal flags.
+		// The saved cells can come back with only the endpoint values (-1 / -2 /
+		// FogFrame), which draws hard cell-shaped fog edges instead of the normal
+		// 0..48 transition frames.
+		void RebuildFogGradient()
+		{
+			if (!UsesNativeFog())
+				return;
+
+			EnsureExplored();
+
+			for (int index : ExploredList)
+			{
+				CellStruct cell {
+					static_cast<short>(index & (MapSize - 1)),
+					static_cast<short>(index >> 9) };
+
+				auto const pCell = MapClass::Instance.TryGetCellAt(cell);
+
+				if (!pCell)
+					continue;
+
+				const char fog = TacticalClass::Instance->GetOcclusion(cell, true);
+
+				if (pCell->Foggedness != fog)
+				{
+					pCell->Foggedness = fog;
+					TacticalClass::Instance->RegisterCellAsVisible(pCell);
+				}
+			}
+		}
+	}
+
 	void OnGameLoaded()
 	{
 		if (!Phobos::Config::TSFog)
@@ -705,13 +759,60 @@ namespace Fog
 		// restored cell state and the loaded objects.
 		ResetExplored();
 		ScanExploredCells();
+
+		// Some saves only restore AltFlags::Mapped, not the reveal bits.
+		if (ExploredList.empty())
+		{
+			MapClass::Instance.CellIteratorReset();
+
+			for (auto pCell = MapClass::Instance.CellIteratorNext(); pCell;
+				pCell = MapClass::Instance.CellIteratorNext())
+			{
+				if (pCell->AltFlags & (AltCellFlags::Mapped | AltCellFlags::NoFog))
+					MarkExplored(MapClass::GetCellIndex(pCell->MapCoords));
+			}
+		}
+
 		UpdateSightMap();
 		SightDirty = false;
 
+		// Detect the Global producer directly: the normal scan needs
+		// HouseClass::CurrentPlayer, which may not be ready at this point.
 		ResetProducers();
-		UpdateProducers();
+		AnyGlobalProducer = DetectGlobalProducerOnMap();
+
+		if (HouseClass::CurrentPlayer)
+			UpdateProducers();
 
 		InstallIsLocationFogged();
+		RebuildFogGradient();
+
+		{
+			int visible = 0, gradient = 0, dense = 0;
+
+			for (int index : ExploredList)
+			{
+				CellStruct cell {
+					static_cast<short>(index & (MapSize - 1)),
+					static_cast<short>(index >> 9) };
+
+				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+				{
+					if (pCell->Foggedness == -1)
+						++visible;
+					else if (pCell->Foggedness == -2)
+						++dense;
+					else
+						++gradient;
+				}
+			}
+
+			Debug::Log("[FogLoad] active=%d auto=%d native=%d global=%d buildings=%d explored=%d vis=%d grad=%d dense=%d\n",
+				static_cast<int>(Active()), static_cast<int>(Phobos::Config::TSFog_AutoSpread),
+				static_cast<int>(UsesNativeFog()), static_cast<int>(AnyGlobalProducer),
+				BuildingClass::Array.Count, static_cast<int>(ExploredList.size()),
+				visible, gradient, dense);
+		}
 
 		MapClass::Instance.MarkNeedsRedraw(2);
 	}
