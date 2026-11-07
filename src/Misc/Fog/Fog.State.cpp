@@ -1,5 +1,7 @@
 #include "Fog.h"
 
+#include <Ext/Scenario/Body.h>
+
 namespace Fog
 {
 	bool NoReveal = false;
@@ -146,6 +148,12 @@ namespace Fog
 	// need the 512x512 mask at all.
 	bool AnyGlobalProducer = false;
 
+	void SyncGlobalProducerFlag()
+	{
+		if (auto pExt = ScenarioExt::Global())
+			pExt->TSFogGlobal = AnyGlobalProducer;
+	}
+
 	// The first producer scan after a scenario reset establishes the initial
 	// state without running the full-map conversion pass: a preplaced global
 	// producer is handled by the engine from the first frame anyway.
@@ -173,6 +181,7 @@ namespace Fog
 		Producers.clear();
 		ProducerMask.assign(MapCellCount, 0);
 		AnyGlobalProducer = false;
+		SyncGlobalProducerFlag();
 		GlobalStateKnown = false;
 		ProducerScanSerial = 0;
 		LastProducerBuildingCount = -1;
@@ -259,6 +268,7 @@ namespace Fog
 				const bool hadGlobal = AnyGlobalProducer;
 				Producers.clear();
 				AnyGlobalProducer = false;
+				SyncGlobalProducerFlag();
 				GlobalStateKnown = false;
 				ProducerScanSerial = 0;
 				LastProducerBuildingCount = -1;
@@ -403,10 +413,12 @@ namespace Fog
 				// needed (and no explored cells exist yet anyway).
 				GlobalStateKnown = true;
 				AnyGlobalProducer = anyGlobal;
+				SyncGlobalProducerFlag();
 			}
 			else if (AnyGlobalProducer != anyGlobal)
 			{
 				AnyGlobalProducer = anyGlobal;
+				SyncGlobalProducerFlag();
 				SightDirty = true;
 				dirty = true;
 
@@ -809,11 +821,50 @@ namespace Fog
 
 		// Detect the Global producer directly: the normal scan needs
 		// HouseClass::CurrentPlayer, which may not be ready at this point.
-		ResetProducers();
-		AnyGlobalProducer = DetectGlobalProducerOnMap();
+		bool savedGlobal = false;
 
-		if (HouseClass::CurrentPlayer)
+		if (auto pExt = ScenarioExt::Global())
+			savedGlobal = pExt->TSFogGlobal;
+
+		ResetProducers();
+		AnyGlobalProducer = savedGlobal || DetectGlobalProducerOnMap();
+		SyncGlobalProducerFlag();
+		GlobalStateKnown = AnyGlobalProducer;
+
+		if (!savedGlobal && HouseClass::CurrentPlayer)
 			UpdateProducers();
+
+		int producers = 0, globalProducers = 0, globalAlive = 0;
+
+		for (auto pBuilding : BuildingClass::Array)
+		{
+			if (!pBuilding || !pBuilding->Type)
+				continue;
+
+			auto const pExt = BuildingTypeExt::ExtMap.TryFind(pBuilding->Type);
+
+			if (!pExt || !pExt->FogProducer.Get())
+				continue;
+
+			++producers;
+
+			const bool global = pExt->FogProducer_Global.Get();
+
+			if (global)
+			{
+				++globalProducers;
+
+				if (pBuilding->IsAlive && !pBuilding->InLimbo)
+					++globalAlive;
+			}
+
+			if (strcmp(pBuilding->Type->ID, "SHOURDGEN") == 0)
+			{
+				Debug::Log("[FogLoad] producer id=SHOURDGEN alive=%d limbo=%d global=%d grow=%d\n",
+					static_cast<int>(pBuilding->IsAlive), static_cast<int>(pBuilding->InLimbo),
+					static_cast<int>(global), static_cast<int>(pExt->FogProducer_Grow.Get()));
+			}
+		}
 
 		InstallIsLocationFogged();
 
@@ -821,10 +872,11 @@ namespace Fog
 		RebuildFogGradient();
 		auto const post = CountFogLevels();
 
-		Debug::Log("[FogLoad] active=%d auto=%d native=%d global=%d buildings=%d explored=%d pre(vis=%d grad=%d dense=%d) post(vis=%d grad=%d dense=%d)\n",
+		Debug::Log("[FogLoad] active=%d auto=%d native=%d global=%d savedGlobal=%d buildings=%d producers=%d globalProducers=%d globalAlive=%d explored=%d pre(vis=%d grad=%d dense=%d) post(vis=%d grad=%d dense=%d)\n",
 			static_cast<int>(Active()), static_cast<int>(Phobos::Config::TSFog_AutoSpread),
 			static_cast<int>(UsesNativeFog()), static_cast<int>(AnyGlobalProducer),
-			BuildingClass::Array.Count, static_cast<int>(ExploredList.size()),
+			static_cast<int>(savedGlobal), BuildingClass::Array.Count,
+			producers, globalProducers, globalAlive, static_cast<int>(ExploredList.size()),
 			pre.Visible, pre.Gradient, pre.Dense,
 			post.Visible, post.Gradient, post.Dense);
 

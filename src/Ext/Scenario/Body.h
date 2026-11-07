@@ -42,6 +42,8 @@ public:
 
 		std::vector<std::wstring> RecordMessages;
 
+		bool TSFogGlobal; // last known Global/native fog mode, persisted for save/load
+
 		PhobosFixedString<64u> DefaultLS640BkgdName;
 		PhobosFixedString<64u> DefaultLS800BkgdName;
 		PhobosFixedString<64u> DefaultLS800BkgdPal;
@@ -58,6 +60,7 @@ public:
 			, SWSidebar_Enable { true }
 			, SWSidebar_Indices {}
 			, RecordMessages {}
+			, TSFogGlobal { false }
 			, DefaultLS640BkgdName {}
 			, DefaultLS800BkgdName {}
 			, DefaultLS800BkgdPal {}

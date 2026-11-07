@@ -170,6 +170,7 @@ void ScenarioExt::ExtData::Serialize(T& Stm)
 		.Process(this->DefaultLS800BkgdPal)
 		.Process(this->MasterDetonationBullet)
 		.Process(this->RecordMessages)
+		.Process(this->TSFogGlobal)
 		;
 }
 
