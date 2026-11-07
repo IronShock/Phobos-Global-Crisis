@@ -250,7 +250,11 @@ namespace Fog
 
 	bool IsExploredCell(CellClass* pCell)
 	{
-		return static_cast<unsigned>(pCell->Flags & (CellFlags::CenterRevealed | CellFlags::EdgeRevealed)) != 0;
+		EnsureExplored();
+
+		const int key = MapClass::GetCellIndex(pCell->MapCoords);
+
+		return key >= 0 && key < 512 * 512 && Explored[key] != 0;
 	}
 
 	bool IsProducerCell(CellClass* pCell)
@@ -1464,6 +1468,10 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 	// FogProducer coverage / radius growth.
 	Fog::UpdateProducers();
 
+	// Remember revealed cells while their reveal flags are still set.
+	if ((Unsorted::CurrentFrame % 15) == 0)
+		Fog::ScanExploredCells();
+
 	return 0;
 }
 
@@ -1538,5 +1546,34 @@ DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 		R->EAX(0);
 
 	Fog::LogDrawDebug("fog", pCell, eaxIn, static_cast<int>(R->EAX()));
+	return 0;
+}
+
+// Diagnostic: confirm the per-cell fog update function is reached at runtime.
+DEFINE_HOOK(0x4801F0, FogDbg_CellFogCalc, 0x5)
+{
+	if (!Fog::Active())
+		return 0;
+
+	GET(CellClass*, pCell, ECX);
+
+	if (pCell->Visibility == -1 && pCell->Foggedness == -1)
+		return 0;
+
+	static int lastFrame = -1000;
+
+	if (Unsorted::CurrentFrame - lastFrame < 20)
+		return 0;
+
+	lastFrame = Unsorted::CurrentFrame;
+
+	Debug::Log("[FogCell] cell=(%d,%d) vis=%d fog=%d flags=0x%08X exp=%d prod=%d auto=%d\n",
+		static_cast<int>(pCell->MapCoords.X), static_cast<int>(pCell->MapCoords.Y),
+		static_cast<int>(pCell->Visibility), static_cast<int>(pCell->Foggedness),
+		static_cast<unsigned>(pCell->Flags),
+		static_cast<int>(Fog::IsExploredCell(pCell)),
+		static_cast<int>(Fog::IsProducerCell(pCell)),
+		static_cast<int>(Phobos::Config::TSFog_AutoSpread));
+
 	return 0;
 }
