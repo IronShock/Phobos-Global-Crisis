@@ -1,5 +1,7 @@
 #include "Fog.h"
 
+#include <intrin.h>
+
 namespace Fog
 {
 	// Real MapClass::IsLocationFogged. gamemd ships a stub there (`xor al,al; ret 4`)
@@ -19,6 +21,19 @@ namespace Fog
 
 		if (!pCell)
 			return false;
+
+		// DisplayClass::ProcessClickCoords (0x6924E4) and the cursor/action
+		// resolver (0x692A8C) treat a fogged cell as "no target" and fall back to
+		// a move order. Fogged buildings are drawn as frozen snapshots and units
+		// revealed by RevealFirer are visible, so let those two call sites resolve
+		// a real target. Other IsLocationFogged callers keep the normal result.
+		const auto returnAddress = reinterpret_cast<uintptr_t>(_ReturnAddress());
+
+		if ((returnAddress == 0x6924E4u || returnAddress == 0x692A8Cu)
+			&& (IsCellFirerRevealed(cell) || IsCellVisibleBuilding(pCell)))
+		{
+			return false;
+		}
 
 		// RevealFirer: draw only the firing enemy itself, even when other objects
 		// share the cell.

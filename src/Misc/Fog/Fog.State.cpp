@@ -700,6 +700,26 @@ namespace Fog
 		return false;
 	}
 
+	bool IsCellFirerRevealed(const CellStruct& cell)
+	{
+		for (auto const& reveal : FirerReveals)
+		{
+			if (reveal.IsBuilding || Unsorted::CurrentFrame >= reveal.ExpireFrame)
+				continue;
+
+			if (std::find(reveal.Cells.begin(), reveal.Cells.end(), cell) != reveal.Cells.end())
+				return true;
+		}
+
+		return false;
+	}
+
+	bool IsCellVisibleBuilding(CellClass* pCell)
+	{
+		return (pCell->Flags & CellFlags::Fogged)
+			&& (pCell->AltFlags & AltCellFlags::ContainsBuilding);
+	}
+
 	void RevealFirer(TechnoClass* pFirer)
 	{
 		if (!Phobos::Config::TSFog_RevealFirer || !Active() || !pFirer || !HouseClass::CurrentPlayer)

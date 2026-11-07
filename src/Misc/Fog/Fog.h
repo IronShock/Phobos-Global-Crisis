@@ -80,6 +80,8 @@ namespace Fog
 	// RevealFirer: temporary visibility of an enemy firing from fog.
 	void RevealFirer(TechnoClass* pFirer);
 	bool IsFirerRevealed(DWORD uniqueID, const CellStruct& cell);
+	bool IsCellFirerRevealed(const CellStruct& cell);
+	bool IsCellVisibleBuilding(CellClass* pCell);
 	void UpdateFirerReveals();
 	void ResetFirerReveals();
 	extern DWORD CurrentDrawUniqueID;
