@@ -148,6 +148,11 @@ namespace Fog
 	// need the 512x512 mask at all.
 	bool AnyGlobalProducer = false;
 
+	// Set when a loaded save explicitly recorded Global/native mode. The producer
+	// building can be destroyed or missing, but the loaded mode must not flip back
+	// to the custom renderer on the first producer scan.
+	bool GlobalProducerLocked = false;
+
 	void SyncGlobalProducerFlag()
 	{
 		if (auto pExt = ScenarioExt::Global())
@@ -181,6 +186,7 @@ namespace Fog
 		Producers.clear();
 		ProducerMask.assign(MapCellCount, 0);
 		AnyGlobalProducer = false;
+		GlobalProducerLocked = false;
 		SyncGlobalProducerFlag();
 		GlobalStateKnown = false;
 		ProducerScanSerial = 0;
@@ -403,6 +409,9 @@ namespace Fog
 			if (state.Radius != oldRadius)
 				dirty = true;
 		}
+
+		if (!anyGlobal && GlobalProducerLocked)
+			anyGlobal = true;
 
 		if (scanDue)
 		{
@@ -775,6 +784,62 @@ namespace Fog
 
 			return counts;
 		}
+
+		// The saved reveal flags can mark every explored cell as visible, which
+		// makes GetOcclusion return -1 across the map and leaves only the black
+		// shroud boundary. Rebuild them from the real friendly sight map first.
+		void RebuildRevealFlagsFromSight()
+		{
+			auto& map = MapClass::Instance;
+			map.CellIteratorReset();
+
+			for (auto pCell = map.CellIteratorNext(); pCell; pCell = map.CellIteratorNext())
+			{
+				const auto& cell = pCell->MapCoords;
+
+				if (!IsExploredCoords(cell))
+					continue;
+
+				if (InSightAt(cell))
+				{
+					if (pCell->Flags & CellFlags::Fogged)
+						pCell->CleanFog();
+
+					pCell->Flags |= (CellFlags::CenterRevealed | CellFlags::EdgeRevealed);
+					pCell->Visibility = -1;
+					pCell->Foggedness = -1;
+					pCell->AltFlags |= AltCellFlags::Mapped;
+				}
+				else
+				{
+					pCell->Flags &= ~(CellFlags::CenterRevealed | CellFlags::EdgeRevealed);
+					pCell->Visibility = -1;
+					pCell->AltFlags |= AltCellFlags::Mapped;
+				}
+			}
+
+			// Edge-revealed adjacent cells produce the intermediate fog frames.
+			map.CellIteratorReset();
+
+			for (auto pCell = map.CellIteratorNext(); pCell; pCell = map.CellIteratorNext())
+			{
+				const auto& cell = pCell->MapCoords;
+
+				if (!IsExploredCoords(cell) || InSightAt(cell))
+					continue;
+
+				for (auto const& offset : Unsorted::AdjacentCell)
+				{
+					if (InSightAt(cell + offset))
+					{
+						pCell->Flags |= CellFlags::EdgeRevealed;
+						break;
+					}
+				}
+			}
+
+			map.MarkNeedsRedraw(2);
+		}
 	}
 
 	void OnGameLoaded()
@@ -818,6 +883,19 @@ namespace Fog
 
 		UpdateSightMap();
 		SightDirty = false;
+		RebuildRevealFlagsFromSight();
+
+		int insight = 0;
+
+		for (int index : ExploredList)
+		{
+			CellStruct cell {
+				static_cast<short>(index & (MapSize - 1)),
+				static_cast<short>(index >> 9) };
+
+			if (InSightAt(cell))
+				++insight;
+		}
 
 		// Detect the Global producer directly: the normal scan needs
 		// HouseClass::CurrentPlayer, which may not be ready at this point.
@@ -827,6 +905,7 @@ namespace Fog
 			savedGlobal = pExt->TSFogGlobal;
 
 		ResetProducers();
+		GlobalProducerLocked = savedGlobal;
 		AnyGlobalProducer = savedGlobal || DetectGlobalProducerOnMap();
 		SyncGlobalProducerFlag();
 		GlobalStateKnown = AnyGlobalProducer;
@@ -872,11 +951,13 @@ namespace Fog
 		RebuildFogGradient();
 		auto const post = CountFogLevels();
 
-		Debug::Log("[FogLoad] active=%d auto=%d native=%d global=%d savedGlobal=%d buildings=%d producers=%d globalProducers=%d globalAlive=%d explored=%d pre(vis=%d grad=%d dense=%d) post(vis=%d grad=%d dense=%d)\n",
+		Debug::Log("[FogLoad] active=%d auto=%d native=%d global=%d savedGlobal=%d locked=%d buildings=%d producers=%d globalProducers=%d globalAlive=%d explored=%d insight=%d pre(vis=%d grad=%d dense=%d) post(vis=%d grad=%d dense=%d)\n",
 			static_cast<int>(Active()), static_cast<int>(Phobos::Config::TSFog_AutoSpread),
 			static_cast<int>(UsesNativeFog()), static_cast<int>(AnyGlobalProducer),
-			static_cast<int>(savedGlobal), BuildingClass::Array.Count,
+			static_cast<int>(savedGlobal), static_cast<int>(GlobalProducerLocked),
+			BuildingClass::Array.Count,
 			producers, globalProducers, globalAlive, static_cast<int>(ExploredList.size()),
+			insight,
 			pre.Visible, pre.Gradient, pre.Dense,
 			post.Visible, post.Gradient, post.Dense);
 
