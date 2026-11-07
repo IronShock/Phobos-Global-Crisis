@@ -1549,6 +1549,36 @@ DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 	return 0;
 }
 
+// Normal fog frame path: Foggedness in 0..48 jumps past 0x480273 and reaches the
+// draw call through 0x48028B. Without this hook only the -2 branch is overridden,
+// so a cell fading back to fog keeps its engine frame and AutoSpread=no has no
+// visible effect. Same rules as above: explored, non-visible cells only.
+DEFINE_HOOK(0x48028B, Fog_Producer_FogFrameNormal, 0x5)
+{
+	if (!Fog::Active())
+		return 0;
+
+	GET(CellClass*, pCell, ESI);
+
+	const int eaxIn = static_cast<int>(R->EAX());
+
+	if (!Fog::IsExploredCell(pCell) || pCell->Foggedness == -1)
+		return 0;
+
+	if (Fog::IsProducerCell(pCell))
+	{
+		R->EAX(Fog::FogFrame());
+		Fog::LogDrawDebug("fog2", pCell, eaxIn, static_cast<int>(R->EAX()));
+		return 0;
+	}
+
+	if (!Phobos::Config::TSFog_AutoSpread)
+		R->EAX(0);
+
+	Fog::LogDrawDebug("fog2", pCell, eaxIn, static_cast<int>(R->EAX()));
+	return 0;
+}
+
 // Diagnostic: confirm the per-cell fog update function is reached at runtime.
 DEFINE_HOOK(0x4801F0, FogDbg_CellFogCalc, 0x5)
 {
