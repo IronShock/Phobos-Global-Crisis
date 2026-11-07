@@ -106,16 +106,15 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 	return 0;
 }
 
-// ScenarioClass::LoadGame is called from 0x559DC5 and returns at 0x559DCA.
-// Restore the fog state only after the whole save (including all objects) has
-// been loaded, otherwise the producer scan runs too early and the custom
-// uniform-fog fallback can overwrite the saved native fog gradient.
-DEFINE_HOOK(0x559DCA, Fog_LoadGame_RestoreState, 0x6)
+// ScenarioClass::LoadGame success epilogue (0x67E440). Continue Game and the
+// CnCNet client call LoadGame directly, bypassing the in-game load dialog's
+// return point at 0x559DCA, so the restore has to live on the function itself.
+DEFINE_HOOK(0x67E720, Fog_LoadGame_RestoreState, 0x6)
 {
-	if ((R->EAX() & 0xFF) == 0)
+	if ((R->EBX() & 0xFF) == 0)
 		return 0;
 
 	Fog::OnGameLoaded();
 
-	return 0; // replay `mov ecx, [0x887640]`
+	return 0; // replay pop edi; pop esi; mov al,bl; pop ebp; pop ebx
 }
