@@ -105,3 +105,17 @@ DEFINE_HOOK(0x55B4E1, Fog_PerFrame, 0x5)
 
 	return 0;
 }
+
+// ScenarioClass::LoadGame is called from 0x559DC5 and returns at 0x559DCA.
+// Restore the fog state only after the whole save (including all objects) has
+// been loaded, otherwise the producer scan runs too early and the custom
+// uniform-fog fallback can overwrite the saved native fog gradient.
+DEFINE_HOOK(0x559DCA, Fog_LoadGame_RestoreState, 0x6)
+{
+	if ((R->EAX() & 0xFF) == 0)
+		return 0;
+
+	Fog::OnGameLoaded();
+
+	return 0; // replay `mov ecx, [0x887640]`
+}

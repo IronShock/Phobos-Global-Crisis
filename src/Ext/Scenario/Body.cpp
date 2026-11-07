@@ -4,7 +4,6 @@
 #include <VeinholeMonsterClass.h>
 
 #include <Ext/Unit/Footprint.h>
-#include <Misc/Fog/Fog.h>
 
 std::unique_ptr<ScenarioExt::ExtData> ScenarioExt::Data = nullptr;
 
@@ -236,7 +235,6 @@ DEFINE_HOOK(0x689669, ScenarioClass_Load_Suffix, 0x6)
 	}
 
 	Footprint::FixupAfterLoad();
-	Fog::OnGameLoaded();
 
 	return 0;
 }
