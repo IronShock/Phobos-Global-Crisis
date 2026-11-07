@@ -1,5 +1,7 @@
 #include "ZoomManager.h"
 
+#include <Misc/Fog/Fog.h>
+
 #include <TacticalClass.h>
 #include <Surface.h>
 #include <MapClass.h>
@@ -1738,6 +1740,10 @@ bool ZoomManager::RenderZoomOutScene(bool bFlag)
 
 	g_SwListSkip = false;
 	g_TimerSkip = false;
+
+	// Fogged combat animations are skipped by the mode-2 pass; draw them into
+	// the big surface here, before the downsampling, so they scale with the scene.
+	Fog::DrawAllowedAnimsAfterRender();
 
 	void* pFinal = DSurface::Temp ? DSurface::Temp : DSurface::Composite;
 

@@ -89,6 +89,7 @@ namespace Fog
 
 	// Animation visibility (defined in Fog.Hooks.Anim.cpp).
 	void RebuildWarheadAnimTypes();
+	void DrawAllowedAnimsAfterRender();
 
 	// MapClass::IsLocationFogged replacement (defined in Fog.Hooks.Draw.cpp).
 	void InstallIsLocationFogged();

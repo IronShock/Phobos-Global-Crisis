@@ -1,5 +1,7 @@
 #include "Fog.h"
 
+#include "../ZoomManager.h"
+
 namespace Fog
 {
 	// AnimTypeClass pointers used by combat effects (warhead, weapon and bullet
@@ -287,7 +289,9 @@ DEFINE_HOOK(0x422FEC, AnimClass_DrawIt_AllowAnim, 0x6)
 // the allowed animations here puts them above fog without modifying any cell.
 DEFINE_HOOK(0x4F451B, GScreenClass_Render_AfterTacticalObjects_AllowAnim, 0x5)
 {
-	if (Fog::Active() && Phobos::Config::TSFog_AllowAnim)
+	// During zoom-out the fogged animations were already drawn into the big
+	// offscreen surface inside RenderZoomOutScene(), before the demagnify.
+	if (Fog::Active() && Phobos::Config::TSFog_AllowAnim && !ZoomManager::IsZoomingOut())
 		Fog::DrawAllowedAnimsAfterRender();
 
 	return 0;
