@@ -262,6 +262,25 @@ namespace Fog
 		return key >= 0 && key < 512 * 512 && ProducerMask[key] != 0;
 	}
 
+	void LogDrawDebug(const char* tag, CellClass* pCell, int eaxIn, int eaxOut)
+	{
+		static int lastFrame = -1000;
+
+		if (Unsorted::CurrentFrame - lastFrame < 20)
+			return;
+
+		lastFrame = Unsorted::CurrentFrame;
+
+		Debug::Log("[FogDraw] %s cell=(%d,%d) vis=%d fog=%d flags=0x%08X prod=%d auto=%d exp=%d in=%d out=%d\n",
+			tag,
+			static_cast<int>(pCell->MapCoords.X), static_cast<int>(pCell->MapCoords.Y),
+			static_cast<int>(pCell->Visibility), static_cast<int>(pCell->Foggedness),
+			static_cast<unsigned>(pCell->Flags),
+			static_cast<int>(IsProducerCell(pCell)),
+			static_cast<int>(Phobos::Config::TSFog_AutoSpread),
+			static_cast<int>(IsExploredCell(pCell)), eaxIn, eaxOut);
+	}
+
 	// Temporary reveal around a detonation, then fall back to fog.
 	struct ImpactReveal
 	{
@@ -394,6 +413,7 @@ DEFINE_HOOK(0x687C56, Fog_ReadScenario_Decide, 0x5)
 		static_cast<int>(GameModeOptionsClass::Instance.FogOfWar),
 		static_cast<int>(Phobos::Config::TSFog_ForceAll),
 		static_cast<int>(Phobos::Config::TSFog), static_cast<int>(fog));
+	Debug::Log("[Fog] config: auto=%d\n", static_cast<int>(Phobos::Config::TSFog_AutoSpread));
 
 	GameModeOptionsClass::Instance.FogOfWar = fog;
 	ScenarioClass::Instance->SpecialFlags.FogOfWar = fog;
@@ -1476,18 +1496,22 @@ DEFINE_HOOK(0x480223, Fog_Producer_VisibilityFrame, 0x8)
 
 	GET(CellClass*, pCell, ESI);
 
+	const int eaxIn = static_cast<int>(R->EAX());
+
 	if (!Fog::IsExploredCell(pCell) || pCell->Visibility == -1)
 		return 0;
 
 	if (Fog::IsProducerCell(pCell))
 	{
 		R->EAX(Fog::FogFrame());
+		Fog::LogDrawDebug("vis", pCell, eaxIn, static_cast<int>(R->EAX()));
 		return 0;
 	}
 
 	if (!Phobos::Config::TSFog_AutoSpread)
 		R->EAX(0);
 
+	Fog::LogDrawDebug("vis", pCell, eaxIn, static_cast<int>(R->EAX()));
 	return 0;
 }
 
@@ -1498,17 +1522,21 @@ DEFINE_HOOK(0x480273, Fog_Producer_FogFrame, 0x5)
 
 	GET(CellClass*, pCell, ESI);
 
+	const int eaxIn = static_cast<int>(R->EAX());
+
 	if (!Fog::IsExploredCell(pCell) || pCell->Foggedness == -1)
 		return 0;
 
 	if (Fog::IsProducerCell(pCell))
 	{
 		R->EAX(Fog::FogFrame());
+		Fog::LogDrawDebug("fog", pCell, eaxIn, static_cast<int>(R->EAX()));
 		return 0;
 	}
 
 	if (!Phobos::Config::TSFog_AutoSpread)
 		R->EAX(0);
 
+	Fog::LogDrawDebug("fog", pCell, eaxIn, static_cast<int>(R->EAX()));
 	return 0;
 }
