@@ -6,10 +6,15 @@
 #include <MapClass.h>
 #include <BuildingClass.h>
 #include <HouseClass.h>
+#include <ScenarioClass.h>
+#include <GameModeOptionsClass.h>
 #include <Surface.h>
 #include <Drawing.h>
 #include <Unsorted.h>
 #include <Ext/Rules/Body.h>
+#include <Ext/OverlayType/Body.h>
+#include <Ext/TerrainType/Body.h>
+#include <Misc/Fog/Fog.h>
 #include <Misc/ZoomManager.h>
 
 #include <Utilities/Macro.h>
@@ -20,6 +25,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -109,6 +115,8 @@ namespace
 		int Width = 0;
 		int Height = 0;
 		std::vector<BuildRangeCellType> Cells;
+		std::vector<BYTE> Fogged;
+		bool HasFogged = false;
 		std::vector<int> Heights;
 		std::vector<BuildRangeEdge> Edges;
 	};
@@ -121,9 +129,18 @@ namespace
 		BYTE Type;
 	};
 
+	struct BuildRangeFillRect
+	{
+		int X;
+		int Y;
+		int Width;
+		int Height;
+		BYTE Type;
+	};
+
 	struct BuildRangeFillCache
 	{
-		std::vector<BuildRangeSpan> Spans;
+		std::vector<BuildRangeFillRect> Rects;
 		unsigned int Revision = 0;
 		Point2D TacticalPos {};
 		double Zoom = 0.0;
@@ -158,9 +175,7 @@ namespace
 	BuildRangeData CachedBuildRangeData;
 	BuildingTypeClass* CachedBuildRangeType = nullptr;
 	HouseClass* CachedBuildRangeOwner = nullptr;
-	int CachedBuildRangeBuildingCount = -1;
 	unsigned int CachedBuildRangeFrame = 0;
-	std::uint64_t CachedBuildRangeFoundationHash = 0;
 	std::uint64_t CachedBuildRangeDataHash = 0;
 	unsigned int CachedBuildRangeRevision = 0;
 	BuildRangeFillCache CachedBuildRangeFill;
@@ -297,6 +312,11 @@ namespace
 		for (auto const cell : data.Cells)
 			mix(static_cast<std::uint64_t>(cell));
 
+		for (auto const fogged : data.Fogged)
+			mix(static_cast<std::uint64_t>(fogged));
+
+		mix(data.HasFogged ? 1ull : 0ull);
+
 		for (auto const height : data.Heights)
 			mix(static_cast<std::uint64_t>(static_cast<uint32_t>(height)));
 
@@ -315,6 +335,54 @@ namespace
 	static int BuildRangeIndex(const BuildRangeData& data, int x, int y)
 	{
 		return (y - data.MinY) * data.Width + (x - data.MinX);
+	}
+
+	static bool IsBuildRangeCellBlocked(
+		CellClass* pCell,
+		BuildingTypeClass* pType,
+		HouseClass* pOwner)
+	{
+		if (!pCell)
+			return true;
+
+		// Naval buildings have a very large Adjacent range and the engine's
+		// full cell check is considerably more expensive over water. Use the
+		// same relevant cell rules directly instead.
+		if (pType->Naval)
+		{
+			if (!pCell->Tile_Is_Water())
+				return true;
+
+			if (pCell->GetBuilding())
+				return true;
+
+			const DWORD occupation = pCell->OccupationFlags | pCell->AltOccupationFlags;
+
+			// Ground units and buildings block; airborne aircraft do not.
+			if (occupation & (0x20u | 0x80u))
+				return true;
+
+			if (pCell->SlopeIndex != 0)
+				return true;
+
+			if (const auto pTerrain = pCell->GetTerrain(false);
+				pTerrain && !TerrainTypeExt::ExtMap.Find(pTerrain->Type)->CanBeBuiltOn)
+			{
+				return true;
+			}
+
+			if (pCell->OverlayTypeIndex >= 0
+				&& !OverlayTypeExt::CanPlaceBuildingOnOverlay(
+					pCell->OverlayTypeIndex, pType, false))
+			{
+				return true;
+			}
+
+			return false;
+		}
+
+		const SpeedType buildSpeed = pType->SpeedType;
+		return !pCell->CanThisExistHere(buildSpeed, pType, pOwner);
 	}
 
 	BuildRangeData BuildBuildRangeData(BuildingClass* pBuilding)
@@ -397,6 +465,7 @@ namespace
 		constexpr BYTE FlagRange = 0x01;
 		constexpr BYTE FlagLegal = 0x02;
 		constexpr BYTE FlagOccupied = 0x04;
+		constexpr BYTE FlagFogged = 0x08;
 
 		const size_t cellCount = static_cast<size_t>(result.Width)
 			* static_cast<size_t>(result.Height);
@@ -427,8 +496,9 @@ namespace
 					{ 0x7FFF, 0x7FFF }
 				};
 
-				if (DisplayClass::Instance.PassesProximityCheck(
-					pType, pOwner->ArrayIndex, singleCellFoundation, &candidate))
+				if (MapClass::Instance.CellExists(candidate)
+					&& DisplayClass::Instance.PassesProximityCheck(
+						pType, pOwner->ArrayIndex, singleCellFoundation, &candidate))
 				{
 					markFlag(x, y, FlagRange);
 				}
@@ -478,7 +548,31 @@ namespace
 				for (auto const& cell : cells)
 					markFlag(cell.X, cell.Y, FlagRange);
 
-				if (pType->CanPlaceHere(&candidate, pOwner))
+				bool canPlace = false;
+
+				if (pType->Naval)
+				{
+					// Avoid the full engine placement check for the very large
+					// naval Adjacent range. The same water/occupancy/terrain
+					// rules are already checked per cell.
+					canPlace = true;
+
+					for (auto const& cell : cells)
+					{
+						if (IsBuildRangeCellBlocked(
+							MapClass::Instance.TryGetCellAt(cell), pType, pOwner))
+						{
+							canPlace = false;
+							break;
+						}
+					}
+				}
+				else
+				{
+					canPlace = pType->CanPlaceHere(&candidate, pOwner);
+				}
+
+				if (canPlace)
 				{
 					for (auto const& cell : cells)
 						markFlag(cell.X, cell.Y, FlagLegal);
@@ -487,6 +581,7 @@ namespace
 		}
 
 		result.Heights.assign(cellCount, 0);
+		result.Fogged.assign(cellCount, 0);
 
 		// Red is the cell-level actual unbuildable test. It covers terrain,
 		// trees/rocks, water, cliffs, overlays, walls, buildings and ground
@@ -504,9 +599,20 @@ namespace
 					CellStruct { static_cast<short>(x), static_cast<short>(y) });
 
 				if (pCell)
+				{
 					result.Heights[index] = pCell->GetCellCoords().Z;
 
-				if (!pCell || !pCell->CanThisExistHere(SpeedType::Foot, pType, pOwner))
+					// Hide native fog and black/unexplored shroud cells. Normal
+					// visible cells have Foggedness == -1 and are mapped.
+					if (pCell->Foggedness != -1 || !Fog::IsMappedCell(pCell))
+					{
+						flags[index] |= FlagFogged;
+						result.Fogged[index] = 1;
+						result.HasFogged = true;
+					}
+				}
+
+				if (IsBuildRangeCellBlocked(pCell, pType, pOwner))
 					flags[index] |= FlagOccupied;
 			}
 		}
@@ -883,7 +989,8 @@ namespace
 				}
 			}
 
-			CachedBuildRangeFill.Spans.clear();
+			std::vector<BuildRangeSpan> spans;
+			spans.reserve(static_cast<size_t>(clip.Height) * 4);
 
 			for (int y = 0; y < clip.Height; ++y)
 			{
@@ -905,13 +1012,66 @@ namespace
 					while (x < clip.Width && mask[row + x] == value)
 						++x;
 
-					CachedBuildRangeFill.Spans.push_back({
+					spans.push_back({
 						clip.Y + y,
 						clip.X + firstX,
 						clip.X + x - 1,
 						value
 					});
 				}
+			}
+
+			// Merge horizontal spans vertically into larger rectangles so the
+			// engine blitter is called for blocks instead of every screen row.
+			using RectKey = std::uint64_t;
+			std::unordered_map<RectKey, BuildRangeFillRect> open;
+
+			auto keyFor = [](const BuildRangeSpan& span)
+			{
+				return (static_cast<RectKey>(static_cast<uint16_t>(span.X0)) << 32)
+					| (static_cast<RectKey>(static_cast<uint16_t>(span.X1)) << 16)
+					| span.Type;
+			};
+
+			CachedBuildRangeFill.Rects.clear();
+			CachedBuildRangeFill.Rects.reserve(spans.size() / 4 + 1);
+
+			for (auto const& span : spans)
+			{
+				const RectKey key = keyFor(span);
+				auto it = open.find(key);
+
+				if (it == open.end())
+				{
+					open.emplace(key, BuildRangeFillRect {
+						span.X0,
+						span.Y,
+						span.X1 - span.X0 + 1,
+						1,
+						span.Type
+					});
+				}
+				else if (it->second.Y + it->second.Height == span.Y)
+				{
+					++it->second.Height;
+				}
+				else
+				{
+					CachedBuildRangeFill.Rects.push_back(it->second);
+					it->second = {
+						span.X0,
+						span.Y,
+						span.X1 - span.X0 + 1,
+						1,
+						span.Type
+					};
+				}
+			}
+
+			for (auto const& [key, rect] : open)
+			{
+				(void)key;
+				CachedBuildRangeFill.Rects.push_back(rect);
 			}
 
 			CachedBuildRangeFill.Revision = CachedBuildRangeRevision;
@@ -921,7 +1081,17 @@ namespace
 			CachedBuildRangeFill.Valid = true;
 		}
 
-		if (CachedBuildRangeFill.Spans.empty() || !pSurface->CanLock())
+		if (CachedBuildRangeFill.Rects.empty())
+			return;
+
+		const ColorStruct colors[4] = {
+			ColorStruct { 0, 0, 0 },
+			GetBuildRangeColor(BuildRangeCellType::Legal),
+			GetBuildRangeColor(BuildRangeCellType::Blocked),
+			GetBuildRangeColor(BuildRangeCellType::Occupied)
+		};
+
+		if (!pSurface->CanLock())
 			return;
 
 		BYTE* const base = static_cast<BYTE*>(pSurface->Lock(0, 0));
@@ -937,13 +1107,6 @@ namespace
 			pSurface->Unlock();
 			return;
 		}
-
-		const ColorStruct colors[4] = {
-			ColorStruct { 0, 0, 0 },
-			GetBuildRangeColor(BuildRangeCellType::Legal),
-			GetBuildRangeColor(BuildRangeCellType::Blocked),
-			GetBuildRangeColor(BuildRangeCellType::Occupied)
-		};
 
 		const int inverseOpacity = 100 - opacity;
 
@@ -979,35 +1142,38 @@ namespace
 			CachedBuildRangeLut.Valid = true;
 		}
 
-		for (auto const& span : CachedBuildRangeFill.Spans)
+		for (auto const& rect : CachedBuildRangeFill.Rects)
 		{
-			BYTE* const row = base + static_cast<size_t>(span.Y) * pitch;
-			const ColorStruct& color = colors[span.Type];
-
-			for (int x = span.X0; x <= span.X1; ++x)
+			for (int y = rect.Y; y < rect.Y + rect.Height; ++y)
 			{
-				BYTE* const pixel = row + static_cast<size_t>(x) * bpp;
+				BYTE* const row = base + static_cast<size_t>(y) * pitch;
 
-				if (bpp == 2)
+				for (int x = rect.X; x < rect.X + rect.Width; ++x)
 				{
-					WORD& destination = *reinterpret_cast<WORD*>(pixel);
-					destination = CachedBuildRangeLut.Lut[span.Type][destination];
-				}
-				else
-				{
-					DWORD& destination = *reinterpret_cast<DWORD*>(pixel);
-					const int dr = static_cast<int>((destination >> 16) & 0xFF);
-					const int dg = static_cast<int>((destination >> 8) & 0xFF);
-					const int db = static_cast<int>(destination & 0xFF);
+					BYTE* const pixel = row + static_cast<size_t>(x) * bpp;
 
-					const int r = (static_cast<int>(color.R) * opacity + dr * inverseOpacity) / 100;
-					const int g = (static_cast<int>(color.G) * opacity + dg * inverseOpacity) / 100;
-					const int b = (static_cast<int>(color.B) * opacity + db * inverseOpacity) / 100;
+					if (bpp == 2)
+					{
+						WORD& destination = *reinterpret_cast<WORD*>(pixel);
+						destination = CachedBuildRangeLut.Lut[rect.Type][destination];
+					}
+					else
+					{
+						DWORD& destination = *reinterpret_cast<DWORD*>(pixel);
+						const int dr = static_cast<int>((destination >> 16) & 0xFF);
+						const int dg = static_cast<int>((destination >> 8) & 0xFF);
+						const int db = static_cast<int>(destination & 0xFF);
+						const auto& color = colors[rect.Type];
 
-					destination = (destination & 0xFF000000u)
-						| (static_cast<DWORD>(r) << 16)
-						| (static_cast<DWORD>(g) << 8)
-						| static_cast<DWORD>(b);
+						const int r = (static_cast<int>(color.R) * opacity + dr * inverseOpacity) / 100;
+						const int g = (static_cast<int>(color.G) * opacity + dg * inverseOpacity) / 100;
+						const int b = (static_cast<int>(color.B) * opacity + db * inverseOpacity) / 100;
+
+						destination = (destination & 0xFF000000u)
+							| (static_cast<DWORD>(r) << 16)
+							| (static_cast<DWORD>(g) << 8)
+							| static_cast<DWORD>(b);
+					}
 				}
 			}
 		}
@@ -1078,22 +1244,6 @@ namespace
 		}
 	}
 
-	std::uint64_t HashBuildRangeFoundation()
-	{
-		std::uint64_t hash = 1469598103934665603ull;
-
-		for (auto pCell = DisplayClass::Instance.CurrentFoundation_Data;
-			pCell && !IsFoundationSentinel(*pCell); ++pCell)
-		{
-			hash ^= static_cast<std::uint64_t>(static_cast<uint16_t>(pCell->X));
-			hash *= 1099511628211ull;
-			hash ^= static_cast<std::uint64_t>(static_cast<uint16_t>(pCell->Y));
-			hash *= 1099511628211ull;
-		}
-
-		return hash;
-	}
-
 	void DrawBuildRange()
 	{
 		auto const pBuilding = specific_cast<BuildingClass*>(DisplayClass::Instance.CurrentBuilding);
@@ -1107,19 +1257,18 @@ namespace
 		auto const pType = pBuilding->Type;
 		auto const pOwner = pBuilding->Owner;
 		const unsigned int frame = Unsorted::CurrentFrame;
-		const int buildingCount = BuildingClass::Array.Count;
-		const std::uint64_t foundationHash = HashBuildRangeFoundation();
 		const auto pRules = RulesExt::Global();
 		const unsigned int refreshFrames = static_cast<unsigned int>(
 			std::clamp(static_cast<int>(pRules->BuildRange_RefreshFrames), 1, 60));
+		const bool navalStatic = pType->Naval;
 
+		// Naval buildings keep a static range for the whole placement UI session.
+		// Their Adjacent=15 range is very expensive to classify, and the user
+		// explicitly requested no dynamic refresh for shipyards.
 		if (!CachedBuildRangeType
 			|| CachedBuildRangeType != pType
 			|| CachedBuildRangeOwner != pOwner
-			|| CachedBuildRangeBuildingCount != buildingCount
-			|| CachedBuildRangeFoundationHash != foundationHash
-			|| frame < CachedBuildRangeFrame
-			|| frame - CachedBuildRangeFrame >= refreshFrames)
+			|| (!navalStatic && frame - CachedBuildRangeFrame >= refreshFrames))
 		{
 			BuildRangeData newData = BuildBuildRangeData(pBuilding);
 			const std::uint64_t dataHash = HashBuildRangeData(newData);
@@ -1133,12 +1282,15 @@ namespace
 
 			CachedBuildRangeType = pType;
 			CachedBuildRangeOwner = pOwner;
-			CachedBuildRangeBuildingCount = buildingCount;
 			CachedBuildRangeFrame = frame;
-			CachedBuildRangeFoundationHash = foundationHash;
 		}
 
-		DrawBuildRangeFill(CachedBuildRangeData);
+		// Naval/water buildings keep only the dashed outline. Their Adjacent
+		// range is much larger than land buildings, and the colour fill is not
+		// useful over water; skipping it also avoids the large-area fill cost.
+		if (!pType->Naval)
+			DrawBuildRangeFill(CachedBuildRangeData);
+
 		DrawBuildRangeOutline(CachedBuildRangeData);
 	}
 }

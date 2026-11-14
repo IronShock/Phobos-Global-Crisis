@@ -219,9 +219,10 @@ void ScriptExt::ProcessAction(TeamClass* pTeam)
 		// Do nothing because or it is a wrong Action number or it is an Ares/YR action...
 		if (action > 70 && !ScriptExt::IsExtVariableAction(action))
 		{
-			// Unknown new action. This action finished
+			// Unknown new action. This action finished. Do not log here: AI
+			// teams can execute this every frame, and the old log produced
+			// hundreds of thousands of identical lines per match.
 			pTeam->StepCompleted = true;
-			ScriptExt::Log("AI Scripts - ProcessAction: [%s] [%s] (line %d): Unknown Script Action: %d\n", pTeam->Type->ID, pTeam->CurrentScript->Type->ID, pTeam->CurrentScript->CurrentMission, pTeam->CurrentScript->Type->ScriptActions[pTeam->CurrentScript->CurrentMission].Action);
 		}
 		break;
 	}
