@@ -5997,6 +5997,13 @@ msgstr ""
 "CnCNet/SyringeEx、MO_ExperienceEnhancements 以及 Tiberian Sun 战争迷雾参考。"
 "详情请参见[鸣谢](CREDITS.md)。"
 
+#: ../Whats-New.md:356
+msgid ""
+"[Build range fill](User-Interface.md#build-range-fill) with legal, red-blocked "
+"and occupied cell colours"
+msgstr ""
+"[建造范围填充](User-Interface.md#build-range-fill)：合法、被红格阻挡和占用格颜色"
+
 #~ msgid ""
 #~ "[`BombParachute` deglobalization](Fixed-or-"
 #~ "Improved-Logics.md#bomb-parachute-anim-"

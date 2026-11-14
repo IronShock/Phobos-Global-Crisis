@@ -703,6 +703,6 @@ the full credits.
 ### GC-only features
 
 Unless a section explicitly says otherwise, GC-only features such as the
-formation preview, build-range outline, VXL portrait, aircraft shadow and HUD
+formation preview, build-range fill, VXL portrait, aircraft shadow and HUD
 clipping fixes are independent implementations on top of the Phobos extension
 framework. They are not presented as official Phobos or Phobos-Recya features.

@@ -2890,11 +2890,11 @@ msgstr "GC 自有功能"
 #: ../../CREDITS.md:705
 msgid ""
 "Unless a section explicitly says otherwise, GC-only features such as the "
-"formation preview, build-range outline, VXL portrait, aircraft shadow and HUD "
+"formation preview, build-range fill, VXL portrait, aircraft shadow and HUD "
 "clipping fixes are independent implementations on top of the Phobos extension "
 "framework. They are not presented as official Phobos or Phobos-Recya features."
 msgstr ""
-"除非某章节另有说明，列阵预览、建造范围轮廓、VXL 头像、飞机阴影和 HUD 裁剪修复等 "
+"除非某章节另有说明，列阵预览、建造范围填充、VXL 头像、飞机阴影和 HUD 裁剪修复等 "
 "GC 自有功能，都是在 Phobos 扩展框架之上独立实现的。它们并非 Phobos 或 "
 "Phobos-Recya 的官方功能。"
 

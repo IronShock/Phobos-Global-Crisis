@@ -521,6 +521,34 @@ In `RA2MD.INI`:
 ShowPlacementPreview=yes   ; boolean
 ```
 
+### Build range fill
+
+While placing a building, the legal construction range is tinted by cell:
+
+- **Yellow**: the actual build range that is not green or red. This includes the engine's Adjacent neighbourhood and every cell covered by a proximity-valid candidate foundation. No artificial enclosed-hole fill is added.
+- **Green**: the current building's complete foundation can be placed.
+- **Red**: a cell where the cell-level build check fails. This covers terrain, trees/rocks, water, cliffs, overlays, walls, buildings, ground units and infantry. Airborne objects and units in limbo/transport do not fail the check and are not marked red.
+
+The colour priority is **red > green > yellow**; a cell that is both a valid green placement and part of the larger Adjacent range shows green. Red and yellow are shown outside the green area, but only inside the actual build range around the player's base.
+
+The original **white dashed outline** of the green legal area is kept. It is also drawn along boundaries between green and red/yellow cells. Edges around empty enclosed holes are not drawn; red/yellow areas that do not border green have no white outline. The overlay is drawn under units and buildings, is client-side only and does not affect multiplayer synchronisation.
+
+`BuildRange.DisableYellow=yes` merges all yellow cells into red; green remains green. `BuildRange.DisableRed=yes` makes the entire actual range green and overrides `DisableYellow`.
+
+In `rulesmd.ini`:
+
+```ini
+[AudioVisual]
+BuildRange.Fill=yes              ; boolean - enable the cell fill
+BuildRange.DisableYellow=no      ; yes = merge yellow cells into red
+BuildRange.DisableRed=no         ; yes = show the whole actual range as green
+BuildRange.Color.Legal=0,255,0   ; R,G,B - complete foundation can be placed
+BuildRange.Color.Blocked=255,255,0 ; R,G,B - actual range not green/red
+BuildRange.Color.Occupied=255,0,0 ; R,G,B - cell build check failed
+BuildRange.FillOpacity=5         ; integer 0-100 - fill opacity
+BuildRange.RefreshFrames=15      ; integer 1-60 - occupancy refresh interval
+```
+
 ### Real time timers
 
 - Timers can now display values in real time, taking game speed into account. This can be enabled with `RealTimeTimers=true`.

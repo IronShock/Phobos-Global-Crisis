@@ -169,6 +169,15 @@ void RulesExt::ExtData::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 	this->PlacementPreview.Read(exINI, GameStrings::AudioVisual, "PlacementPreview");
 	this->PlacementPreview_Translucency.Read(exINI, GameStrings::AudioVisual, "PlacementPreview.Translucency");
 
+	this->BuildRange_Fill.Read(exINI, GameStrings::AudioVisual, "BuildRange.Fill");
+	this->BuildRange_DisableYellow.Read(exINI, GameStrings::AudioVisual, "BuildRange.DisableYellow");
+	this->BuildRange_DisableRed.Read(exINI, GameStrings::AudioVisual, "BuildRange.DisableRed");
+	this->BuildRange_LegalColor.Read(exINI, GameStrings::AudioVisual, "BuildRange.Color.Legal");
+	this->BuildRange_BlockedColor.Read(exINI, GameStrings::AudioVisual, "BuildRange.Color.Blocked");
+	this->BuildRange_OccupiedColor.Read(exINI, GameStrings::AudioVisual, "BuildRange.Color.Occupied");
+	this->BuildRange_FillOpacity.Read(exINI, GameStrings::AudioVisual, "BuildRange.FillOpacity");
+	this->BuildRange_RefreshFrames.Read(exINI, GameStrings::AudioVisual, "BuildRange.RefreshFrames");
+
 	this->SuperWeaponSidebar_AllowByDefault.Read(exINI, GameStrings::AudioVisual, "SuperWeaponSidebar.AllowByDefault");
 
 	this->ConditionYellow_Terrain.Read(exINI, GameStrings::AudioVisual, "ConditionYellow.Terrain");
@@ -594,6 +603,14 @@ void RulesExt::ExtData::Serialize(T& Stm)
 		.Process(this->PlacementGrid_TranslucencyWithPreview)
 		.Process(this->PlacementPreview)
 		.Process(this->PlacementPreview_Translucency)
+		.Process(this->BuildRange_Fill)
+		.Process(this->BuildRange_DisableYellow)
+		.Process(this->BuildRange_DisableRed)
+		.Process(this->BuildRange_LegalColor)
+		.Process(this->BuildRange_BlockedColor)
+		.Process(this->BuildRange_OccupiedColor)
+		.Process(this->BuildRange_FillOpacity)
+		.Process(this->BuildRange_RefreshFrames)
 		.Process(this->SuperWeaponSidebar_AllowByDefault)
 		.Process(this->ConditionYellow_Terrain)
 		.Process(this->Shield_ConditionYellow)

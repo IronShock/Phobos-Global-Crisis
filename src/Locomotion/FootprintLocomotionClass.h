@@ -63,6 +63,10 @@ private:
 	bool BeginMove(const FootprintPathStep& step, const CellStruct& anchor);
 	bool TranslateOneFrame();
 	void ClearPath();
+	void RecordFailure(const CellStruct& goal);
+	bool IsFailureCooldown(const CellStruct& goal) const;
+	void ResetRetry();
+	bool RetryExpired() const;
 	void LogBlocked(const char* reason, const CellStruct& cell);
 
 	FootprintPathStep Path[64] = {};
@@ -82,4 +86,12 @@ private:
 	int TurnFromBucket = 0;
 	int TurnTargetBucket = 0;
 	int LastLogFrame = -1000;
+
+	// A failed path/move must not be retried every frame. Large multi-cell
+	// hulls can make one path attempt expensive, and the mission layer may
+	// reissue the same destination immediately.
+	CellStruct LastFailedCell { -1, -1 };
+	DWORD LastFailFrame = 0;
+	int RetryCount = 0;
+	DWORD RetryWindowStart = 0;
 };

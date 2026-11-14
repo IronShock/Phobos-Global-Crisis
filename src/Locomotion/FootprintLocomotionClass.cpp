@@ -14,6 +14,9 @@
 
 namespace
 {
+	constexpr DWORD kMoveFailCooldownFrames = 30;
+	constexpr DWORD kMoveRetryTimeoutFrames = 300;
+
 	std::vector<CellStruct> UnionSpans(const std::vector<CellStruct>& a, const std::vector<CellStruct>& b)
 	{
 		std::vector<CellStruct> result = a;
@@ -61,6 +64,7 @@ HRESULT FootprintLocomotionClass::Load(IStream* pStm)
 	this->TargetCoord = CoordStruct::Empty;
 	this->Powered = true;
 	this->UnLocked = true;
+	this->ResetRetry();
 
 	return hr;
 }
@@ -116,6 +120,31 @@ bool FootprintLocomotionClass::Process()
 
 	const CellStruct anchor = pState->Initialized ? pState->Anchor : pLinked->GetMapCoords();
 
+	// Once a step has failed there is no valid path left to execute. Previously
+	// Process() kept re-reading Path[0] every frame and spamming the same
+	// "invalid step" failure instead of waiting for a new Move_To().
+	if (!this->Moving && this->HeadToCoord == CoordStruct::Empty && !this->Turning)
+	{
+		// A footprint barrier can disappear when the blocking hull moves away.
+		// Keep the requested destination and retry periodically instead of
+		// stopping forever after the first collision.
+		if (this->TargetCoord != CoordStruct::Empty)
+		{
+			if (this->RetryExpired())
+			{
+				this->Stop_Moving();
+				return false;
+			}
+
+			const CellStruct goal = CellClass::Coord2Cell(this->TargetCoord);
+
+			if (!this->IsFailureCooldown(goal))
+				this->Move_To(this->TargetCoord);
+		}
+
+		return false;
+	}
+
 	if (this->Turning)
 	{
 		if (pState->Initialized)
@@ -141,8 +170,9 @@ bool FootprintLocomotionClass::Process()
 
 	if (this->PathIndex >= this->PathLength)
 	{
-		this->Moving = false;
-		pLinked->SetSpeedPercentage(0.0);
+		// Reaching the end of the path clears the destination so the selection
+		// line does not stay on the map after the unit has arrived.
+		this->Stop_Moving();
 		return false;
 	}
 
@@ -153,14 +183,24 @@ bool FootprintLocomotionClass::Process()
 		if (this->BeginTurn(step.Bucket, anchor))
 			return true;
 
+		this->RecordFailure(this->TargetCoord == CoordStruct::Empty
+			? anchor
+			: CellClass::Coord2Cell(this->TargetCoord));
+		this->ClearPath();
 		this->Moving = false;
+		pLinked->SetSpeedPercentage(0.0);
 		return false;
 	}
 
 	if (this->BeginMove(step, anchor))
 		return true;
 
+	this->RecordFailure(this->TargetCoord == CoordStruct::Empty
+		? anchor
+		: CellClass::Coord2Cell(this->TargetCoord));
+	this->ClearPath();
 	this->Moving = false;
+	pLinked->SetSpeedPercentage(0.0);
 	return false;
 }
 
@@ -186,11 +226,26 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	if (this->Moving && this->TargetCoord == to)
 		return;
 
+	const bool newTarget = this->TargetCoord != to;
+
+	if (newTarget)
+	{
+		this->ResetRetry();
+		this->TargetCoord = to;
+	}
+
 	auto const pState = Footprint::GetState(pUnit);
 	const CellStruct start = pState && pState->Initialized
 		? pState->Anchor
 		: pLinked->GetMapCoords();
 	const CellStruct goal = CellClass::Coord2Cell(to);
+
+	if (this->IsFailureCooldown(goal))
+	{
+		this->ClearPath();
+		this->Moving = false;
+		return;
+	}
 
 	// Our custom mover does not consume the vanilla PathDirections/Waypoint
 	// fields. Clearing them prevents FootClass::UpdatePosition(End) from applying
@@ -205,8 +260,30 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 
 	if (!MapClass::Instance.CellExists(goal))
 	{
-		this->ClearPath();
-		this->Moving = false;
+		this->Stop_Moving();
+		return;
+	}
+
+	// Checking only the goal anchor is not enough for a 36x9 hull: at a map
+	// edge the anchor is valid while every possible facing extends outside the
+	// map. Do not start a potentially 20000-expansion A* search for such a goal.
+	bool goalFits = false;
+
+	for (int bucket = 0; bucket < 8; ++bucket)
+	{
+		const auto goalSpan = Footprint::GetSpan(pUnit, goal, bucket);
+
+		if (Footprint::CanOccupy(pUnit, goalSpan, pUnit->OnBridge, goal))
+		{
+			goalFits = true;
+			break;
+		}
+	}
+
+	if (!goalFits)
+	{
+		this->LogBlocked("goal", goal);
+		this->Stop_Moving();
 		return;
 	}
 
@@ -217,12 +294,20 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 
 	if (!FootprintPathfinder::FindPath(pUnit, start, goal, startBucket, path))
 	{
+		this->RecordFailure(goal);
 		this->ClearPath();
 		this->Moving = false;
 		pLinked->SetSpeedPercentage(0.0);
 		return;
 	}
 
+	if (path.empty())
+	{
+		this->Stop_Moving();
+		return;
+	}
+
+	this->ResetRetry();
 	this->PathLength = static_cast<int>(std::min<size_t>(path.size(), 64));
 	this->PathIndex = 0;
 
@@ -241,6 +326,8 @@ void FootprintLocomotionClass::Stop_Moving()
 	this->Moving = false;
 	this->Turning = false;
 	this->HeadToCoord = CoordStruct::Empty;
+	this->TargetCoord = CoordStruct::Empty;
+	this->ResetRetry();
 
 	auto const pLinked = this->LinkedTo;
 
@@ -450,10 +537,7 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 
 	if (step.Bucket != bucket || direction < 0 || (!forward && !reverse))
 	{
-		Debug::Log("[FootprintStep] %s invalid step from=(%d,%d) bucket=%d next=(%d,%d) dir=%d stepBucket=%d\n",
-			pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
-			next.X, next.Y, direction, step.Bucket);
-
+		this->LogBlocked("invalid-step", next);
 		return false;
 	}
 
@@ -591,6 +675,40 @@ void FootprintLocomotionClass::ClearPath()
 {
 	this->PathLength = 0;
 	this->PathIndex = 0;
+}
+
+void FootprintLocomotionClass::RecordFailure(const CellStruct& goal)
+{
+	this->LastFailedCell = goal;
+	this->LastFailFrame = Unsorted::CurrentFrame;
+	++this->RetryCount;
+
+	if (this->RetryWindowStart == 0)
+		this->RetryWindowStart = Unsorted::CurrentFrame;
+}
+
+bool FootprintLocomotionClass::IsFailureCooldown(const CellStruct& goal) const
+{
+	if (this->LastFailedCell.X < 0 || this->LastFailedCell != goal || this->LastFailFrame == 0)
+		return false;
+
+	return static_cast<DWORD>(Unsorted::CurrentFrame) - this->LastFailFrame < kMoveFailCooldownFrames;
+}
+
+void FootprintLocomotionClass::ResetRetry()
+{
+	this->LastFailedCell = CellStruct { -1, -1 };
+	this->LastFailFrame = 0;
+	this->RetryCount = 0;
+	this->RetryWindowStart = 0;
+}
+
+bool FootprintLocomotionClass::RetryExpired() const
+{
+	if (this->RetryCount == 0)
+		return false;
+
+	return static_cast<DWORD>(Unsorted::CurrentFrame) - this->RetryWindowStart >= kMoveRetryTimeoutFrames;
 }
 
 void FootprintLocomotionClass::LogBlocked(const char* reason, const CellStruct& cell)

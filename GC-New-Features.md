@@ -229,6 +229,44 @@ TacticalPause=true
 TacticalPause.BlockActions.Difficulty=none   ; none | easy | normal | hard
 ```
 
+### Build range fill
+While a building is being placed, the legal construction range is tinted by
+cell:
+
+- **Yellow**: the actual build range that is not green or red. This includes
+  every cell in the engine's Adjacent neighbourhood and every cell covered by a
+  proximity-valid candidate foundation. No artificial enclosed-hole fill is
+  added.
+- **Green**: the current building's complete foundation can be placed.
+- **Red**: a cell where the cell-level build check fails. This covers terrain,
+  trees/rocks, water, cliffs, overlays, walls, buildings, ground units and
+  infantry. Airborne objects and units in limbo/transport do not fail the check
+  and are not marked red.
+
+Priority is **red > green > yellow**; a cell that is both a valid green placement
+and part of a larger candidate/Adjacent range shows green. Red and yellow are
+shown outside the green area, but only inside the actual build range around the
+player's base. The original white dashed outline of the green legal area is kept
+and is also drawn along boundaries between green and red/yellow cells. Edges
+around empty enclosed holes are omitted. All fills are client-side and do not
+affect multiplayer synchronisation.
+
+`BuildRange.DisableYellow=yes` merges all yellow cells into red. Green remains
+green. `BuildRange.DisableRed=yes` makes the entire actual range green and
+overrides `DisableYellow`.
+
+```ini
+[AudioVisual]
+BuildRange.Fill=yes                ; enable the cell fill
+BuildRange.DisableYellow=no        ; yes = merge yellow cells into red
+BuildRange.DisableRed=no           ; yes = show the whole actual range as green
+BuildRange.Color.Legal=0,255,0     ; green
+BuildRange.Color.Blocked=255,255,0 ; yellow - actual range not green/red
+BuildRange.Color.Occupied=255,0,0  ; red - cell build check failed
+BuildRange.FillOpacity=5           ; 0-100
+BuildRange.RefreshFrames=15        ; occupancy refresh interval, 1-60
+```
+
 ### Target filter buttons
 Six bottom-left buttons set a bitmask target filter for the selected techno(s):
 Infantry, Vehicle, Artillery, Building, Fighter, Bomber.
@@ -1388,7 +1426,7 @@ used while implementing GC features:
   fog-of-war behaviour reference used while developing TSFog.
 
 Unless a section explicitly says otherwise, GC-only features such as the
-formation preview, build-range outline, VXL portrait, aircraft shadow and HUD
+formation preview, build-range fill, VXL portrait, aircraft shadow and HUD
 clipping fixes are independent implementations on top of the Phobos extension
 framework. They are not presented as official Phobos or Phobos-Recya features.
 
@@ -1417,6 +1455,9 @@ framework. They are not presented as official Phobos or Phobos-Recya features.
 `FixOccupyFire`, `PenetratesTransport.Level`, `UseGlobalOccupyRange`
 
 ### `rulesmd.ini` → `[AudioVisual]`
+`BuildRange.Fill`, `BuildRange.DisableYellow`, `BuildRange.DisableRed`,
+`BuildRange.Color.Legal`, `BuildRange.Color.Blocked`,
+`BuildRange.Color.Occupied`, `BuildRange.FillOpacity`, `BuildRange.RefreshFrames`,
 `MovePositionIndicator`, `MovePositionIndicatorColor`
 
 ### `rulesmd.ini` → TechnoType sections

@@ -72,6 +72,15 @@ public:
 		Valueable<bool> PlacementPreview;
 		TranslucencyLevel PlacementPreview_Translucency;
 
+		Valueable<bool> BuildRange_Fill;
+		Valueable<bool> BuildRange_DisableYellow;
+		Valueable<bool> BuildRange_DisableRed;
+		Valueable<ColorStruct> BuildRange_LegalColor;
+		Valueable<ColorStruct> BuildRange_BlockedColor;
+		Valueable<ColorStruct> BuildRange_OccupiedColor;
+		Valueable<int> BuildRange_FillOpacity;
+		Valueable<int> BuildRange_RefreshFrames;
+
 		Valueable<bool> SuperWeaponSidebar_AllowByDefault;
 
 		Nullable<double> ConditionYellow_Terrain;
@@ -385,6 +394,15 @@ public:
 			, PlacementGrid_TranslucencyWithPreview { }
 			, PlacementPreview { false }
 			, PlacementPreview_Translucency { 75 }
+
+			, BuildRange_Fill { true }
+			, BuildRange_DisableYellow { false }
+			, BuildRange_DisableRed { false }
+			, BuildRange_LegalColor { { 0, 255, 0 } }
+			, BuildRange_BlockedColor { { 255, 255, 0 } }
+			, BuildRange_OccupiedColor { { 255, 0, 0 } }
+			, BuildRange_FillOpacity { 5 }
+			, BuildRange_RefreshFrames { 15 }
 
 			, SuperWeaponSidebar_AllowByDefault { false }
 

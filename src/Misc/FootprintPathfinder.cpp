@@ -109,6 +109,16 @@ bool FootprintPathfinder::FindPath(
 	const float framesPerCell = 256.0f / static_cast<float>(std::max(pType->Speed, 1));
 	const float turnFramesPer45 = 32.0f / static_cast<float>(rot);
 
+	const auto& config = Footprint::GetConfig(pType);
+	const int footprintArea = std::max(1, config.Length * config.Width);
+	const bool largeHull = footprintArea > 64;
+	// A 36x9 hull has a 1936-cell turn sweep and millions of cell checks can
+	// easily exceed a frame. Keep the search bounded for large footprints;
+	// failures are also put on a cooldown by the locomotor.
+	const int maxExpansions = largeHull
+		? std::clamp(200000 / footprintArea, 400, 4000)
+		: kMaxExpansions;
+
 	const uint32_t startKey = MakeKey(start, startBucket);
 	const uint32_t goalIndex = static_cast<uint32_t>(CellIndex(goal));
 
@@ -128,7 +138,7 @@ bool FootprintPathfinder::FindPath(
 	uint32_t goalKey = 0;
 	bool found = false;
 
-	while (!open.empty() && expansions < kMaxExpansions)
+	while (!open.empty() && expansions < maxExpansions)
 	{
 		const OpenNode current = open.top();
 		open.pop();
@@ -161,6 +171,13 @@ bool FootprintPathfinder::FindPath(
 
 			const int delta = (newBucket - bucket + 8) & 7;
 			const int steps = std::min(delta, 8 - delta);
+
+			// For very large hulls, turning several buckets at once produces
+			// enormous swept areas. Chain adjacent turns instead so the path
+			// search stays tractable while still allowing any final facing.
+			if (largeHull && steps > 1)
+				continue;
+
 			const float turnCost = steps * turnFramesPer45 + 1.0f;
 
 			const bool tryClockwise = delta <= 4;

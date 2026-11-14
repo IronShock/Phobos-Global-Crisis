@@ -4,9 +4,13 @@
 #include <DisplayClass.h>
 #include <CellClass.h>
 #include <MapClass.h>
+#include <BuildingClass.h>
+#include <HouseClass.h>
+#include <Surface.h>
 #include <Drawing.h>
 #include <Unsorted.h>
 #include <Ext/Rules/Body.h>
+#include <Misc/ZoomManager.h>
 
 #include <Utilities/Macro.h>
 #include <Utilities/EnumFunctions.h>
@@ -16,7 +20,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -84,35 +87,239 @@ DEFINE_HOOK(0x458623, BuildingClass_KillOccupiers_Replace_MuzzleFix, 0x7)
 
 namespace
 {
-	struct BuildRangeCellHash
+	enum class BuildRangeCellType : BYTE
 	{
-		size_t operator()(const CellStruct& cell) const noexcept
-		{
-			return (static_cast<size_t>(static_cast<uint16_t>(cell.X)) << 16)
-				^ static_cast<uint16_t>(cell.Y);
-		}
+		None = 0,
+		Legal = 1,
+		Blocked = 2,
+		Occupied = 3
 	};
 
 	struct BuildRangeEdge
 	{
 		CellStruct A;
 		CellStruct B;
+		int Z = 0;
 	};
 
-	std::vector<BuildRangeEdge> CachedBuildRangeEdges;
+	struct BuildRangeData
+	{
+		int MinX = 0;
+		int MinY = 0;
+		int Width = 0;
+		int Height = 0;
+		std::vector<BuildRangeCellType> Cells;
+		std::vector<int> Heights;
+		std::vector<BuildRangeEdge> Edges;
+	};
+
+	struct BuildRangeSpan
+	{
+		int Y;
+		int X0;
+		int X1;
+		BYTE Type;
+	};
+
+	struct BuildRangeFillCache
+	{
+		std::vector<BuildRangeSpan> Spans;
+		unsigned int Revision = 0;
+		Point2D TacticalPos {};
+		double Zoom = 0.0;
+		RectangleStruct View {};
+		bool Valid = false;
+	};
+
+	struct BuildRangeScreenEdge
+	{
+		Point2D A;
+		Point2D B;
+	};
+
+	struct BuildRangeOutlineCache
+	{
+		std::vector<BuildRangeScreenEdge> Edges;
+		unsigned int Revision = 0;
+		Point2D TacticalPos {};
+		double Zoom = 0.0;
+		RectangleStruct View {};
+		bool Valid = false;
+	};
+
+	struct BuildRangeLutCache
+	{
+		WORD Lut[4][65536] {};
+		ColorStruct Colors[4] {};
+		int Opacity = -1;
+		bool Valid = false;
+	};
+
+	BuildRangeData CachedBuildRangeData;
 	BuildingTypeClass* CachedBuildRangeType = nullptr;
 	HouseClass* CachedBuildRangeOwner = nullptr;
 	int CachedBuildRangeBuildingCount = -1;
 	unsigned int CachedBuildRangeFrame = 0;
+	std::uint64_t CachedBuildRangeFoundationHash = 0;
+	std::uint64_t CachedBuildRangeDataHash = 0;
+	unsigned int CachedBuildRangeRevision = 0;
+	BuildRangeFillCache CachedBuildRangeFill;
+	BuildRangeOutlineCache CachedBuildRangeOutline;
+	BuildRangeLutCache CachedBuildRangeLut;
 
 	bool IsFoundationSentinel(const CellStruct& cell)
 	{
 		return cell.X == 0x7FFF && cell.Y == 0x7FFF;
 	}
 
-	std::vector<BuildRangeEdge> BuildLegalRangeEdges(BuildingClass* pBuilding)
+	void MergeBuildRangeEdges(std::vector<BuildRangeEdge>& edges)
 	{
-		std::vector<BuildRangeEdge> result;
+		struct Segment
+		{
+			int Line;
+			int Start;
+			int End;
+			int Z;
+			bool Vertical;
+		};
+
+		std::vector<Segment> segments;
+		segments.reserve(edges.size());
+
+		for (auto const& edge : edges)
+		{
+			if (edge.A.Y == edge.B.Y)
+			{
+				segments.push_back({
+					edge.A.Y,
+					std::min(edge.A.X, edge.B.X),
+					std::max(edge.A.X, edge.B.X),
+					edge.Z,
+					false
+				});
+			}
+			else if (edge.A.X == edge.B.X)
+			{
+				segments.push_back({
+					edge.A.X,
+					std::min(edge.A.Y, edge.B.Y),
+					std::max(edge.A.Y, edge.B.Y),
+					edge.Z,
+					true
+				});
+			}
+		}
+
+		std::sort(segments.begin(), segments.end(), [](const Segment& a, const Segment& b)
+		{
+			if (a.Vertical != b.Vertical)
+				return a.Vertical < b.Vertical;
+
+			if (a.Line != b.Line)
+				return a.Line < b.Line;
+
+			if (a.Z != b.Z)
+				return a.Z < b.Z;
+
+			return a.Start < b.Start;
+		});
+
+		edges.clear();
+
+		for (auto const& segment : segments)
+		{
+			if (!edges.empty())
+			{
+				auto& last = edges.back();
+				const bool sameVertical = last.A.X == last.B.X;
+
+				if (sameVertical == segment.Vertical)
+				{
+					const int lastLine = sameVertical ? last.A.X : last.A.Y;
+					const int lastStart = sameVertical
+						? std::min(last.A.Y, last.B.Y)
+						: std::min(last.A.X, last.B.X);
+					const int lastEnd = sameVertical
+						? std::max(last.A.Y, last.B.Y)
+						: std::max(last.A.X, last.B.X);
+
+					if (lastLine == segment.Line && last.Z == segment.Z
+						&& segment.Start <= lastEnd)
+					{
+						if (sameVertical)
+						{
+							last.A.Y = static_cast<short>(lastStart);
+							last.B.Y = static_cast<short>(std::max(lastEnd, segment.End));
+						}
+						else
+						{
+							last.A.X = static_cast<short>(lastStart);
+							last.B.X = static_cast<short>(std::max(lastEnd, segment.End));
+						}
+
+						continue;
+					}
+				}
+			}
+
+			BuildRangeEdge edge {};
+
+			if (segment.Vertical)
+			{
+				edge.A = { static_cast<short>(segment.Line), static_cast<short>(segment.Start) };
+				edge.B = { static_cast<short>(segment.Line), static_cast<short>(segment.End) };
+			}
+			else
+			{
+				edge.A = { static_cast<short>(segment.Start), static_cast<short>(segment.Line) };
+				edge.B = { static_cast<short>(segment.End), static_cast<short>(segment.Line) };
+			}
+
+			edge.Z = segment.Z;
+			edges.push_back(edge);
+		}
+	}
+
+	std::uint64_t HashBuildRangeData(const BuildRangeData& data)
+	{
+		std::uint64_t hash = 1469598103934665603ull;
+		auto mix = [&hash](std::uint64_t value)
+		{
+			hash ^= value;
+			hash *= 1099511628211ull;
+		};
+
+		mix(static_cast<std::uint64_t>(data.MinX));
+		mix(static_cast<std::uint64_t>(data.MinY));
+		mix(static_cast<std::uint64_t>(data.Width));
+		mix(static_cast<std::uint64_t>(data.Height));
+
+		for (auto const cell : data.Cells)
+			mix(static_cast<std::uint64_t>(cell));
+
+		for (auto const height : data.Heights)
+			mix(static_cast<std::uint64_t>(static_cast<uint32_t>(height)));
+
+		for (auto const& edge : data.Edges)
+		{
+			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.A.X)));
+			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.A.Y)));
+			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.B.X)));
+			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.B.Y)));
+			mix(static_cast<std::uint64_t>(static_cast<uint32_t>(edge.Z)));
+		}
+
+		return hash;
+	}
+
+	static int BuildRangeIndex(const BuildRangeData& data, int x, int y)
+	{
+		return (y - data.MinY) * data.Width + (x - data.MinX);
+	}
+
+	BuildRangeData BuildBuildRangeData(BuildingClass* pBuilding)
+	{
+		BuildRangeData result;
 
 		if (!pBuilding || !pBuilding->Type || !DisplayClass::Instance.CurrentFoundation_Data)
 			return result;
@@ -125,16 +332,20 @@ namespace
 
 		// Copy the foundation data so the placement checks cannot disturb the
 		// active foundation used by the game.
-		std::vector<CellStruct> foundation;
+		std::vector<CellStruct> foundationData;
 		for (auto pCell = DisplayClass::Instance.CurrentFoundation_Data;
 			!IsFoundationSentinel(*pCell); ++pCell)
 		{
-			foundation.push_back(*pCell);
+			foundationData.push_back(*pCell);
 		}
-		foundation.push_back(CellStruct { 0x7FFF, 0x7FFF });
 
-		if (foundation.size() <= 1)
+		if (foundationData.empty())
 			return result;
+
+		foundationData.push_back(CellStruct { 0x7FFF, 0x7FFF });
+
+		std::vector<CellStruct> foundation(
+			foundationData.begin(), foundationData.end() - 1);
 
 		const int adjacent = std::clamp(static_cast<int>(pType->Adjacent), 0, 30);
 		const int foundationWidth = std::max(1, static_cast<int>(pType->GetFoundationWidth()));
@@ -175,90 +386,325 @@ namespace
 		maxX = std::clamp(maxX, mapBounds.Left, mapBounds.Right);
 		maxY = std::clamp(maxY, mapBounds.Top, mapBounds.Bottom);
 
-		std::unordered_set<CellStruct, BuildRangeCellHash> legal;
-		legal.reserve(static_cast<size_t>(std::max(0, maxX - minX + 1))
-			* static_cast<size_t>(std::max(0, maxY - minY + 1)));
+		result.MinX = minX;
+		result.MinY = minY;
+		result.Width = maxX - minX + 1;
+		result.Height = maxY - minY + 1;
 
-		for (int y = minY; y <= maxY; ++y)
+		if (result.Width <= 0 || result.Height <= 0)
+			return result;
+
+		constexpr BYTE FlagRange = 0x01;
+		constexpr BYTE FlagLegal = 0x02;
+		constexpr BYTE FlagOccupied = 0x04;
+
+		const size_t cellCount = static_cast<size_t>(result.Width)
+			* static_cast<size_t>(result.Height);
+
+		std::vector<BYTE> flags(cellCount, 0);
+
+		auto markFlag = [&](int x, int y, BYTE flag)
 		{
-			for (int x = minX; x <= maxX; ++x)
+			if (x < result.MinX || x >= result.MinX + result.Width
+				|| y < result.MinY || y >= result.MinY + result.Height)
+			{
+				return;
+			}
+
+			flags[BuildRangeIndex(result, x, y)] |= flag;
+		};
+
+		// The yellow base is the engine's actual Adjacent neighbourhood. A 1x1
+		// proximity check gives us every cell in that neighbourhood, including
+		// cells the current building's larger foundation cannot cover alone.
+		for (int y = result.MinY; y < result.MinY + result.Height; ++y)
+		{
+			for (int x = result.MinX; x < result.MinX + result.Width; ++x)
+			{
+				CellStruct candidate { static_cast<short>(x), static_cast<short>(y) };
+				CellStruct singleCellFoundation[] = {
+					{ 0, 0 },
+					{ 0x7FFF, 0x7FFF }
+				};
+
+				if (DisplayClass::Instance.PassesProximityCheck(
+					pType, pOwner->ArrayIndex, singleCellFoundation, &candidate))
+				{
+					markFlag(x, y, FlagRange);
+				}
+			}
+		}
+
+		for (int y = result.MinY; y < result.MinY + result.Height; ++y)
+		{
+			for (int x = result.MinX; x < result.MinX + result.Width; ++x)
 			{
 				CellStruct candidate { static_cast<short>(x), static_cast<short>(y) };
 
 				// Proximity is the cheaper rejection test; only run the full
 				// terrain/occupancy check for candidates that are near a base.
 				if (!DisplayClass::Instance.PassesProximityCheck(
-					pType, pOwner->ArrayIndex, foundation.data(), &candidate))
+					pType, pOwner->ArrayIndex, foundationData.data(), &candidate))
 				{
 					continue;
 				}
 
-				if (!pType->CanPlaceHere(&candidate, pOwner))
-					continue;
+				std::vector<CellStruct> cells;
+				cells.reserve(foundation.size());
+
+				bool allInBounds = true;
 
 				for (auto const& offset : foundation)
 				{
-					if (IsFoundationSentinel(offset))
-						break;
-
 					const CellStruct cell {
 						static_cast<short>(candidate.X + offset.X),
 						static_cast<short>(candidate.Y + offset.Y)
 					};
 
-					if (MapClass::Instance.CellExists(cell))
-						legal.insert(cell);
+					if (!MapClass::Instance.CellExists(cell)
+						|| cell.X < result.MinX || cell.X >= result.MinX + result.Width
+						|| cell.Y < result.MinY || cell.Y >= result.MinY + result.Height)
+					{
+						allInBounds = false;
+						break;
+					}
+
+					cells.push_back(cell);
+				}
+
+				if (!allInBounds)
+					continue;
+
+				for (auto const& cell : cells)
+					markFlag(cell.X, cell.Y, FlagRange);
+
+				if (pType->CanPlaceHere(&candidate, pOwner))
+				{
+					for (auto const& cell : cells)
+						markFlag(cell.X, cell.Y, FlagLegal);
 				}
 			}
 		}
+
+		result.Heights.assign(cellCount, 0);
+
+		// Red is the cell-level actual unbuildable test. It covers terrain,
+		// trees/rocks, water, cliffs, overlays, walls, buildings and ground
+		// units/infantry in one check.
+		for (int y = result.MinY; y < result.MinY + result.Height; ++y)
+		{
+			for (int x = result.MinX; x < result.MinX + result.Width; ++x)
+			{
+				const int index = BuildRangeIndex(result, x, y);
+
+				if ((flags[index] & FlagRange) == 0)
+					continue;
+
+				const auto pCell = MapClass::Instance.TryGetCellAt(
+					CellStruct { static_cast<short>(x), static_cast<short>(y) });
+
+				if (pCell)
+					result.Heights[index] = pCell->GetCellCoords().Z;
+
+				if (!pCell || !pCell->CanThisExistHere(SpeedType::Foot, pType, pOwner))
+					flags[index] |= FlagOccupied;
+			}
+		}
+
+		const auto pRules = RulesExt::Global();
+		const bool disableRed = pRules->BuildRange_DisableRed;
+		const bool disableYellow = pRules->BuildRange_DisableYellow;
+
+		result.Cells.resize(cellCount);
+
+		for (size_t i = 0; i < cellCount; ++i)
+		{
+			if (disableRed)
+			{
+				// With red disabled the whole actual range is presented as
+				// buildable green. This also overrides DisableYellow.
+				result.Cells[i] = (flags[i] & FlagRange) != 0
+					? BuildRangeCellType::Legal
+					: BuildRangeCellType::None;
+			}
+			else if (flags[i] & FlagOccupied)
+				result.Cells[i] = BuildRangeCellType::Occupied;
+			else if (flags[i] & FlagLegal)
+				result.Cells[i] = BuildRangeCellType::Legal;
+			else if (flags[i] & FlagRange)
+				result.Cells[i] = disableYellow
+					? BuildRangeCellType::Occupied
+					: BuildRangeCellType::Blocked;
+			else
+				result.Cells[i] = BuildRangeCellType::None;
+		}
+
+		// The white outline follows the green legal set. Non-green cells that
+		// are enclosed by the green set are holes: their inner edges are not
+		// part of the outer contour and are deliberately not drawn.
+		const int holeWidth = result.Width + 2;
+		const int holeHeight = result.Height + 2;
+		std::vector<BYTE> exterior(static_cast<size_t>(holeWidth) * holeHeight, 0);
+		std::vector<int> queue;
+		queue.reserve(static_cast<size_t>(holeWidth) * holeHeight);
+
+		auto isGreen = [&](int x, int y)
+		{
+			if (x < result.MinX || x >= result.MinX + result.Width
+				|| y < result.MinY || y >= result.MinY + result.Height)
+			{
+				return false;
+			}
+
+			const int index = BuildRangeIndex(result, x, y);
+			return result.Cells[index] == BuildRangeCellType::Legal;
+		};
+
+		auto pushExterior = [&](int hx, int hy)
+		{
+			if (hx < 0 || hx >= holeWidth || hy < 0 || hy >= holeHeight)
+				return;
+
+			const int x = result.MinX + hx - 1;
+			const int y = result.MinY + hy - 1;
+
+			if (isGreen(x, y))
+				return;
+
+			const int index = hy * holeWidth + hx;
+
+			if (exterior[index])
+				return;
+
+			exterior[index] = 1;
+			queue.push_back(index);
+		};
+
+		for (int x = 0; x < holeWidth; ++x)
+		{
+			pushExterior(x, 0);
+			pushExterior(x, holeHeight - 1);
+		}
+
+		for (int y = 0; y < holeHeight; ++y)
+		{
+			pushExterior(0, y);
+			pushExterior(holeWidth - 1, y);
+		}
+
+		for (size_t i = 0; i < queue.size(); ++i)
+		{
+			const int index = queue[i];
+			const int hx = index % holeWidth;
+			const int hy = index / holeWidth;
+
+			pushExterior(hx - 1, hy);
+			pushExterior(hx + 1, hy);
+			pushExterior(hx, hy - 1);
+			pushExterior(hx, hy + 1);
+		}
+
+		auto isHole = [&](int x, int y)
+		{
+			if (x < result.MinX || x >= result.MinX + result.Width
+				|| y < result.MinY || y >= result.MinY + result.Height)
+			{
+				return false;
+			}
+
+			const int index = BuildRangeIndex(result, x, y);
+
+			if (result.Cells[index] == BuildRangeCellType::Legal)
+				return false;
+
+			return !exterior[(y - result.MinY + 1) * holeWidth + (x - result.MinX + 1)];
+		};
+
+		auto isColoredNonGreen = [&](int x, int y)
+		{
+			if (x < result.MinX || x >= result.MinX + result.Width
+				|| y < result.MinY || y >= result.MinY + result.Height)
+			{
+				return false;
+			}
+
+			const auto value = result.Cells[BuildRangeIndex(result, x, y)];
+
+			return value == BuildRangeCellType::Blocked
+				|| value == BuildRangeCellType::Occupied;
+		};
 
 		static constexpr CellStruct neighbours[] = {
 			{ 0, -1 }, { 1, 0 }, { 0, 1 }, { -1, 0 }
 		};
 
-		for (auto const& cell : legal)
+		for (int y = result.MinY; y < result.MinY + result.Height; ++y)
 		{
-			for (auto const& offset : neighbours)
+			for (int x = result.MinX; x < result.MinX + result.Width; ++x)
 			{
-				const CellStruct neighbour {
-					static_cast<short>(cell.X + offset.X),
-					static_cast<short>(cell.Y + offset.Y)
-				};
-
-				if (legal.contains(neighbour))
+				if (!isGreen(x, y))
 					continue;
 
-				BuildRangeEdge edge {};
+				const int cellZ = result.Heights[BuildRangeIndex(result, x, y)];
 
-				if (offset.Y < 0)
+				for (auto const& offset : neighbours)
 				{
-					edge.A = { cell.X, cell.Y };
-					edge.B = { static_cast<short>(cell.X + 1), cell.Y };
-				}
-				else if (offset.X > 0)
-				{
-					edge.A = { static_cast<short>(cell.X + 1), cell.Y };
-					edge.B = { static_cast<short>(cell.X + 1), static_cast<short>(cell.Y + 1) };
-				}
-				else if (offset.Y > 0)
-				{
-					edge.A = { cell.X, static_cast<short>(cell.Y + 1) };
-					edge.B = { static_cast<short>(cell.X + 1), static_cast<short>(cell.Y + 1) };
-				}
-				else
-				{
-					edge.A = { cell.X, cell.Y };
-					edge.B = { cell.X, static_cast<short>(cell.Y + 1) };
-				}
+					const int nx = x + offset.X;
+					const int ny = y + offset.Y;
 
-				result.push_back(edge);
+					if (isGreen(nx, ny))
+						continue;
+
+					// Keep the outer contour and draw the colour boundaries
+					// between green and red/yellow. Edges around empty enclosed
+					// holes remain hidden.
+					if (!isColoredNonGreen(nx, ny) && isHole(nx, ny))
+						continue;
+
+					BuildRangeEdge edge {};
+
+					if (offset.Y < 0)
+					{
+						edge.A = { static_cast<short>(x), static_cast<short>(y) };
+						edge.B = { static_cast<short>(x + 1), static_cast<short>(y) };
+					}
+					else if (offset.X > 0)
+					{
+						edge.A = { static_cast<short>(x + 1), static_cast<short>(y) };
+						edge.B = { static_cast<short>(x + 1), static_cast<short>(y + 1) };
+					}
+					else if (offset.Y > 0)
+					{
+						edge.A = { static_cast<short>(x), static_cast<short>(y + 1) };
+						edge.B = { static_cast<short>(x + 1), static_cast<short>(y + 1) };
+					}
+					else
+					{
+						edge.A = { static_cast<short>(x), static_cast<short>(y) };
+						edge.B = { static_cast<short>(x), static_cast<short>(y + 1) };
+					}
+
+					edge.Z = cellZ;
+					result.Edges.push_back(edge);
+				}
 			}
 		}
+
+		MergeBuildRangeEdges(result.Edges);
 
 		return result;
 	}
 
-	CoordStruct CellCornerToWorld(const CellStruct& corner)
+	CoordStruct CellCornerToWorld(const CellStruct& corner, int z)
+	{
+		return CoordStruct {
+			static_cast<int>(corner.X) * Unsorted::LeptonsPerCell,
+			static_cast<int>(corner.Y) * Unsorted::LeptonsPerCell,
+			z
+		};
+	}
+
+	CoordStruct CellCornerToWorldFromCorner(const CellStruct& corner)
 	{
 		CoordStruct result {
 			static_cast<int>(corner.X) * Unsorted::LeptonsPerCell,
@@ -270,11 +716,126 @@ namespace
 		return result;
 	}
 
-	void DrawBuildRangeOutline()
+	static bool RasterizeBuildRangeCell(
+		std::vector<BYTE>& mask,
+		const RectangleStruct& clip,
+		const Point2D (&points)[4],
+		BYTE value)
 	{
-		auto const pBuilding = specific_cast<BuildingClass*>(DisplayClass::Instance.CurrentBuilding);
+		if (clip.Width <= 0 || clip.Height <= 0 || value == 0)
+			return false;
 
-		if (!pBuilding || !pBuilding->Type || !DisplayClass::Instance.CurrentFoundation_Data)
+		float minY = static_cast<float>(points[0].Y);
+		float maxY = minY;
+
+		for (int i = 1; i < 4; ++i)
+		{
+			minY = std::min(minY, static_cast<float>(points[i].Y));
+			maxY = std::max(maxY, static_cast<float>(points[i].Y));
+		}
+
+		const int firstY = std::max(clip.Y, static_cast<int>(std::ceil(minY)));
+		const int lastY = std::min(clip.Y + clip.Height - 1, static_cast<int>(std::floor(maxY)));
+
+		if (firstY > lastY)
+			return false;
+
+		bool written = false;
+
+		for (int y = firstY; y <= lastY; ++y)
+		{
+			const float scanY = static_cast<float>(y) + 0.5f;
+			float intersections[4];
+			int count = 0;
+
+			for (int i = 0; i < 4; ++i)
+			{
+				const Point2D& a = points[i];
+				const Point2D& b = points[(i + 1) & 3];
+				const float ay = static_cast<float>(a.Y);
+				const float by = static_cast<float>(b.Y);
+
+				if ((ay <= scanY && by > scanY) || (by <= scanY && ay > scanY))
+				{
+					const float ax = static_cast<float>(a.X);
+					const float bx = static_cast<float>(b.X);
+					intersections[count++] = ax + (scanY - ay) * (bx - ax) / (by - ay);
+				}
+			}
+
+			if (count < 2)
+				continue;
+
+			std::sort(intersections, intersections + count);
+
+			for (int i = 0; i + 1 < count; i += 2)
+			{
+				const int firstX = std::max(clip.X, static_cast<int>(std::ceil(intersections[i])));
+				const int lastX = std::min(clip.X + clip.Width - 1,
+					static_cast<int>(std::floor(intersections[i + 1])));
+
+				if (firstX > lastX)
+					continue;
+
+				const int row = (y - clip.Y) * clip.Width;
+
+				for (int x = firstX; x <= lastX; ++x)
+				{
+					BYTE& pixel = mask[row + x - clip.X];
+
+					if (value > pixel)
+						pixel = value;
+				}
+
+				written = true;
+			}
+		}
+
+		return written;
+	}
+
+	static bool ProjectBuildRangeCell(int x, int y, Point2D (&points)[4])
+	{
+		const CellStruct corners[4] = {
+			{ static_cast<short>(x), static_cast<short>(y) },
+			{ static_cast<short>(x + 1), static_cast<short>(y) },
+			{ static_cast<short>(x + 1), static_cast<short>(y + 1) },
+			{ static_cast<short>(x), static_cast<short>(y + 1) }
+		};
+
+		for (int i = 0; i < 4; ++i)
+			points[i] = TacticalClass::Instance->CoordsToClient(CellCornerToWorldFromCorner(corners[i])).first;
+
+		return true;
+	}
+
+	ColorStruct GetBuildRangeColor(BuildRangeCellType type)
+	{
+		const auto pRules = RulesExt::Global();
+
+		switch (type)
+		{
+		case BuildRangeCellType::Legal:
+			return pRules->BuildRange_LegalColor;
+		case BuildRangeCellType::Blocked:
+			return pRules->BuildRange_BlockedColor;
+		case BuildRangeCellType::Occupied:
+			return pRules->BuildRange_OccupiedColor;
+		default:
+			return ColorStruct { 0, 0, 0 };
+		}
+	}
+
+	void DrawBuildRangeFill(const BuildRangeData& data)
+	{
+		const auto pRules = RulesExt::Global();
+
+		if (!pRules->BuildRange_Fill || data.Width <= 0 || data.Height <= 0)
+			return;
+
+		const int opacity = std::clamp(static_cast<int>(pRules->BuildRange_FillOpacity), 0, 100);
+
+		if (opacity <= 0)
 			return;
 
 		auto const pSurface = DSurface::Temp;
@@ -282,48 +843,309 @@ namespace
 		if (!pSurface || !TacticalClass::Instance)
 			return;
 
+		const RectangleStruct rect = pSurface->GetRect();
+		const RectangleStruct clip = Drawing::Intersect(DSurface::ViewBounds, rect);
+
+		if (clip.Width <= 0 || clip.Height <= 0)
+			return;
+
+		const Point2D tacticalPos = TacticalClass::Instance->TacticalPos;
+		const double zoom = ZoomManager::CurrentZoom;
+		const RectangleStruct view = DSurface::ViewBounds;
+
+		const bool sameView =
+			CachedBuildRangeFill.Valid
+			&& CachedBuildRangeFill.Revision == CachedBuildRangeRevision
+			&& CachedBuildRangeFill.TacticalPos.X == tacticalPos.X
+			&& CachedBuildRangeFill.TacticalPos.Y == tacticalPos.Y
+			&& CachedBuildRangeFill.Zoom == zoom
+			&& CachedBuildRangeFill.View.X == view.X
+			&& CachedBuildRangeFill.View.Y == view.Y
+			&& CachedBuildRangeFill.View.Width == view.Width
+			&& CachedBuildRangeFill.View.Height == view.Height;
+
+		if (!sameView)
+		{
+			std::vector<BYTE> mask(static_cast<size_t>(clip.Width) * clip.Height, 0);
+
+			for (int y = data.MinY; y < data.MinY + data.Height; ++y)
+			{
+				for (int x = data.MinX; x < data.MinX + data.Width; ++x)
+				{
+					const BYTE value = static_cast<BYTE>(data.Cells[BuildRangeIndex(data, x, y)]);
+
+					if (value == 0)
+						continue;
+
+					Point2D points[4];
+					ProjectBuildRangeCell(x, y, points);
+					RasterizeBuildRangeCell(mask, clip, points, value);
+				}
+			}
+
+			CachedBuildRangeFill.Spans.clear();
+
+			for (int y = 0; y < clip.Height; ++y)
+			{
+				const int row = y * clip.Width;
+				int x = 0;
+
+				while (x < clip.Width)
+				{
+					const BYTE value = mask[row + x];
+
+					if (value == 0)
+					{
+						++x;
+						continue;
+					}
+
+					const int firstX = x;
+
+					while (x < clip.Width && mask[row + x] == value)
+						++x;
+
+					CachedBuildRangeFill.Spans.push_back({
+						clip.Y + y,
+						clip.X + firstX,
+						clip.X + x - 1,
+						value
+					});
+				}
+			}
+
+			CachedBuildRangeFill.Revision = CachedBuildRangeRevision;
+			CachedBuildRangeFill.TacticalPos = tacticalPos;
+			CachedBuildRangeFill.Zoom = zoom;
+			CachedBuildRangeFill.View = view;
+			CachedBuildRangeFill.Valid = true;
+		}
+
+		if (CachedBuildRangeFill.Spans.empty() || !pSurface->CanLock())
+			return;
+
+		BYTE* const base = static_cast<BYTE*>(pSurface->Lock(0, 0));
+
+		if (!base)
+			return;
+
+		const int pitch = pSurface->GetPitch();
+		const int bpp = pSurface->GetBytesPerPixel();
+
+		if (bpp != 2 && bpp != 4)
+		{
+			pSurface->Unlock();
+			return;
+		}
+
+		const ColorStruct colors[4] = {
+			ColorStruct { 0, 0, 0 },
+			GetBuildRangeColor(BuildRangeCellType::Legal),
+			GetBuildRangeColor(BuildRangeCellType::Blocked),
+			GetBuildRangeColor(BuildRangeCellType::Occupied)
+		};
+
+		const int inverseOpacity = 100 - opacity;
+
+		if (bpp == 2
+			&& (!CachedBuildRangeLut.Valid
+				|| CachedBuildRangeLut.Opacity != opacity
+				|| CachedBuildRangeLut.Colors[1] != colors[1]
+				|| CachedBuildRangeLut.Colors[2] != colors[2]
+				|| CachedBuildRangeLut.Colors[3] != colors[3]))
+		{
+			for (int type = 1; type < 4; ++type)
+			{
+				const auto& color = colors[type];
+
+				for (int value = 0; value < 65536; ++value)
+				{
+					const int dr = ((value >> 11) & 0x1F) * 255 / 31;
+					const int dg = ((value >> 5) & 0x3F) * 255 / 63;
+					const int db = (value & 0x1F) * 255 / 31;
+
+					const int r = (static_cast<int>(color.R) * opacity + dr * inverseOpacity) / 100;
+					const int g = (static_cast<int>(color.G) * opacity + dg * inverseOpacity) / 100;
+					const int b = (static_cast<int>(color.B) * opacity + db * inverseOpacity) / 100;
+
+					CachedBuildRangeLut.Lut[type][value] = static_cast<WORD>(
+						((r * 31 / 255) << 11) | ((g * 63 / 255) << 5) | (b * 31 / 255));
+				}
+
+				CachedBuildRangeLut.Colors[type] = color;
+			}
+
+			CachedBuildRangeLut.Opacity = opacity;
+			CachedBuildRangeLut.Valid = true;
+		}
+
+		for (auto const& span : CachedBuildRangeFill.Spans)
+		{
+			BYTE* const row = base + static_cast<size_t>(span.Y) * pitch;
+			const ColorStruct& color = colors[span.Type];
+
+			for (int x = span.X0; x <= span.X1; ++x)
+			{
+				BYTE* const pixel = row + static_cast<size_t>(x) * bpp;
+
+				if (bpp == 2)
+				{
+					WORD& destination = *reinterpret_cast<WORD*>(pixel);
+					destination = CachedBuildRangeLut.Lut[span.Type][destination];
+				}
+				else
+				{
+					DWORD& destination = *reinterpret_cast<DWORD*>(pixel);
+					const int dr = static_cast<int>((destination >> 16) & 0xFF);
+					const int dg = static_cast<int>((destination >> 8) & 0xFF);
+					const int db = static_cast<int>(destination & 0xFF);
+
+					const int r = (static_cast<int>(color.R) * opacity + dr * inverseOpacity) / 100;
+					const int g = (static_cast<int>(color.G) * opacity + dg * inverseOpacity) / 100;
+					const int b = (static_cast<int>(color.B) * opacity + db * inverseOpacity) / 100;
+
+					destination = (destination & 0xFF000000u)
+						| (static_cast<DWORD>(r) << 16)
+						| (static_cast<DWORD>(g) << 8)
+						| static_cast<DWORD>(b);
+				}
+			}
+		}
+
+		pSurface->Unlock();
+	}
+
+	void DrawBuildRangeOutline(const BuildRangeData& data)
+	{
+		auto const pSurface = DSurface::Temp;
+
+		if (!pSurface || !TacticalClass::Instance)
+			return;
+
+		const Point2D tacticalPos = TacticalClass::Instance->TacticalPos;
+		const double zoom = ZoomManager::CurrentZoom;
+		RectangleStruct view = DSurface::ViewBounds;
+
+		const bool sameView =
+			CachedBuildRangeOutline.Valid
+			&& CachedBuildRangeOutline.Revision == CachedBuildRangeRevision
+			&& CachedBuildRangeOutline.TacticalPos.X == tacticalPos.X
+			&& CachedBuildRangeOutline.TacticalPos.Y == tacticalPos.Y
+			&& CachedBuildRangeOutline.Zoom == zoom
+			&& CachedBuildRangeOutline.View.X == view.X
+			&& CachedBuildRangeOutline.View.Y == view.Y
+			&& CachedBuildRangeOutline.View.Width == view.Width
+			&& CachedBuildRangeOutline.View.Height == view.Height;
+
+		if (!sameView)
+		{
+			CachedBuildRangeOutline.Edges.clear();
+			CachedBuildRangeOutline.Edges.reserve(data.Edges.size());
+
+			for (auto const& edge : data.Edges)
+			{
+				const CoordStruct worldA = CellCornerToWorld(edge.A, edge.Z);
+				const CoordStruct worldB = CellCornerToWorld(edge.B, edge.Z);
+				auto const [screenA, visibleA] = TacticalClass::Instance->CoordsToClient(worldA);
+				auto const [screenB, visibleB] = TacticalClass::Instance->CoordsToClient(worldB);
+
+				if (!visibleA && !visibleB)
+					continue;
+
+				Point2D start = screenA;
+				Point2D end = screenB;
+
+				if (!Line_In_Bounds(&start, &end, &view))
+					continue;
+
+				CachedBuildRangeOutline.Edges.push_back({ start, end });
+			}
+
+			CachedBuildRangeOutline.Revision = CachedBuildRangeRevision;
+			CachedBuildRangeOutline.TacticalPos = tacticalPos;
+			CachedBuildRangeOutline.Zoom = zoom;
+			CachedBuildRangeOutline.View = view;
+			CachedBuildRangeOutline.Valid = true;
+		}
+
+		const int color = Drawing::RGB_To_Int(255, 255, 255);
+
+		for (auto const& edge : CachedBuildRangeOutline.Edges)
+		{
+			Point2D start = edge.A;
+			Point2D end = edge.B;
+			pSurface->DrawDashed(&start, &end, color, 0);
+		}
+	}
+
+	std::uint64_t HashBuildRangeFoundation()
+	{
+		std::uint64_t hash = 1469598103934665603ull;
+
+		for (auto pCell = DisplayClass::Instance.CurrentFoundation_Data;
+			pCell && !IsFoundationSentinel(*pCell); ++pCell)
+		{
+			hash ^= static_cast<std::uint64_t>(static_cast<uint16_t>(pCell->X));
+			hash *= 1099511628211ull;
+			hash ^= static_cast<std::uint64_t>(static_cast<uint16_t>(pCell->Y));
+			hash *= 1099511628211ull;
+		}
+
+		return hash;
+	}
+
+	void DrawBuildRange()
+	{
+		auto const pBuilding = specific_cast<BuildingClass*>(DisplayClass::Instance.CurrentBuilding);
+
+		if (!pBuilding || !pBuilding->Type || !pBuilding->Owner
+			|| !DisplayClass::Instance.CurrentFoundation_Data)
+		{
+			return;
+		}
+
 		auto const pType = pBuilding->Type;
 		auto const pOwner = pBuilding->Owner;
 		const unsigned int frame = Unsorted::CurrentFrame;
 		const int buildingCount = BuildingClass::Array.Count;
+		const std::uint64_t foundationHash = HashBuildRangeFoundation();
+		const auto pRules = RulesExt::Global();
+		const unsigned int refreshFrames = static_cast<unsigned int>(
+			std::clamp(static_cast<int>(pRules->BuildRange_RefreshFrames), 1, 60));
 
 		if (!CachedBuildRangeType
 			|| CachedBuildRangeType != pType
 			|| CachedBuildRangeOwner != pOwner
 			|| CachedBuildRangeBuildingCount != buildingCount
-			|| frame - CachedBuildRangeFrame >= 15)
+			|| CachedBuildRangeFoundationHash != foundationHash
+			|| frame < CachedBuildRangeFrame
+			|| frame - CachedBuildRangeFrame >= refreshFrames)
 		{
-			CachedBuildRangeEdges = BuildLegalRangeEdges(pBuilding);
+			BuildRangeData newData = BuildBuildRangeData(pBuilding);
+			const std::uint64_t dataHash = HashBuildRangeData(newData);
+
+			if (dataHash != CachedBuildRangeDataHash || CachedBuildRangeData.Cells.empty())
+			{
+				CachedBuildRangeData = std::move(newData);
+				CachedBuildRangeDataHash = dataHash;
+				++CachedBuildRangeRevision;
+			}
+
 			CachedBuildRangeType = pType;
 			CachedBuildRangeOwner = pOwner;
 			CachedBuildRangeBuildingCount = buildingCount;
 			CachedBuildRangeFrame = frame;
+			CachedBuildRangeFoundationHash = foundationHash;
 		}
 
-		const int color = Drawing::RGB_To_Int(255, 255, 255);
-
-		for (auto const& edge : CachedBuildRangeEdges)
-		{
-			const CoordStruct worldA = CellCornerToWorld(edge.A);
-			const CoordStruct worldB = CellCornerToWorld(edge.B);
-			auto const [screenA, visibleA] = TacticalClass::Instance->CoordsToClient(worldA);
-			auto const [screenB, visibleB] = TacticalClass::Instance->CoordsToClient(worldB);
-
-			if (!visibleA && !visibleB)
-				continue;
-
-			Point2D start = screenA;
-			Point2D end = screenB;
-
-			if (Line_In_Bounds(&start, &end, &DSurface::ViewBounds))
-				pSurface->DrawDashed(&start, &end, color, 0);
-		}
+		DrawBuildRangeFill(CachedBuildRangeData);
+		DrawBuildRangeOutline(CachedBuildRangeData);
 	}
 }
 
 DEFINE_HOOK(0x6D528A, TacticalClass_DrawPlacement_PlacementPreview, 0x6)
 {
-	DrawBuildRangeOutline();
+	DrawBuildRange();
 
 	if (!RulesExt::Global()->PlacementPreview || !Phobos::Config::ShowPlacementPreview)
 		return 0;

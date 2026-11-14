@@ -353,6 +353,7 @@ New:
 - [SpyPlane and ParaDrop spawn points](New-or-Enhanced-Logics.md#spyplane-and-paradrop-spawn-points)
 - [Extended aircraft missions enhancements](New-or-Enhanced-Logics.md#extended-aircraft-missions-enhancements)
 - [Battle Points](New-or-Enhanced-Logics.md#battle-points)
+- [Build range fill](User-Interface.md#build-range-fill) with legal, red-blocked and occupied cell colours
 - [Tactical time stop](User-Interface.md#tactical-time-stop), [target filter buttons](User-Interface.md#target-filter-buttons) and [center message column](User-Interface.md#center-message-column)
 - [Reverse move and toggle auto-reverse](User-Interface.md#reverse-move-and-toggle-auto-reverse), [right-click commands](User-Interface.md#right-click-commands) and [cinema mode](User-Interface.md#cinema-mode)
 - [FPS counter](User-Interface.md#fps-counter), [game timer](User-Interface.md#game-timer) and [continue game on exit](User-Interface.md#continue-game-on-exit)

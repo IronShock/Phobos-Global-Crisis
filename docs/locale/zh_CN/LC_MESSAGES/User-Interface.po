@@ -2962,6 +2962,91 @@ msgstr ""
 "ContinueGameOnExit=true  ; boolean - write a per-mission continue save "
 "when quitting\n"
 
+#: ../User-Interface.md:524
+msgid "Build range fill"
+msgstr "建造范围填充"
+
+#: ../User-Interface.md:526
+msgid "While placing a building, the legal construction range is tinted by cell:"
+msgstr "放置建筑时，合法建造范围会按格子着色："
+
+#: ../User-Interface.md:528
+msgid ""
+"**Green**: the current building's complete foundation can be placed."
+msgstr "**绿色**：当前建筑的完整地基可以放置。"
+
+#: ../User-Interface.md:529
+msgid ""
+"**Yellow**: the actual build range that is not green or red. This includes the "
+"engine's Adjacent neighbourhood and every cell covered by a proximity-valid "
+"candidate foundation. No artificial enclosed-hole fill is added."
+msgstr ""
+"**黄色**：实际建造范围中既不是绿色也不是红色的全部格子，包括引擎 Adjacent 邻近范围"
+"以及所有通过邻近检查的候选地基覆盖格。不再人为填补封闭空洞。"
+
+#: ../User-Interface.md:530
+msgid ""
+"**Red**: a cell where the cell-level build check fails. This covers terrain, "
+"trees/rocks, water, cliffs, overlays, walls, buildings, ground units and "
+"infantry. Airborne objects and units in limbo/transport do not fail the check "
+"and are not marked red."
+msgstr ""
+"**红色**：单格建造检查失败的格子，包括地形、树木/岩石、水面、悬崖、覆盖物、墙、建筑、"
+"地面单位和步兵。空中单位以及处于 Limbo/运输中的单位不会导致检查失败，因此不标红。"
+
+#: ../User-Interface.md:532
+msgid ""
+"The colour priority is **red > green > yellow**; a cell that is both a valid "
+"green placement and part of the larger Adjacent range shows green. Red and "
+"yellow are shown outside the green area, but only inside the actual build "
+"range around the player's base."
+msgstr ""
+"颜色优先级为 **红 > 绿 > 黄**；同时属于有效地基和更大邻近范围的格子显示绿色。"
+"红色和黄色可以显示在绿色区域外，但只在玩家基地周围的实际建造范围内。"
+
+#: ../User-Interface.md:536
+msgid ""
+"The original **white dashed outline** of the green legal area is kept. It is "
+"also drawn along boundaries between green and red/yellow cells. Edges around "
+"empty enclosed holes are not drawn; red/yellow areas that do not border green "
+"have no white outline. The overlay is drawn under units and buildings, is "
+"client-side only and does not affect multiplayer synchronisation."
+msgstr ""
+"绿色合法区域原有的**白色虚线外轮廓**保留，并会沿绿色与红色/黄色的格子交界绘制。"
+"空的封闭孔洞边缘不绘制；不与绿色相邻的红色/黄色区域没有白色外轮廓。"
+"该覆盖层绘制在单位与建筑下方，仅在客户端生效，不影响联机同步。"
+
+#: ../User-Interface.md:538
+msgid ""
+"`BuildRange.DisableYellow=yes` merges all yellow cells into red; green remains "
+"green. `BuildRange.DisableRed=yes` makes the entire actual range green and "
+"overrides `DisableYellow`."
+msgstr ""
+"`BuildRange.DisableYellow=yes` 会把所有黄色格并入红色；绿色仍保持绿色。"
+"`BuildRange.DisableRed=yes` 会把整个实际建造范围显示为绿色，并覆盖 `DisableYellow`。"
+
+#: ../User-Interface.md:540
+msgid ""
+"[AudioVisual]\n"
+"BuildRange.Fill=yes              ; boolean - enable the cell fill\n"
+"BuildRange.DisableYellow=no      ; yes = merge yellow cells into red\n"
+"BuildRange.DisableRed=no         ; yes = show the whole actual range as green\n"
+"BuildRange.Color.Legal=0,255,0   ; R,G,B - complete foundation can be placed\n"
+"BuildRange.Color.Blocked=255,255,0 ; R,G,B - actual range not green/red\n"
+"BuildRange.Color.Occupied=255,0,0 ; R,G,B - cell build check failed\n"
+"BuildRange.FillOpacity=5         ; integer 0-100 - fill opacity\n"
+"BuildRange.RefreshFrames=15      ; integer 1-60 - occupancy refresh interval\n"
+msgstr ""
+"[AudioVisual]\n"
+"BuildRange.Fill=yes              ; 布尔值 - 启用格子填充\n"
+"BuildRange.DisableYellow=no      ; yes = 黄色格并入红色\n"
+"BuildRange.DisableRed=no         ; yes = 整个实际建造范围显示为绿色\n"
+"BuildRange.Color.Legal=0,255,0   ; R,G,B - 完整地基可放置\n"
+"BuildRange.Color.Blocked=255,255,0 ; R,G,B - 实际建造范围中非绿非红\n"
+"BuildRange.Color.Occupied=255,0,0 ; R,G,B - 单格建造检查失败\n"
+"BuildRange.FillOpacity=5         ; 整数 0-100 - 填充透明度\n"
+"BuildRange.RefreshFrames=15      ; 整数 1-60 - 占用刷新间隔\n"
+
 #~ msgid "![selectbox](_static/images/selectbox.png)"
 #~ msgstr ""
 
