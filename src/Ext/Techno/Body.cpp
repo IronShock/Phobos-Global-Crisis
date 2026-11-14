@@ -14,6 +14,8 @@
 #include <Ext/WeaponType/Body.h>
 
 #include <Utilities/AresFunctions.h>
+#include <Utilities/CrashTrace.h>
+#include <Utilities/PointerSanity.h>
 
 TechnoExt::ExtContainer TechnoExt::ExtMap;
 UnitClass* TechnoExt::Deployer = nullptr;
@@ -307,6 +309,11 @@ bool TechnoExt::ConvertToType(FootClass* pThis, TechnoTypeClass* pToType)
 {
 	const auto pType = pThis->GetTechnoType();
 
+	auto const pLocoBefore = pThis->Locomotor.GetInterfacePtr();
+	CrashTrace::Push(CrashTrace::TypeConvertEnter, pThis, pToType, pType,
+		pType ? pType->get_ID() : nullptr, pToType ? pToType->get_ID() : nullptr, pLocoBefore,
+		pLocoBefore ? CrashTrace::GetVTable(pLocoBefore) : nullptr, -1);
+
 	// It really should be at the beginning.
 	if (pType == pToType || pType->WhatAmI() != pToType->WhatAmI())
 	{
@@ -327,6 +334,12 @@ bool TechnoExt::ConvertToType(FootClass* pThis, TechnoTypeClass* pToType)
 			auto const pTypeExt = TechnoExt::ExtMap.Find(pThis);
 			pTypeExt->UpdateTypeData(pToType);
 			pTypeExt->UpdateTypeData_Foot();
+
+			auto const pLocoAfter = pThis->Locomotor.GetInterfacePtr();
+			CrashTrace::Push(CrashTrace::TypeConvertLeave, pThis, pToType, pToType,
+				pToType->get_ID(), pToType->get_ID(), pLocoAfter,
+				pLocoAfter ? CrashTrace::GetVTable(pLocoAfter) : nullptr, -1, 1);
+
 			return true;
 		}
 
@@ -404,7 +417,25 @@ bool TechnoExt::ConvertToType(FootClass* pThis, TechnoTypeClass* pToType)
 	CLSID nowLocoID;
 	ILocomotion* iloco = pThis->Locomotor;
 	const auto& toLoco = pToType->Locomotor;
-	if ((SUCCEEDED(static_cast<LocomotionClass*>(iloco)->GetClassID(&nowLocoID)) && nowLocoID != toLoco))
+
+	// A stale locomotor is one of the few things this function cannot recover
+	// from: calling GetClassID/End_Piggyback on it jumps through a dead vtable.
+	// Detect it, leave the pointer alone and let the GetFireError guard keep the
+	// object from using it.
+	const bool locoSane = iloco && PointerSanity::IsSaneLocomotor(iloco);
+
+	if (iloco && !locoSane)
+	{
+		CrashTrace::Push(CrashTrace::LocomotorSuspect, pThis, nullptr, pType,
+			pType ? pType->get_ID() : nullptr, nullptr, iloco,
+			CrashTrace::GetVTable(iloco), -1);
+		Debug::Log("[Locomotor] %s has a corrupt locomotor %p; conversion will not touch it\n",
+			pThis->get_ID(), iloco);
+	}
+
+	if (locoSane
+		&& SUCCEEDED(static_cast<LocomotionClass*>(iloco)->GetClassID(&nowLocoID))
+		&& nowLocoID != toLoco)
 	{
 		// because we are throwing away the locomotor in a split second, piggybacking
 		// has to be stopped. otherwise the object might remain in a weird state.
@@ -414,17 +445,38 @@ bool TechnoExt::ConvertToType(FootClass* pThis, TechnoTypeClass* pToType)
 		if (auto const newLoco = LocomotionClass::CreateInstance(toLoco))
 		{
 			newLoco->Link_To_Object(pThis);
+			auto const pNewLoco = newLoco.GetInterfacePtr();
+
+			Debug::Log("[Locomotor] %s converted %s -> %s (%p -> %p)\n",
+				pThis->get_ID(), pType->get_ID(), pToType->get_ID(), iloco, pNewLoco);
+
 			pThis->Locomotor = std::move(newLoco);
+
+			CrashTrace::Push(CrashTrace::LocomotorReplaced, pThis, nullptr, pToType,
+				pToType->get_ID(), nullptr, pNewLoco,
+				pNewLoco ? CrashTrace::GetVTable(pNewLoco) : nullptr, -1);
 		}
 	}
 
 	const auto& jjLoco = LocomotionClass::CLSIDs::Jumpjet;
 	if (pToType->BalloonHover && pToType->DeployToLand && prevType->Locomotor != jjLoco && toLoco == jjLoco)
-		pThis->Locomotor->Move_To(pThis->Location);
+	{
+		if (auto const pLoco = pThis->Locomotor.GetInterfacePtr();
+			pLoco && PointerSanity::IsSaneLocomotor(pLoco))
+		{
+			pThis->Locomotor->Move_To(pThis->Location);
+		}
+	}
 
 	auto const pTypeExt = TechnoExt::ExtMap.Find(pThis);
 	pTypeExt->UpdateTypeData(pToType);
 	pTypeExt->UpdateTypeData_Foot();
+
+	auto const pLocoAfter = pThis->Locomotor.GetInterfacePtr();
+	CrashTrace::Push(CrashTrace::TypeConvertLeave, pThis, pToType, pToType,
+		pToType->get_ID(), pToType->get_ID(), pLocoAfter,
+		pLocoAfter ? CrashTrace::GetVTable(pLocoAfter) : nullptr, -1, 1);
+
 	return true;
 }
 
@@ -870,6 +922,12 @@ void TechnoExt::ResolveWeaponAmmoConfig(TechnoClass* pThis, int slot, WeaponAmmo
 		out.Infinite = true;
 		return;
 	}
+
+	// [General] AresWeaponAmmo=no disables the per-weapon ammo pools and falls
+	// back to the vanilla single unit Ammo pool. ExtraFire entries are forced
+	// unlimited in RefreshExtraFireAmmoEntry.
+	if (!Phobos::Config::AresWeaponAmmo)
+		return;
 
 	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
 	auto const pWeaponExt = WeaponTypeExt::ExtMap.Find(pWeapon);
@@ -1674,6 +1732,7 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 		.Process(this->Shield)
 		.Process(this->LaserTrails)
 		.Process(this->AttachedEffects)
+		.Process(this->Abilities)
 		.Process(this->AE)
 		.Process(this->PreviousType)
 		.Process(this->AnimRefCount)
@@ -1756,6 +1815,9 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 
 	Stm.Process(this->ExtraFireAmmoCount);
 	Stm.Process(this->ExtraFireAmmoReloadTimer);
+	Stm.Process(this->GiftBox_Initialized);
+	Stm.Process(this->GiftBox_Opened);
+	Stm.Process(this->GiftBox_Timer);
 	Stm.Process(this->AccelStartSpeed);
 	Stm.Process(this->AccelTargetSpeed);
 	Stm.Process(this->AccelStartFrame);
@@ -1765,6 +1827,7 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 
 void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)
 {
+	AbilityClass::OnOwnerRemoved(this->OwnerObject());
 	AnnounceInvalidPointer(this->AirstrikeTargetingMe, ptr);
 	AnnounceInvalidPointer(this->PendingAttackTarget, ptr);
 

@@ -10989,3 +10989,42 @@ msgstr ""
 "BattlePointsSidebar.Label=       ; string - sidebar point label\n"
 "BattlePointsSidebar.Label.InvertPosition=no ; boolean\n"
 
+#: ../New-or-Enhanced-Logics.md:3555
+msgid "Credits"
+msgstr "鸣谢"
+
+#: ../New-or-Enhanced-Logics.md:3557
+msgid ""
+"TSFog is an independent implementation in this build. Its engine-behaviour "
+"research, hook organisation and parts of the implementation were informed by "
+"[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) "
+"and its "
+"[Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack) "
+"platform."
+msgstr ""
+"本构建中的 TSFog 为独立实现。其引擎行为研究、Hook 组织方式和部分实现思路参考了 "
+"[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) "
+"及其 "
+"[Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack) "
+"平台。"
+
+#: ../New-or-Enhanced-Logics.md:3564
+msgid ""
+"Credit goes to **CrimRecya (绯红热茶)** (Phobos-Recya platform author), "
+"**TaranDahl (航味麻酱)** (principal feature author), **wenrui1245 "
+"(凌风之云awa)** (branch maintainer), and all **Phobos** developers, "
+"maintainers and contributors. Special thanks to **Sidoupiar**, **钢铁之锤**, "
+"the **凛冬将至** community and the **pbs testing group**."
+msgstr ""
+"感谢 **CrimRecya（绯红热茶）**（Phobos-Recya 平台作者）、"
+"**TaranDahl（航味麻酱）**（主要功能作者）、**wenrui1245（凌风之云awa）**"
+"（分支维护者），以及 **Phobos** 的所有开发者、维护者和贡献者。"
+"特别感谢 **Sidoupiar**、**钢铁之锤**、**凛冬将至**社区和 **pbs 测试群**。"
+
+#: ../New-or-Enhanced-Logics.md:3570
+msgid ""
+"TSFog is not an official Phobos or Phobos-Recya feature, and this "
+"acknowledgement does not imply endorsement by those projects or their authors."
+msgstr ""
+"TSFog 并非 Phobos 或 Phobos-Recya 的官方功能；本鸣谢不代表上述项目及其作者的认可或背书。"
+

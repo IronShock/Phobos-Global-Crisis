@@ -1,10 +1,13 @@
 ﻿#include "Phobos.h"
 
 #include <CCINIClass.h>
+#include <Drawing.h>
+#include <Utilities/CrashTrace.h>
 #include <StringTable.h>
 #include <ScenarioClass.h>
 #include <SessionClass.h>
 #include <MessageListClass.h>
+#include <sstream>
 #include <HouseClass.h>
 #include <GameOptionsClass.h>
 
@@ -66,6 +69,7 @@ bool Phobos::Config::ReverseMove = false;
 bool Phobos::Config::TacticalGear = false;
 bool Phobos::Config::TacticalPause = true;
 int Phobos::Config::SmudgeCapacity = 1;
+bool Phobos::Config::AresWeaponAmmo = true;
 bool Phobos::Config::TSFog = true;
 bool Phobos::Config::TSFog_RevealAllClear = true;
 bool Phobos::Config::TSFog_ForceAll = false;
@@ -79,6 +83,43 @@ bool Phobos::Config::ArtImageSwap = false;
 bool Phobos::Config::ShowPlacementPreview = false;
 bool Phobos::Config::EnableSelectBox = false;
 bool Phobos::Config::DigitalDisplay_Enable = false;
+bool Phobos::Config::GetFireErrorGuard = true;
+bool Phobos::Config::GetFireErrorTrace = true;
+bool Phobos::Config::AirHeightLine_Enable = true;
+bool Phobos::Config::AirHeightLine_Dashed = false;
+bool Phobos::Config::AirHeightLine_GroundMarker = true;
+bool Phobos::Config::AirHeightLine_ShowCoordinates = false;
+int Phobos::Config::AirHeightLine_Thickness = 2;
+COLORREF Phobos::Config::AirHeightLine_Color = RGB(192, 192, 192);
+bool Phobos::Config::UnitStatusPanel_Enable = true;
+double Phobos::Config::UnitStatusPanel_Scale = 1.0;
+int Phobos::Config::UnitStatusPanel_OffsetX = 0;
+int Phobos::Config::UnitStatusPanel_OffsetY = 0;
+int Phobos::Config::UnitStatusPanel_MultiPortraitLimit = 60;
+bool Phobos::Config::UnitStatusPanel_MessageAvoid = true;
+bool Phobos::Config::UnitStatusPanel_FilterAvoid = true;
+int Phobos::Config::UnitStatusPanel_Opacity = 50;
+int Phobos::Config::UnitStatusPanel_SliceSize = 9;
+int Phobos::Config::UnitStatusPanel_ShadowOpacity = 35;
+bool Phobos::Config::UnitStatusPanel_HealthTint = true;
+COLORREF Phobos::Config::UnitStatusPanel_HealthTintYellow = RGB(255, 255, 0);
+COLORREF Phobos::Config::UnitStatusPanel_HealthTintRed = RGB(255, 64, 64);
+int Phobos::Config::UnitStatusPanel_TurretOffsetMode = 6;
+int Phobos::Config::UnitStatusPanel_TurretOffsetX = 0;
+int Phobos::Config::UnitStatusPanel_TurretOffsetY = 0;
+int Phobos::Config::UnitStatusPanel_BuildingScale = 100;
+bool Phobos::Config::UnitStatusPanel_SHPShadow = false;
+std::vector<std::string> Phobos::Config::UnitStatusPanel_TurretOffsetNoOffset;
+std::unordered_map<std::string, int> Phobos::Config::UnitStatusPanel_TurretOffsetModeOverrides;
+bool Phobos::Config::UnitStatusPanel_NativeDraw = false;
+bool Phobos::Config::UnitStatusPanel_VoxelNativeDraw = true;
+std::string Phobos::Config::UnitStatusPanel_Background = "ustatus.pcx";
+std::string Phobos::Config::UnitStatusPanel_Portrait;
+std::string Phobos::Config::UnitStatusPanel_PortraitFrame;
+std::string Phobos::Config::UnitStatusPanel_InfoFrame;
+std::string Phobos::Config::UnitStatusPanel_BottomFrame;
+std::string Phobos::Config::UnitStatusPanel_SkillSlot;
+std::string Phobos::Config::UnitStatusPanel_SkillIcon;
 bool Phobos::Config::MessageApplyHoverState = false;
 bool Phobos::Config::MessageDisplayInCenter = false;
 int Phobos::Config::MessageDisplayInCenter_LabelsCount = 6;
@@ -127,6 +168,7 @@ bool Phobos::Config::RightClickCommands = false;
 bool Phobos::Config::RightClickCommands_Debug = false;
 
 // MO_ExperienceEnhancements port (src/MOEE/).
+bool Phobos::Config::MOEE_Disabled = false;
 bool Phobos::Config::MOEE_MegaListCap = true;
 bool Phobos::Config::MOEE_Observer = true;
 int Phobos::Config::MOEE_WaypointCap = 128;
@@ -285,6 +327,126 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 	Phobos::Config::RealTimeTimers_Adaptive = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "RealTimeTimers.Adaptive", false);
 	Phobos::Config::EnableSelectBox = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "EnableSelectBox", false);
 	Phobos::Config::DigitalDisplay_Enable = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "DigitalDisplay.Enable", false);
+	Phobos::Config::GetFireErrorGuard = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "GetFireError.Guard", true);
+	Phobos::Config::GetFireErrorTrace = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "GetFireError.Trace", true);
+	CrashTrace::Enabled = Phobos::Config::GetFireErrorTrace;
+	Phobos::Config::AirHeightLine_Enable = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "AirHeightLine.Enable", true);
+	Phobos::Config::AirHeightLine_Dashed = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "AirHeightLine.Dashed", false);
+	Phobos::Config::AirHeightLine_GroundMarker = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "AirHeightLine.GroundMarker", true);
+	Phobos::Config::AirHeightLine_ShowCoordinates = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "AirHeightLine.ShowCoordinates", false);
+	Phobos::Config::AirHeightLine_Thickness = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "AirHeightLine.Thickness", 2), 1, 4);
+	{
+		const ColorStruct airLineColor = CCINIClass::INI_RA2MD.ReadColor(
+			phobosSection, "AirHeightLine.Color", ColorStruct(192, 192, 192));
+		Phobos::Config::AirHeightLine_Color = Drawing::RGB_To_Int(airLineColor);
+	}
+	Phobos::Config::UnitStatusPanel_Enable = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "UnitStatusPanel.Enable", true);
+	Phobos::Config::UnitStatusPanel_Scale = CCINIClass::INI_RA2MD.ReadDouble(phobosSection, "UnitStatusPanel.Scale", 1.0);
+	Phobos::Config::UnitStatusPanel_OffsetX = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.OffsetX", 0);
+	Phobos::Config::UnitStatusPanel_OffsetY = CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.OffsetY", 0);
+	Phobos::Config::UnitStatusPanel_MultiPortraitLimit = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.MultiPortraitLimit", 60), 0, 256);
+	Phobos::Config::UnitStatusPanel_MessageAvoid = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "UnitStatusPanel.MessageAvoid", true);
+	Phobos::Config::UnitStatusPanel_FilterAvoid = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "UnitStatusPanel.FilterAvoid", true);
+	Phobos::Config::UnitStatusPanel_Opacity = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.Opacity", 50), 0, 100);
+	Phobos::Config::UnitStatusPanel_SliceSize = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.SliceSize", 9), 0, 64);
+	Phobos::Config::UnitStatusPanel_ShadowOpacity = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.ShadowOpacity", 35), 0, 100);
+	Phobos::Config::UnitStatusPanel_HealthTint =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "UnitStatusPanel.HealthTint", true);
+	{
+		const ColorStruct yellow = CCINIClass::INI_RA2MD.ReadColor(
+			phobosSection, "UnitStatusPanel.HealthTint.Yellow", ColorStruct(255, 255, 0));
+		const ColorStruct red = CCINIClass::INI_RA2MD.ReadColor(
+			phobosSection, "UnitStatusPanel.HealthTint.Red", ColorStruct(255, 64, 64));
+
+		Phobos::Config::UnitStatusPanel_HealthTintYellow = Drawing::RGB_To_Int(yellow);
+		Phobos::Config::UnitStatusPanel_HealthTintRed = Drawing::RGB_To_Int(red);
+	}
+	Phobos::Config::UnitStatusPanel_TurretOffsetMode = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.TurretOffsetMode", 6), 0, 6);
+	Phobos::Config::UnitStatusPanel_TurretOffsetX =
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.TurretOffsetX", 0);
+	Phobos::Config::UnitStatusPanel_TurretOffsetY =
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.TurretOffsetY", 0);
+	Phobos::Config::UnitStatusPanel_BuildingScale = std::clamp(
+		CCINIClass::INI_RA2MD.ReadInteger(phobosSection, "UnitStatusPanel.BuildingScale", 100), 1, 100);
+	Phobos::Config::UnitStatusPanel_SHPShadow =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "UnitStatusPanel.SHPShadow", false);
+
+	Phobos::Config::UnitStatusPanel_NativeDraw =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "UnitStatusPanel.NativeDraw", false);
+	Phobos::Config::UnitStatusPanel_VoxelNativeDraw =
+		CCINIClass::INI_RA2MD.ReadBool(phobosSection, "UnitStatusPanel.VoxelNativeDraw", true);
+
+	Phobos::Config::UnitStatusPanel_TurretOffsetModeOverrides.clear();
+	{
+		constexpr const char* prefix = "UnitStatusPanel.TurretOffsetMode.";
+		const int keyCount = CCINIClass::INI_RA2MD.GetKeyCount(phobosSection);
+
+		for (int i = 0; i < keyCount; ++i)
+		{
+			const char* key = CCINIClass::INI_RA2MD.GetKeyName(phobosSection, i);
+
+			if (!key || std::strncmp(key, prefix, std::strlen(prefix)) != 0)
+				continue;
+
+			const int value = std::clamp(
+				CCINIClass::INI_RA2MD.ReadInteger(phobosSection, key, 1), 0, 6);
+			Phobos::Config::UnitStatusPanel_TurretOffsetModeOverrides.emplace(
+				key + std::strlen(prefix), value);
+		}
+	}
+
+	Phobos::Config::UnitStatusPanel_TurretOffsetNoOffset.clear();
+	{
+		char buffer[Phobos::readLength] {};
+		CCINIClass::INI_RA2MD.ReadString(
+			phobosSection, "UnitStatusPanel.TurretOffsetNoOffset", "", buffer);
+		std::stringstream stream(buffer);
+		std::string item;
+
+		while (std::getline(stream, item, ','))
+		{
+			const auto first = item.find_first_not_of(" 	");
+			const auto last = item.find_last_not_of(" 	");
+
+			if (first != std::string::npos)
+				Phobos::Config::UnitStatusPanel_TurretOffsetNoOffset.emplace_back(
+					item.substr(first, last - first + 1));
+		}
+	}
+
+	auto readPanelPath = [&](const char* key, std::string& target, bool keepOnMissing)
+	{
+		char buffer[Phobos::readLength] {};
+
+		CCINIClass::INI_RA2MD.ReadString(phobosSection, key, "", buffer);
+
+		if (!buffer[0])
+		{
+			if (!keepOnMissing)
+				target.clear();
+
+			return;
+		}
+
+		if (_stricmp(buffer, NONE_STR) == 0)
+			target.clear();
+		else
+			target = buffer;
+	};
+
+	readPanelPath("UnitStatusPanel.Background", Phobos::Config::UnitStatusPanel_Background, true);
+	readPanelPath("UnitStatusPanel.Portrait", Phobos::Config::UnitStatusPanel_Portrait, false);
+	readPanelPath("UnitStatusPanel.PortraitFrame", Phobos::Config::UnitStatusPanel_PortraitFrame, false);
+	readPanelPath("UnitStatusPanel.InfoFrame", Phobos::Config::UnitStatusPanel_InfoFrame, false);
+	readPanelPath("UnitStatusPanel.BottomFrame", Phobos::Config::UnitStatusPanel_BottomFrame, false);
+	readPanelPath("UnitStatusPanel.SkillSlot", Phobos::Config::UnitStatusPanel_SkillSlot, false);
+	readPanelPath("UnitStatusPanel.SkillIcon", Phobos::Config::UnitStatusPanel_SkillIcon, false);
 	// [DISABLED] SaveGameOnScenarioStart 已强制关闭：任务开始时不再写入阻塞式自动存档
 	// （约 8MB），否则开局会冻结 2-3 秒。客户端重写 RA2MD.ini 时会丢弃该配置项，
 	// 因此无法通过配置文件可靠地关闭，这里直接在代码中禁用。
@@ -634,6 +796,15 @@ DEFINE_HOOK(0x52D21F, InitRules_ThingsThatShouldntBeSerailized, 0x6)
 	CCINIClass* const pINI_RULESMD = CCINIClass::INI_Rules;
 
 	RulesClass::Instance->Read_JumpjetControls(pINI_RULESMD);
+
+	// [General] AresWeaponAmmo: master switch for the per-weapon/ExtraFire ammo
+	// pools. yes (default) keeps the custom pools; no restores the vanilla single
+	// unit Ammo pool and makes ExtraFire unlimited.
+	Phobos::Config::AresWeaponAmmo = pINI_RULESMD->ReadBool(GameStrings::General, "AresWeaponAmmo", true);
+
+	// [General] MOEE.Disabled: master switch for the MO_ExperienceEnhancements
+	// gameplay modules and keyboard commands. Diagnostics/crash logging stay on.
+	Phobos::Config::MOEE_Disabled = pINI_RULESMD->ReadBool(GameStrings::General, "MOEE.Disabled", false);
 
 	Phobos::Config::ArtImageSwap = pINI_RULESMD->ReadBool(GameStrings::General, "ArtImageSwap", false);
 	Phobos::Config::UnitPowerDrain = pINI_RULESMD->ReadBool(GameStrings::General, "UnitPowerDrain", false);

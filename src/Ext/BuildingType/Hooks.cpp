@@ -1,11 +1,24 @@
 #include "Body.h"
 
 #include <TacticalClass.h>
+#include <DisplayClass.h>
+#include <CellClass.h>
+#include <MapClass.h>
+#include <Drawing.h>
+#include <Unsorted.h>
 #include <Ext/Rules/Body.h>
 
 #include <Utilities/Macro.h>
 #include <Utilities/EnumFunctions.h>
 #include <Utilities/GeneralUtils.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 DEFINE_HOOK(0x460285, BuildingTypeClass_LoadFromINI_Muzzle, 0x6)
 {
@@ -69,8 +82,249 @@ DEFINE_HOOK(0x458623, BuildingClass_KillOccupiers_Replace_MuzzleFix, 0x7)
 	return 0;
 }
 
+namespace
+{
+	struct BuildRangeCellHash
+	{
+		size_t operator()(const CellStruct& cell) const noexcept
+		{
+			return (static_cast<size_t>(static_cast<uint16_t>(cell.X)) << 16)
+				^ static_cast<uint16_t>(cell.Y);
+		}
+	};
+
+	struct BuildRangeEdge
+	{
+		CellStruct A;
+		CellStruct B;
+	};
+
+	std::vector<BuildRangeEdge> CachedBuildRangeEdges;
+	BuildingTypeClass* CachedBuildRangeType = nullptr;
+	HouseClass* CachedBuildRangeOwner = nullptr;
+	int CachedBuildRangeBuildingCount = -1;
+	unsigned int CachedBuildRangeFrame = 0;
+
+	bool IsFoundationSentinel(const CellStruct& cell)
+	{
+		return cell.X == 0x7FFF && cell.Y == 0x7FFF;
+	}
+
+	std::vector<BuildRangeEdge> BuildLegalRangeEdges(BuildingClass* pBuilding)
+	{
+		std::vector<BuildRangeEdge> result;
+
+		if (!pBuilding || !pBuilding->Type || !DisplayClass::Instance.CurrentFoundation_Data)
+			return result;
+
+		auto const pType = pBuilding->Type;
+		auto const pOwner = pBuilding->Owner;
+
+		if (!pOwner || pType->Adjacent < 0)
+			return result;
+
+		// Copy the foundation data so the placement checks cannot disturb the
+		// active foundation used by the game.
+		std::vector<CellStruct> foundation;
+		for (auto pCell = DisplayClass::Instance.CurrentFoundation_Data;
+			!IsFoundationSentinel(*pCell); ++pCell)
+		{
+			foundation.push_back(*pCell);
+		}
+		foundation.push_back(CellStruct { 0x7FFF, 0x7FFF });
+
+		if (foundation.size() <= 1)
+			return result;
+
+		const int adjacent = std::clamp(static_cast<int>(pType->Adjacent), 0, 30);
+		const int foundationWidth = std::max(1, static_cast<int>(pType->GetFoundationWidth()));
+		const int foundationHeight = std::max(1, static_cast<int>(pType->GetFoundationHeight(false)));
+
+		int minX = std::numeric_limits<int>::max();
+		int minY = std::numeric_limits<int>::max();
+		int maxX = std::numeric_limits<int>::min();
+		int maxY = std::numeric_limits<int>::min();
+
+		for (auto const pAnchor : BuildingClass::Array)
+		{
+			if (!pAnchor || !pAnchor->IsAlive || pAnchor->InLimbo
+				|| !pAnchor->Type || !pAnchor->Owner || !pAnchor->Type->BaseNormal
+				|| !pOwner->IsAlliedWith(pAnchor->Owner))
+			{
+				continue;
+			}
+
+			const CellStruct anchor = pAnchor->GetMapCoords();
+			const int anchorWidth = std::max(1, static_cast<int>(pAnchor->Type->GetFoundationWidth()));
+			const int anchorHeight = std::max(1, static_cast<int>(pAnchor->Type->GetFoundationHeight(false)));
+			const int margin = adjacent + foundationWidth + foundationHeight
+				+ anchorWidth + anchorHeight + 2;
+
+			minX = std::min(minX, static_cast<int>(anchor.X) - margin);
+			minY = std::min(minY, static_cast<int>(anchor.Y) - margin);
+			maxX = std::max(maxX, static_cast<int>(anchor.X) + anchorWidth + margin);
+			maxY = std::max(maxY, static_cast<int>(anchor.Y) + anchorHeight + margin);
+		}
+
+		if (minX > maxX || minY > maxY)
+			return result;
+
+		const auto& mapBounds = MapClass::Instance.MapCoordBounds;
+		minX = std::clamp(minX, mapBounds.Left, mapBounds.Right);
+		minY = std::clamp(minY, mapBounds.Top, mapBounds.Bottom);
+		maxX = std::clamp(maxX, mapBounds.Left, mapBounds.Right);
+		maxY = std::clamp(maxY, mapBounds.Top, mapBounds.Bottom);
+
+		std::unordered_set<CellStruct, BuildRangeCellHash> legal;
+		legal.reserve(static_cast<size_t>(std::max(0, maxX - minX + 1))
+			* static_cast<size_t>(std::max(0, maxY - minY + 1)));
+
+		for (int y = minY; y <= maxY; ++y)
+		{
+			for (int x = minX; x <= maxX; ++x)
+			{
+				CellStruct candidate { static_cast<short>(x), static_cast<short>(y) };
+
+				// Proximity is the cheaper rejection test; only run the full
+				// terrain/occupancy check for candidates that are near a base.
+				if (!DisplayClass::Instance.PassesProximityCheck(
+					pType, pOwner->ArrayIndex, foundation.data(), &candidate))
+				{
+					continue;
+				}
+
+				if (!pType->CanPlaceHere(&candidate, pOwner))
+					continue;
+
+				for (auto const& offset : foundation)
+				{
+					if (IsFoundationSentinel(offset))
+						break;
+
+					const CellStruct cell {
+						static_cast<short>(candidate.X + offset.X),
+						static_cast<short>(candidate.Y + offset.Y)
+					};
+
+					if (MapClass::Instance.CellExists(cell))
+						legal.insert(cell);
+				}
+			}
+		}
+
+		static constexpr CellStruct neighbours[] = {
+			{ 0, -1 }, { 1, 0 }, { 0, 1 }, { -1, 0 }
+		};
+
+		for (auto const& cell : legal)
+		{
+			for (auto const& offset : neighbours)
+			{
+				const CellStruct neighbour {
+					static_cast<short>(cell.X + offset.X),
+					static_cast<short>(cell.Y + offset.Y)
+				};
+
+				if (legal.contains(neighbour))
+					continue;
+
+				BuildRangeEdge edge {};
+
+				if (offset.Y < 0)
+				{
+					edge.A = { cell.X, cell.Y };
+					edge.B = { static_cast<short>(cell.X + 1), cell.Y };
+				}
+				else if (offset.X > 0)
+				{
+					edge.A = { static_cast<short>(cell.X + 1), cell.Y };
+					edge.B = { static_cast<short>(cell.X + 1), static_cast<short>(cell.Y + 1) };
+				}
+				else if (offset.Y > 0)
+				{
+					edge.A = { cell.X, static_cast<short>(cell.Y + 1) };
+					edge.B = { static_cast<short>(cell.X + 1), static_cast<short>(cell.Y + 1) };
+				}
+				else
+				{
+					edge.A = { cell.X, cell.Y };
+					edge.B = { cell.X, static_cast<short>(cell.Y + 1) };
+				}
+
+				result.push_back(edge);
+			}
+		}
+
+		return result;
+	}
+
+	CoordStruct CellCornerToWorld(const CellStruct& corner)
+	{
+		CoordStruct result {
+			static_cast<int>(corner.X) * Unsorted::LeptonsPerCell,
+			static_cast<int>(corner.Y) * Unsorted::LeptonsPerCell,
+			0
+		};
+
+		result.Z = MapClass::Instance.GetCellFloorHeight(result);
+		return result;
+	}
+
+	void DrawBuildRangeOutline()
+	{
+		auto const pBuilding = specific_cast<BuildingClass*>(DisplayClass::Instance.CurrentBuilding);
+
+		if (!pBuilding || !pBuilding->Type || !DisplayClass::Instance.CurrentFoundation_Data)
+			return;
+
+		auto const pSurface = DSurface::Temp;
+
+		if (!pSurface || !TacticalClass::Instance)
+			return;
+
+		auto const pType = pBuilding->Type;
+		auto const pOwner = pBuilding->Owner;
+		const unsigned int frame = Unsorted::CurrentFrame;
+		const int buildingCount = BuildingClass::Array.Count;
+
+		if (!CachedBuildRangeType
+			|| CachedBuildRangeType != pType
+			|| CachedBuildRangeOwner != pOwner
+			|| CachedBuildRangeBuildingCount != buildingCount
+			|| frame - CachedBuildRangeFrame >= 15)
+		{
+			CachedBuildRangeEdges = BuildLegalRangeEdges(pBuilding);
+			CachedBuildRangeType = pType;
+			CachedBuildRangeOwner = pOwner;
+			CachedBuildRangeBuildingCount = buildingCount;
+			CachedBuildRangeFrame = frame;
+		}
+
+		const int color = Drawing::RGB_To_Int(255, 255, 255);
+
+		for (auto const& edge : CachedBuildRangeEdges)
+		{
+			const CoordStruct worldA = CellCornerToWorld(edge.A);
+			const CoordStruct worldB = CellCornerToWorld(edge.B);
+			auto const [screenA, visibleA] = TacticalClass::Instance->CoordsToClient(worldA);
+			auto const [screenB, visibleB] = TacticalClass::Instance->CoordsToClient(worldB);
+
+			if (!visibleA && !visibleB)
+				continue;
+
+			Point2D start = screenA;
+			Point2D end = screenB;
+
+			if (Line_In_Bounds(&start, &end, &DSurface::ViewBounds))
+				pSurface->DrawDashed(&start, &end, color, 0);
+		}
+	}
+}
+
 DEFINE_HOOK(0x6D528A, TacticalClass_DrawPlacement_PlacementPreview, 0x6)
 {
+	DrawBuildRangeOutline();
+
 	if (!RulesExt::Global()->PlacementPreview || !Phobos::Config::ShowPlacementPreview)
 		return 0;
 

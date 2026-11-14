@@ -19,9 +19,19 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\New\Entity\FilterButtonClass.h" />
+    <ClInclude Include="src\UI\UnitStatusPanel.h" />
+    <ClInclude Include="src\UI\UnitPortrait.h" />
+    <ClInclude Include="src\UI\AirHeightLine.h" />
+    <ClInclude Include="src\New\Type\AbilityTypeClass.h" />
+    <ClInclude Include="src\New\Entity\AbilityClass.h" />
     <ClInclude Include="src\Misc\Fog\Fog.h" />
     <ClInclude Include="src\Ext\Techno\RadarSignal.h" />
     <ClCompile Include="src\New\Entity\FilterButtonClass.cpp" />
+    <ClCompile Include="src\UI\UnitStatusPanel.cpp" />
+    <ClCompile Include="src\UI\UnitPortrait.cpp" />
+    <ClCompile Include="src\UI\AirHeightLine.cpp" />
+    <ClCompile Include="src\New\Type\AbilityTypeClass.cpp" />
+    <ClCompile Include="src\New\Entity\AbilityClass.cpp" />
     <ClCompile Include="src\Ext\Infantry\Hooks.cpp" />
     <ClCompile Include="src\Ext\Infantry\Hooks.Firing.cpp" />
     <ClCompile Include="src\Ext\Smudge\Hooks.cpp" />

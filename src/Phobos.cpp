@@ -22,6 +22,7 @@
 #include <Misc/PerfOverlay.h>
 #include <Ext/Unit/Footprint.h>
 #include <Misc/TacticalMap.h>
+#include <UI/UnitStatusPanel.h>
 #include <LoadBar/LoadBarManager.h>
 #include <GameStrings.h>
 
@@ -443,6 +444,7 @@ DEFINE_HOOK(0x4F4583, GScreenClass_DrawText, 0x6)
 		return 0;
 
 	LoadBarManager::DrawAll();
+	UnitStatusPanel::Draw();
 
 	const int marginX = Phobos::Config::MessageDisplayInCenter ? 28 : 10;
 	int coordY = 0;

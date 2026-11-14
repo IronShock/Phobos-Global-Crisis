@@ -14,6 +14,7 @@
 #include <New/Type/Affiliated/PassengerDeletionTypeClass.h>
 #include <New/Type/DigitalDisplayTypeClass.h>
 #include <New/Type/SelectBoxTypeClass.h>
+#include <New/Type/AbilityTypeClass.h>
 #include <New/Type/Affiliated/DroppodTypeClass.h>
 #include <New/Type/Affiliated/TiberiumEaterTypeClass.h>
 #include <New/Type/Affiliated/CreateUnitTypeClass.h>
@@ -223,6 +224,22 @@ public:
 		Valueable<bool> Ammo_Shared;
 		Valueable<int> Ammo_Shared_Group;
 
+		// GiftBox (Kratos-style "produce a dummy unit, then spawn the real unit").
+		// The subset below covers the keys used by Rise of the East.
+		ValueableVector<TechnoTypeClass*> GiftBox_Types;
+		ValueableVector<int> GiftBox_Nums;
+		ValueableVector<int> GiftBox_RandomWeights;
+		ValueableVector<double> GiftBox_Chances;
+		Valueable<bool> GiftBox_RandomType { false };
+		Valueable<bool> GiftBox_UseChancesAndWeight { false };
+		Valueable<bool> GiftBox_Remove { true };
+		Valueable<bool> GiftBox_Destroy { false };
+		Valueable<int> GiftBox_Delay { 0 };
+		Valueable<int> GiftBox_RandomDelay { 0 };
+		Valueable<int> GiftBox_RandomRange { 0 };
+		Valueable<bool> GiftBox_EmptyCell { false };
+		Valueable<bool> GiftBox_InheritAmmo { false };
+
 		// Per-weapon ammo pools. Indexed by weapon slot (0 = primary, 1 = secondary,
 		// 2..17 = additional weapon slots). Elite weapons share the slot's pool.
 		WeaponAmmoOverride WeaponAmmo[TechnoTypeClass::MaxWeapons];
@@ -298,6 +315,7 @@ public:
 
 		Valueable<bool> DigitalDisplay_Disable;
 		ValueableVector<DigitalDisplayTypeClass*> DigitalDisplayTypes;
+		ValueableVector<AbilityTypeClass*> Abilities;
 
 		Nullable<SelectBoxTypeClass*> SelectBox;
 		Valueable<bool> HideSelectBox;
@@ -812,6 +830,7 @@ public:
 
 			, DigitalDisplay_Disable { false }
 			, DigitalDisplayTypes {}
+			, Abilities {}
 
 			, SelectBox {}
 			, HideSelectBox { false }

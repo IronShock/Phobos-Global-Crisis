@@ -3551,3 +3551,21 @@ Anims=DUSTFOGA,LuzDisparomed
 ; 0=DUSTFOGA
 ; 1=LuzDisparomed
 ```
+
+### Credits
+
+TSFog is an independent implementation in this build. Its engine-behaviour
+research, hook organisation and parts of the implementation were informed by
+[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya)
+and its
+[Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack)
+platform.
+
+Credit goes to **CrimRecya (绯红热茶)** (Phobos-Recya platform author),
+**TaranDahl (航味麻酱)** (principal feature author), **wenrui1245
+(凌风之云awa)** (branch maintainer), and all **Phobos** developers,
+maintainers and contributors. Special thanks to **Sidoupiar**, **钢铁之锤**,
+the **凛冬将至** community and the **pbs testing group**.
+
+TSFog is not an official Phobos or Phobos-Recya feature, and this
+acknowledgement does not imply endorsement by those projects or their authors.

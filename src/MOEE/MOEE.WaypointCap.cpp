@@ -120,6 +120,9 @@ namespace MOEE::WaypointCap
 
 	void Poll()
 	{
+		if (MOEE::Disabled())
+			return;
+
 		const bool mp = IsMultiplayer();
 
 		if (mp)

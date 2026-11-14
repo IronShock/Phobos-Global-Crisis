@@ -786,6 +786,87 @@ namespace detail
 	}
 
 	template <>
+	inline bool read<AbilityActivation>(AbilityActivation& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			if (_strcmpi(parser.value(), "active") == 0)
+			{
+				value = AbilityActivation::Active;
+				return true;
+			}
+
+			if (_strcmpi(parser.value(), "passive") == 0)
+			{
+				value = AbilityActivation::Passive;
+				return true;
+			}
+
+			Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected Active or Passive");
+		}
+
+		return false;
+	}
+
+	template <>
+	inline bool read<AbilityTarget>(AbilityTarget& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			static const std::pair<const char*, AbilityTarget> Names[] =
+			{
+				{ "self", AbilityTarget::Self },
+				{ "ally", AbilityTarget::Ally },
+				{ "allies", AbilityTarget::Ally },
+				{ "enemy", AbilityTarget::Enemy },
+				{ "enemies", AbilityTarget::Enemy },
+				{ "cell", AbilityTarget::Cell },
+			};
+
+			for (auto const& [name, val] : Names)
+			{
+				if (_strcmpi(parser.value(), name) == 0)
+				{
+					value = val;
+					return true;
+				}
+			}
+
+			Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected Self, Ally, Enemy or Cell");
+		}
+
+		return false;
+	}
+
+	template <>
+	inline bool read<AbilityPassiveTrigger>(AbilityPassiveTrigger& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			static const std::pair<const char*, AbilityPassiveTrigger> Names[] =
+			{
+				{ "always", AbilityPassiveTrigger::Always },
+				{ "interval", AbilityPassiveTrigger::Interval },
+				{ "ondamaged", AbilityPassiveTrigger::OnDamaged },
+				{ "onhit", AbilityPassiveTrigger::OnDamaged },
+			};
+
+			for (auto const& [name, val] : Names)
+			{
+				if (_strcmpi(parser.value(), name) == 0)
+				{
+					value = val;
+					return true;
+				}
+			}
+
+			Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected Always, Interval or OnDamaged");
+		}
+
+		return false;
+	}
+
+	template <>
 	inline bool read<AttachedAnimFlag>(AttachedAnimFlag& value, INI_EX& parser, const char* pSection, const char* pKey)
 	{
 		if (parser.ReadString(pSection, pKey))

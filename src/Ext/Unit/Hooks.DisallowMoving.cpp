@@ -4,6 +4,8 @@
 #include "UnitClass.h"
 
 #include <Utilities/GeneralUtils.h>
+#include <Utilities/CrashTrace.h>
+#include <Utilities/PointerSanity.h>
 #include <Ext/Techno/Body.h>
 #include <Ext/TechnoType/Body.h>
 #include <Locomotion/AdvancedDriveLocomotionClass.h>
@@ -223,6 +225,17 @@ DEFINE_HOOK(0x6F7CE2, TechnoClass_CanAutoTargetObject_DisallowMoving, 0x6)
 	GET(TechnoClass* const, pThis, EDI);
 	GET(AbstractClass* const, pTarget, ESI);
 	GET(const int, weaponIndex, EBX);
+
+	// Never let a stale candidate reach abstract_cast/GetFireError: both go
+	// through virtual calls and would jump through the dead object's vtable.
+	if (!PointerSanity::IsSaneObject(pThis) || !PointerSanity::IsSaneObject(pTarget))
+	{
+		CrashTrace::Push(CrashTrace::FireErrorRejected, pThis, pTarget,
+			nullptr, nullptr, nullptr, nullptr, nullptr, weaponIndex, 0, 5);
+
+		R->EAX(FireError::ILLEGAL);
+		return 0x6F7CEE;
+	}
 
 	// TA.VirtualUnit: virtual units can never be auto-targeted.
 	if (auto const pTargetTechno = abstract_cast<TechnoClass*>(pTarget))

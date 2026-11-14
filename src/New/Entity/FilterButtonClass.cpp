@@ -18,6 +18,7 @@
 
 #include <Ext/Techno/Body.h>
 #include <Ext/Rules/Body.h>
+#include <UI/UnitStatusPanel.h>
 #include <Commands/TacticalPause.h>
 
 #include <Utilities/GeneralUtils.h>
@@ -40,6 +41,31 @@ static const char* FilterPCXNames[] = {
 
 // Cached PCX surfaces (loaded once).
 static BSurface* FilterPCXSurfaces[6] = {};
+
+// Shared origin for the button group and its background box. When the unit
+// status panel is enabled the filter buttons move above the panel instead of
+// sitting in the bottom-left corner where the panel now lives.
+static void GetFilterGroupOrigin(int& startX, int& startY)
+{
+	constexpr int buttonSize = 28;
+
+	startX = 5;
+	startY = DSurface::Composite->GetHeight() - 65;
+
+	if (Phobos::Config::UnitStatusPanel_Enable && Phobos::Config::UnitStatusPanel_FilterAvoid)
+	{
+		const auto panel = UnitStatusPanel::GetPanelRect();
+
+		if (panel.Width > 0 && panel.Height > 0)
+		{
+			startX = panel.X + 5;
+			startY = panel.Y - buttonSize - 8;
+
+			if (startY < 0)
+				startY = 0;
+		}
+	}
+}
 
 // ============================================================================
 // Construction / Destruction
@@ -281,15 +307,14 @@ void FilterButtonClass::DrawBackground()
 {
 	const auto pSurface = DSurface::Composite;
 
-	// Geometry must match InitButtons():
-	//   buttonSize = 28, gap = 3, startX = 5, startY = screenHeight - 65
+	// Geometry must match InitButtons().
 	constexpr int buttonSize = 28;
 	constexpr int gap = 3;
-	constexpr int startX = 5;
 	constexpr int padding = 4;  // padding around the button group
 
-	const int screenHeight = pSurface->GetHeight();
-	const int startY = screenHeight - 65;
+	int startX = 5;
+	int startY = pSurface->GetHeight() - 65;
+	GetFilterGroupOrigin(startX, startY);
 
 	// Total width of all 6 buttons + 5 gaps
 	const int buttonsWidth = ButtonCount * buttonSize + (ButtonCount - 1) * gap;
@@ -321,10 +346,10 @@ void FilterButtonClass::InitButtons()
 
 	constexpr int buttonSize = 28;
 	constexpr int gap = 3;
-	constexpr int startX = 5;
 
-	const int screenHeight = DSurface::Composite->GetHeight();
-	const int startY = screenHeight - 65;
+	int startX = 5;
+	int startY = DSurface::Composite->GetHeight() - 65;
+	GetFilterGroupOrigin(startX, startY);
 
 	const TargetFilter types[] = {
 		TargetFilter::Infantry,

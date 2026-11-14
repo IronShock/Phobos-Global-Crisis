@@ -1,5 +1,13 @@
 #pragma once
 
+// TSFog is an independent implementation in this build. Its engine-behaviour
+// research, hook organisation and parts of the implementation were informed by
+// Phobos-Recya / Phobos-Recloud (https://github.com/wenrui1245/Phobos-Recya)
+// and the Phobos-Mix / Mix-ECpack platform. Credit to CrimRecya, TaranDahl,
+// wenrui1245, and all Phobos developers, maintainers and contributors. This is
+// not an official Phobos or Phobos-Recya feature, and this acknowledgement does
+// not imply endorsement by them.
+
 #include <Phobos.h>
 #include <Utilities/Macro.h>
 #include <Utilities/Debug.h>

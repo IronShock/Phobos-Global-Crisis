@@ -16,6 +16,7 @@
 #include <New/Type/InsigniaTypeClass.h>
 #include <New/Type/SelectBoxTypeClass.h>
 #include <New/Type/AttachmentTypeClass.h>
+#include <New/Type/AbilityTypeClass.h>
 #include <Utilities/Patch.h>
 #include <MapClass.h>
 #include <CellClass.h>
@@ -55,6 +56,10 @@ void RulesExt::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 	BannerTypeClass::LoadFromINIList(pINI);
 	InsigniaTypeClass::LoadFromINIList(pINI);
 	AttachmentTypeClass::LoadFromINIList(pINI);
+	AbilityTypeClass::LoadFromINIList(pINI);
+
+	if (!AbilityTypeClass::Array.empty())
+		Debug::Log("[AbilityTypes] Loaded %d ability types.\n", static_cast<int>(AbilityTypeClass::Array.size()));
 
 	Data->LoadBeforeTypeData(pThis, pINI);
 }

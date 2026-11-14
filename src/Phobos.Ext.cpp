@@ -41,6 +41,7 @@
 #include <New/Type/DigitalDisplayTypeClass.h>
 #include <New/Type/LaserTrailTypeClass.h>
 #include <New/Type/RadTypeClass.h>
+#include <New/Type/AbilityTypeClass.h>
 
 #include <New/Entity/AttachmentClass.h>
 #include <New/Entity/BannerClass.h>
@@ -272,7 +273,8 @@ using PhobosTypeRegistry = TypeRegistry <
 	NewSWType,
 	SelectBoxTypeClass,
 	AttachmentClass,
-	AttachmentTypeClass
+	AttachmentTypeClass,
+	AbilityTypeClass
 	// other classes
 > ;
 

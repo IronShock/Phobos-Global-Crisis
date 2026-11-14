@@ -14,6 +14,7 @@
 
 #include <Misc/FlyingStrings.h>
 #include <Misc/Formation.h>
+#include <UI/AirHeightLine.h>
 
 #include <SuperClass.h>
 #include <Unsorted.h>
@@ -260,6 +261,7 @@ DEFINE_HOOK(0x6D4684, TacticalClass_Draw_FlyingStrings, 0x6)
 {
 	FlyingStrings::UpdateAll();
 	FormationManager::Instance.Process();
+	AirHeightLine::DrawAll();
 
 	return 0;
 }

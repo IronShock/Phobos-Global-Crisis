@@ -67,7 +67,7 @@ namespace MOEE::OrderThrottle
 }
 
 // MegaMission inlined append full branch (0x646EF5, 10 bytes). eax = event.
-namespace { inline bool MOEE_ThrottleEnabled() { return Phobos::Config::MOEE_OrderThrottle != 0; } }
+namespace { inline bool MOEE_ThrottleEnabled() { return !MOEE::Disabled() && Phobos::Config::MOEE_OrderThrottle != 0; } }
 
 DEFINE_HOOK(0x646EF5, MOEE_OrderThrottle_MegaSpill, 0xA)
 {

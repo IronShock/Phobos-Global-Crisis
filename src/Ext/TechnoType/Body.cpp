@@ -888,6 +888,33 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->Ammo_Shared.Read(exINI, pSection, "Ammo.Shared");
 	this->Ammo_Shared_Group.Read(exINI, pSection, "Ammo.Shared.Group");
 
+	// GiftBox. Aliases cover the Kratos / RotE spellings.
+	this->GiftBox_Types.Read(exINI, pSection, "GiftBox.Types");
+	this->GiftBox_Nums.Read(exINI, pSection, "GiftBox.Nums");
+	this->GiftBox_RandomWeights.Read(exINI, pSection, "GiftBox.RandomWeights");
+	this->GiftBox_Chances.Read(exINI, pSection, "GiftBox.Chances");
+	this->GiftBox_RandomType.Read(exINI, pSection, "GiftBox.RandomType");
+	this->GiftBox_UseChancesAndWeight.Read(exINI, pSection, "GiftBox.UseChancesAndWeight");
+	this->GiftBox_Remove.Read(exINI, pSection, "GiftBox.Remove");
+	this->GiftBox_Destroy.Read(exINI, pSection, "GiftBox.Destroy");
+	this->GiftBox_Destroy.Read(exINI, pSection, "GiftBox.Explodes");
+	this->GiftBox_Delay.Read(exINI, pSection, "GiftBox.Delay");
+	this->GiftBox_RandomDelay.Read(exINI, pSection, "GiftBox.RandomDelay");
+	this->GiftBox_RandomRange.Read(exINI, pSection, "GiftBox.RandomRange");
+	this->GiftBox_RandomRange.Read(exINI, pSection, "GiftBox.CellRandomRange");
+	this->GiftBox_EmptyCell.Read(exINI, pSection, "GiftBox.EmptyCell");
+	this->GiftBox_EmptyCell.Read(exINI, pSection, "GiftBox.RandomToEmptyCell");
+	this->GiftBox_InheritAmmo.Read(exINI, pSection, "GiftBox.InheritAmmo");
+
+	if (!this->GiftBox_Types.empty())
+	{
+		Debug::Log("[GiftBox] [%s] types=%d delay=%d remove=%d destroy=%d randomType=%d\n",
+			pSection, static_cast<int>(this->GiftBox_Types.size()),
+			this->GiftBox_Delay.Get(), this->GiftBox_Remove.Get() ? 1 : 0,
+			this->GiftBox_Destroy.Get() ? 1 : 0,
+			this->GiftBox_RandomType.Get() ? 1 : 0);
+	}
+
 	for (int i = 0; i < TechnoTypeClass::MaxWeapons; ++i)
 	{
 		char key[0x40];
@@ -1052,6 +1079,54 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 
 	this->DigitalDisplay_Disable.Read(exINI, pSection, "DigitalDisplay.Disable");
 	this->DigitalDisplayTypes.Read(exINI, pSection, "DigitalDisplayTypes");
+
+	// Ability1, Ability2, ... Ability12. The slots are independent: a missing
+	// key leaves an empty slot and later keys are still read. Abilities=... is
+	// an alias for a plain comma-separated list.
+	this->Abilities.clear();
+
+	ValueableVector<AbilityTypeClass*> listedAbilities;
+	listedAbilities.Read(exINI, pSection, "Abilities");
+
+	if (!listedAbilities.empty())
+	{
+		this->Abilities = listedAbilities;
+	}
+	else
+	{
+		char keyBuffer[0x20];
+
+		for (int i = 1; i <= 12; ++i)
+		{
+			_snprintf_s(keyBuffer, _TRUNCATE, "Ability%d", i);
+
+			Nullable<AbilityTypeClass*> ability;
+			ability.Read<true>(exINI, pSection, keyBuffer);
+
+			if (ability.isset())
+			{
+				this->Abilities.push_back(ability.Get());
+				continue;
+			}
+
+			const bool keyPresent = exINI.ReadString(pSection, keyBuffer) && exINI.value()[0] != '\0';
+
+			if (keyPresent)
+			{
+				Debug::Log("[Abilities] [%s]%s names an ability that does not exist; the slot is kept empty.\n",
+					pSection, keyBuffer);
+			}
+
+			this->Abilities.push_back(nullptr);
+		}
+
+		while (!this->Abilities.empty() && !this->Abilities.back())
+			this->Abilities.pop_back();
+
+		if (!this->Abilities.empty())
+			Debug::Log("[Abilities] [%s] %d ability slot(s).\n",
+				pSection, static_cast<int>(this->Abilities.size()));
+	}
 
 	this->SelectBox.Read(exINI, pSection, "SelectBox");
 	this->HideSelectBox.Read(exINI, pSection, "HideSelectBox");
@@ -1906,6 +1981,7 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 
 		.Process(this->DigitalDisplay_Disable)
 		.Process(this->DigitalDisplayTypes)
+		.Process(this->Abilities)
 
 		.Process(this->SelectBox)
 		.Process(this->HideSelectBox)
@@ -2143,6 +2219,20 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 			.Process(ammo.Cost)
 			.Process(ammo.PerBurst);
 	}
+
+	Stm.Process(this->GiftBox_Types)
+		.Process(this->GiftBox_Nums)
+		.Process(this->GiftBox_RandomWeights)
+		.Process(this->GiftBox_Chances)
+		.Process(this->GiftBox_RandomType)
+		.Process(this->GiftBox_UseChancesAndWeight)
+		.Process(this->GiftBox_Remove)
+		.Process(this->GiftBox_Destroy)
+		.Process(this->GiftBox_Delay)
+		.Process(this->GiftBox_RandomDelay)
+		.Process(this->GiftBox_RandomRange)
+		.Process(this->GiftBox_EmptyCell)
+		.Process(this->GiftBox_InheritAmmo);
 
 	Stm.Process(this->Acceleration_Mode)
 		.Process(this->Acceleration_Time)

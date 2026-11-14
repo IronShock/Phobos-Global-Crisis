@@ -1,6 +1,8 @@
 ﻿// methods used in TechnoClass_AI hooks or anything similar
 #include "Body.h"
 
+#include <Phobos.h>
+
 #include <algorithm>
 #include <utility>
 #include <tuple>
@@ -15,6 +17,12 @@
 #include <JumpjetLocomotionClass.h>
 #include <FlyLocomotionClass.h>
 #include <UnitTypeClass.h>
+#include <BuildingClass.h>
+#include <UnitClass.h>
+#include <AircraftClass.h>
+#include <InfantryClass.h>
+#include <MapClass.h>
+#include <GeneralStructures.h>
 
 #include <Ext/Anim/Body.h>
 #include <Ext/Bullet/Body.h>
@@ -23,6 +31,7 @@
 #include <Ext/Scenario/Body.h>
 #include <Utilities/EnumFunctions.h>
 #include <Utilities/AresFunctions.h>
+#include <Utilities/GeneralUtils.h>
 
 
 // TechnoClass_AI_0x6F9E50
@@ -48,8 +57,12 @@ void TechnoExt::ExtData::OnEarlyUpdate()
 	if (this->CheckDeathConditions())
 		return;
 
+	if (this->UpdateGiftBox())
+		return;
+
 	this->UpdateShield();
 	this->UpdateAttachEffects();
+	this->UpdateAbilities();
 	this->ApplyInterceptor();
 	this->EatPassengers();
 	this->ApplySpawnLimitRange();
@@ -61,6 +74,370 @@ void TechnoExt::ExtData::OnEarlyUpdate()
 
 	if (this->AttackMoveFollowerTempCount)
 		this->AttackMoveFollowerTempCount--;
+}
+
+namespace GiftBoxHelpers
+{
+	bool CellContainsOtherObject(CellClass* pCell, TechnoClass* pBox)
+	{
+		if (!pCell)
+			return true;
+
+		if (auto const pBuilding = pCell->GetBuilding())
+		{
+			if (pBuilding != pBox)
+				return true;
+		}
+
+		for (auto pObject = pCell->FirstObject; pObject; pObject = pObject->NextObject)
+		{
+			if (pObject != pBox)
+				return true;
+		}
+
+		return false;
+	}
+
+	int WeightedPick(std::vector<int> const& weights, int count)
+	{
+		if (count <= 0)
+			return -1;
+
+		int total = 0;
+
+		for (int i = 0; i < count; ++i)
+			total += std::max(0, i < static_cast<int>(weights.size()) ? weights[i] : 1);
+
+		if (total <= 0)
+			return ScenarioClass::Instance->Random.RandomRanged(0, count - 1);
+
+		int roll = ScenarioClass::Instance->Random.RandomRanged(1, total);
+
+		for (int i = 0; i < count; ++i)
+		{
+			roll -= std::max(0, i < static_cast<int>(weights.size()) ? weights[i] : 1);
+
+			if (roll <= 0)
+				return i;
+		}
+
+		return count - 1;
+	}
+
+	bool ChancePass(double chance)
+	{
+		if (chance <= 0.0)
+			return false;
+
+		if (chance > 1.0)
+			chance /= 100.0;
+
+		return ScenarioClass::Instance->Random.RandomDouble() < chance;
+	}
+}
+
+bool TechnoExt::ExtData::UpdateGiftBox()
+{
+	auto const pThis = this->OwnerObject();
+
+	if (!pThis || !this->TypeExtData || this->TypeExtData->GiftBox_Types.empty())
+		return false;
+
+	if (this->GiftBox_Opened)
+	{
+		// Destroy=yes normally uses the death path below. If the dummy survived
+		// that hit (e.g. Armor=immune), force the removal on the next frame so
+		// the fake unit cannot stay on the map.
+		if (this->TypeExtData->GiftBox_Remove.Get()
+			&& this->TypeExtData->GiftBox_Destroy.Get()
+			&& pThis->IsAlive && !pThis->InLimbo)
+		{
+			pThis->Health = 0;
+			pThis->Limbo();
+			pThis->UnInit();
+			return true;
+		}
+
+		return false;
+	}
+
+	if (pThis->InLimbo || !pThis->IsAlive || pThis->Health <= 0)
+		return false;
+
+	// RotE uses GiftBox on dummy infantry/vehicles/aircraft, never on buildings.
+	// Keeping buildings out avoids the foundation replacement issues Kratos warns about.
+	if (pThis->WhatAmI() == AbstractType::Building)
+		return false;
+
+	auto const pTypeExt = this->TypeExtData;
+
+	if (!this->GiftBox_Initialized)
+	{
+		int delay = pTypeExt->GiftBox_Delay.Get();
+		const int randomDelay = pTypeExt->GiftBox_RandomDelay.Get();
+
+		if (randomDelay > 0)
+			delay += ScenarioClass::Instance->Random.RandomRanged(0, randomDelay);
+
+		this->GiftBox_Timer = std::max(0, delay);
+		this->GiftBox_Initialized = true;
+	}
+
+	if (this->GiftBox_Timer > 0)
+	{
+		--this->GiftBox_Timer;
+		return false;
+	}
+
+	auto const pOwner = pThis->Owner;
+	auto const pBoxCell = pThis->GetCell();
+
+	if (!pOwner || !pBoxCell)
+		return false;
+
+	this->GiftBox_Opened = true;
+
+	auto const& types = pTypeExt->GiftBox_Types;
+
+	if (types.empty())
+		return false;
+
+	std::vector<TechnoTypeClass*> gifts;
+
+	if (pTypeExt->GiftBox_RandomType.Get())
+	{
+		int total = 0;
+
+		if (!pTypeExt->GiftBox_Nums.empty())
+		{
+			for (int num : pTypeExt->GiftBox_Nums)
+				total += std::max(0, num);
+		}
+
+		if (total <= 0)
+			total = 1;
+
+		for (int i = 0; i < total; ++i)
+		{
+			const int index = GiftBoxHelpers::WeightedPick(
+				pTypeExt->GiftBox_RandomWeights, static_cast<int>(types.size()));
+
+			if (index < 0 || index >= static_cast<int>(types.size()) || !types[index])
+				continue;
+
+			if (index < static_cast<int>(pTypeExt->GiftBox_Chances.size())
+				&& !GiftBoxHelpers::ChancePass(pTypeExt->GiftBox_Chances[index]))
+				continue;
+
+			gifts.push_back(types[index]);
+		}
+	}
+	else
+	{
+		for (int index = 0; index < static_cast<int>(types.size()); ++index)
+		{
+			auto const pGiftType = types[index];
+
+			if (!pGiftType)
+				continue;
+
+			int count = index < static_cast<int>(pTypeExt->GiftBox_Nums.size())
+				? pTypeExt->GiftBox_Nums[index]
+				: 1;
+
+			if (count <= 0)
+				continue;
+
+			const int weight = index < static_cast<int>(pTypeExt->GiftBox_RandomWeights.size())
+				? pTypeExt->GiftBox_RandomWeights[index]
+				: 100;
+
+			for (int i = 0; i < count; ++i)
+			{
+				if (pTypeExt->GiftBox_UseChancesAndWeight.Get()
+					&& weight < 100
+					&& ScenarioClass::Instance->Random.RandomRanged(0, 99) >= weight)
+					continue;
+
+				if (index < static_cast<int>(pTypeExt->GiftBox_Chances.size())
+					&& !GiftBoxHelpers::ChancePass(pTypeExt->GiftBox_Chances[index]))
+					continue;
+
+				gifts.push_back(pGiftType);
+			}
+		}
+	}
+
+	const bool emptyCell = pTypeExt->GiftBox_EmptyCell.Get();
+	const int randomRange = std::max(0, pTypeExt->GiftBox_RandomRange.Get());
+	const bool inheritAmmo = pTypeExt->GiftBox_InheritAmmo.Get();
+	const bool scatter = pTypeExt->GiftBox_Remove.Get();
+
+	Debug::Log("[GiftBox] [%s] open gifts=%d remove=%d destroy=%d empty=%d range=%d\n",
+		pThis->GetTechnoType()->ID, static_cast<int>(gifts.size()),
+		pTypeExt->GiftBox_Remove.Get() ? 1 : 0,
+		pTypeExt->GiftBox_Destroy.Get() ? 1 : 0,
+		emptyCell ? 1 : 0, randomRange);
+
+	const bool removeBox = pTypeExt->GiftBox_Remove.Get();
+	const bool destroyBox = pTypeExt->GiftBox_Destroy.Get();
+	auto const pBoxOwner = pThis->Owner;
+	auto const pBoxType = pThis->GetTechnoType();
+	const int boxAmmo = pThis->Ammo;
+
+	// Kratos removes the box before releasing the gifts. Freeing the cell
+	// first is essential for infantry boxes: otherwise the gifts collide
+	// with the dummy itself and Unlimbo() rejects every one of them.
+	if (removeBox && !destroyBox)
+	{
+		pThis->Health = 0;
+		pThis->Limbo();
+	}
+
+	for (auto const pGiftType : gifts)
+	{
+		if (!pGiftType)
+			continue;
+
+		CellClass* pTargetCell = pBoxCell;
+		const bool giftIsBuilding = pGiftType->WhatAmI() == AbstractType::BuildingType;
+
+		if (randomRange > 0 || emptyCell)
+		{
+			const int radius = randomRange > 0 ? randomRange : 2;
+			auto const offsets = GeneralUtils::AdjacentCellsInRange(radius);
+
+			for (size_t attempt = 0; attempt < offsets.size(); ++attempt)
+			{
+				auto const& offset = offsets[
+					ScenarioClass::Instance->Random.RandomRanged(0, static_cast<int>(offsets.size()) - 1)];
+				CellClass* pCandidate = MapClass::Instance.TryGetCellAt(pBoxCell->MapCoords + offset);
+
+				if (!pCandidate)
+					continue;
+
+				// The box itself still occupies its own cell; a building cannot
+				// share it, so EmptyCell building gifts must move out first.
+				if (emptyCell
+					&& giftIsBuilding
+					&& pCandidate == pBoxCell)
+					continue;
+
+				if (emptyCell && GiftBoxHelpers::CellContainsOtherObject(pCandidate, pThis))
+					continue;
+
+				pTargetCell = pCandidate;
+				break;
+			}
+		}
+
+		auto const pGift = abstract_cast<TechnoClass*>(pGiftType->CreateObject(pOwner));
+
+		if (!pGift)
+		{
+			Debug::Log("[GiftBox] [%s] gift %s CreateObject failed\n",
+				pThis->GetTechnoType()->ID, pGiftType->ID);
+			continue;
+		}
+
+		auto placeGift = [&](CellClass* pCell) -> bool
+		{
+			if (!pCell)
+				return false;
+
+			CoordStruct spawnCoords = pCell->GetCoordsWithBridge();
+
+			// Infantry can share a cell only through distinct sub-positions.
+			// Without this the new riflemen collide with the dummy box and
+			// Unlimbo() returns false, so the gift silently disappears.
+			if (pGiftType->WhatAmI() == AbstractType::InfantryType)
+				spawnCoords = pCell->FindInfantrySubposition(spawnCoords, false, false, true);
+
+			pGift->OnBridge = pCell->ContainsBridge();
+
+			if (!pGift->Unlimbo(spawnCoords, DirType::East))
+				return false;
+
+			if (giftIsBuilding)
+			{
+				auto const pBuilding = static_cast<BuildingClass*>(pGift);
+
+				if (static_cast<BuildingTypeClass*>(pGiftType)->Foundation != Foundation::_0x0)
+					pBuilding->QueueMission(Mission::Construction, false);
+
+				pBuilding->DiscoveredBy(pOwner);
+				pBuilding->IsReadyToCommence = true;
+				pOwner->RecheckTechTree = true;
+			}
+			else
+			{
+				pGift->SetLocation(spawnCoords);
+
+				if (scatter)
+					pGift->Scatter(spawnCoords, true, false);
+
+				if (inheritAmmo
+					&& pGiftType->Ammo > 1
+					&& pBoxType->Ammo > 1)
+					pGift->Ammo = boxAmmo;
+			}
+
+			Debug::Log("[GiftBox] [%s] gift %s placed at (%d,%d) z=%d\n",
+				pBoxType->ID, pGiftType->ID, pCell->MapCoords.X, pCell->MapCoords.Y, spawnCoords.Z);
+
+			return true;
+		};
+
+		bool placed = placeGift(pTargetCell);
+
+		if (!placed)
+		{
+			// If the primary cell is occupied by the dummy box, try the
+			// neighbouring cells before giving up on the gift.
+			auto const fallback = GeneralUtils::AdjacentCellsInRange(2);
+
+			for (auto const& offset : fallback)
+			{
+				CellClass* pCandidate = MapClass::Instance.TryGetCellAt(pBoxCell->MapCoords + offset);
+
+				if (!pCandidate || pCandidate == pTargetCell)
+					continue;
+
+				if (giftIsBuilding && GiftBoxHelpers::CellContainsOtherObject(pCandidate, pThis))
+					continue;
+
+				if (placeGift(pCandidate))
+				{
+					placed = true;
+					break;
+				}
+			}
+		}
+
+		if (!placed)
+		{
+			Debug::Log("[GiftBox] [%s] gift %s Unlimbo failed at (%d,%d); discarded\n",
+				pThis->GetTechnoType()->ID, pGiftType->ID,
+				pBoxCell->MapCoords.X, pBoxCell->MapCoords.Y);
+			pGift->UnInit();
+			continue;
+		}
+	}
+
+	if (!removeBox)
+		return false;
+
+	if (destroyBox)
+	{
+		TechnoExt::Kill(pThis, nullptr, pBoxOwner);
+		return true;
+	}
+
+	// Silent removal (Kratos' Destroy=no path): the box was already
+	// unlimboed above, so only the object cleanup remains here.
+	pThis->UnInit();
+
+	return true;
 }
 
 void TechnoExt::ExtData::ApplyInterceptor()
@@ -653,6 +1030,11 @@ void TechnoExt::ExtData::UpdateTypeData(TechnoTypeClass* pCurrentType)
 	this->PreviousType = pOldType;
 	auto const pNewTypeExt = TechnoTypeExt::ExtMap.Find(pCurrentType);
 	this->TypeExtData = pNewTypeExt;
+
+	// Abilities are type-driven. Rebuild them on type change.
+	AbilityClass::OnOwnerRemoved(pThis);
+	this->Abilities.clear();
+	this->InitializeAbilities();
 
 	// Re-resolve all weapon ammo slots against the new type. Existing slot pools are
 	// kept and clamped by RefreshAllWeaponAmmo rather than being refilled.
@@ -1564,6 +1946,25 @@ void TechnoExt::RefreshExtraFireAmmoEntry(TechnoClass* pThis, int slot, int entr
 	};
 
 	ensureSize();
+
+	// [General] AresWeaponAmmo=no: ExtraFire is an additional mount outside the
+	// vanilla unit ammo system, so it must not consume any ammo in this mode.
+	if (!Phobos::Config::AresWeaponAmmo)
+	{
+		pExt->ExtraFireAmmoHasPool[index] = 0;
+		pExt->ExtraFireAmmoInfinite[index] = 1;
+		pExt->ExtraFireAmmoUsesUnit[index] = 0;
+		pExt->ExtraFireAmmoMax[index] = 0;
+		pExt->ExtraFireAmmoReload[index] = -1;
+		pExt->ExtraFireAmmoEmptyReload[index] = -1;
+		pExt->ExtraFireAmmoReloadAmount[index] = 1;
+		pExt->ExtraFireAmmoCost[index] = 1;
+		pExt->ExtraFireAmmoPerBurst[index] = 0;
+		pExt->ExtraFireAmmoWeapon[index] = pExtra;
+		pExt->ExtraFireAmmoCount[index] = 0;
+		pExt->ExtraFireAmmoReloadTimer[index].Stop();
+		return;
+	}
 
 	const bool hadPool = pExt->ExtraFireAmmoHasPool[index] != 0;
 	const int oldMax = pExt->ExtraFireAmmoMax[index];

@@ -8,11 +8,18 @@
 #include <Surface.h>
 #include <SuperClass.h>
 #include <SuperWeaponTypeClass.h>
+#include <WWMouseClass.h>
+#include <TacticalClass.h>
+#include <CellClass.h>
+#include <ObjectClass.h>
+#include <MapClass.h>
 
 #include <Ext/Side/Body.h>
 #include <Ext/SWType/Body.h>
 #include <Ext/House/Body.h>
 #include <Misc/MessageColumn.h>
+#include <UI/UnitStatusPanel.h>
+#include <New/Entity/AbilityClass.h>
 #include <Utilities/Debug.h>
 
 #include <New/Entity/FilterButtonClass.h>
@@ -136,16 +143,94 @@ static bool ClickInVanillaSidebar()
 	return mx >= sb->X && mx < sb->X + w;
 }
 
+// The custom superweapon sidebar is left-aligned by default and is not covered
+// by the vanilla SidebarBounds rectangle. Check it explicitly so a pending
+// ability target selection can never swallow a superweapon button click.
+static bool ClickInSWSidebar()
+{
+	if (!SWSidebarClass::IsEnabled() || !WWMouseClass::Instance)
+		return false;
+
+	Point2D mouse { 0, 0 };
+	WWMouseClass::Instance->GetCoords(&mouse);
+
+	auto contains = [&mouse](GadgetClass* pGadget)
+	{
+		return pGadget
+			&& pGadget->Width > 0
+			&& pGadget->Height > 0
+			&& mouse.X >= pGadget->X
+			&& mouse.X < pGadget->X + pGadget->Width
+			&& mouse.Y >= pGadget->Y
+			&& mouse.Y < pGadget->Y + pGadget->Height;
+	};
+
+	for (auto* pColumn : SWSidebarClass::Instance.Columns)
+	{
+		if (!pColumn)
+			continue;
+
+		if (contains(pColumn))
+			return true;
+
+		for (auto* pButton : pColumn->Buttons)
+		{
+			if (contains(pButton))
+				return true;
+		}
+	}
+
+	return contains(SWSidebarClass::Instance.ToggleButton);
+}
+
 DEFINE_HOOK(0x692419, DisplayClass_ProcessClickCoords_SkipOnNewButtons, 0x7)
 {
 	enum { DoNothing = 0x6925FC };
 
-	return (SWSidebarClass::IsEnabled() && SWSidebarClass::Instance.CurrentColumn
-		|| SWSidebarClass::Instance.ToggleButton && SWSidebarClass::Instance.ToggleButton->IsHovering
+	const bool uiHover = ClickInSWSidebar()
 		|| MessageColumnClass::Instance.IsBlocked()
 		|| FilterButtonClass::IsAnyHovering()  // Ŀ��ɸѡ��ť��ͣʱ����
-		|| ClickInVanillaSidebar()
-		)? DoNothing : 0;
+		|| UnitStatusPanel::IsHovering()
+		|| ClickInVanillaSidebar();
+
+	if (uiHover)
+		return DoNothing;
+
+	// Handle pending ability targeting here, before the original click path
+	// resolves and issues a normal order. This avoids adding a second hook at
+	// 0x6924CB, which is already used by the fog click fix.
+	if (AbilityClass::HasPending())
+	{
+		if (GetAsyncKeyState(VK_RBUTTON) & 0x8000)
+		{
+			AbilityClass::CancelTargeting();
+			return DoNothing;
+		}
+
+		if (!WWMouseClass::Instance || !TacticalClass::Instance)
+			return 0;
+
+		Point2D mouse { 0, 0 };
+		WWMouseClass::Instance->GetCoords(&mouse);
+
+		const auto& view = DSurface::ViewBounds;
+
+		if (mouse.X < view.X || mouse.Y < view.Y
+			|| mouse.X >= view.X + view.Width || mouse.Y >= view.Y + view.Height)
+		{
+			return 0;
+		}
+
+		const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+		const auto cell = CellClass::Coord2Cell(world);
+		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+		auto const pTarget = pCell ? pCell->GetContent() : nullptr;
+
+		AbilityClass::HandleTargetClick(pTarget, cell);
+		return DoNothing;
+	}
+
+	return 0;
 }
 
 DEFINE_HOOK(0x6A5082, SidebarClass_InitClear_InitializeNewButtons, 0x5)
@@ -153,6 +238,7 @@ DEFINE_HOOK(0x6A5082, SidebarClass_InitClear_InitializeNewButtons, 0x5)
 	SWSidebarClass::Instance.InitClear();
 	MessageColumnClass::Instance.InitClear();
 	FilterButtonClass::ClearButtons();  // ����ɸѡ��ť
+	UnitStatusPanel::InitClear();
 	return 0;
 }
 
@@ -161,6 +247,7 @@ DEFINE_HOOK(0x6A5839, SidebarClass_InitIO_InitializeNewButtons, 0x5)
 	SWSidebarClass::Instance.InitIO();
 	MessageColumnClass::Instance.InitIO();
 	FilterButtonClass::InitButtons();  // ����ɸѡ��ť
+	UnitStatusPanel::InitIO();
 	return 0;
 }
 

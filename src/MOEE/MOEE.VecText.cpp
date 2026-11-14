@@ -65,7 +65,7 @@ namespace MOEE::VecText
 			return;
 
 		g_Inited = true;
-		g_Enabled = Phobos::Config::MOEE_VecText;
+		g_Enabled = !MOEE::Disabled() && Phobos::Config::MOEE_VecText;
 		g_FontPx = Phobos::Config::MOEE_VecText_FontPx;
 		g_Bold = Phobos::Config::MOEE_VecText_Bold;
 		g_DigitTrack = Phobos::Config::MOEE_VecText_DigitTrack;

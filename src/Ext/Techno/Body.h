@@ -14,6 +14,7 @@
 #include <New/Entity/LaserTrailClass.h>
 #include <New/Entity/AttachEffectClass.h>
 #include <New/Entity/AttachmentClass.h>
+#include <New/Entity/AbilityClass.h>
 
 #include <New/Entity/FilterButtonClass.h>  // TargetFilter enum
 
@@ -78,6 +79,7 @@ public:
 		std::unique_ptr<ShieldClass> Shield;
 		std::vector<std::unique_ptr<LaserTrailClass>> LaserTrails;
 		std::vector<std::unique_ptr<AttachEffectClass>> AttachedEffects;
+		std::vector<std::unique_ptr<AbilityClass>> Abilities;
 		AttachEffectTechnoProperties AE;
 		TechnoTypeClass* PreviousType; // Type change registered in TechnoClass::AI on current frame and used in FootClass::AI on same frame and reset after.
 		std::vector<EBolt*> ElectricBolts; // EBolts are not serialized so do not serialize this either.
@@ -168,6 +170,11 @@ public:
 		bool WeaponAmmoInitialized = false;
 		bool WeaponAmmoElite = false;
 		bool WeaponAmmoLoadedFromSave = false;
+
+		// GiftBox runtime state (Kratos-style dummy unit that opens into real units).
+		bool GiftBox_Initialized = false;
+		bool GiftBox_Opened = false;
+		int GiftBox_Timer = 0;
 
 		// ExtraFire ammo pools, indexed by slot * ExtraFirePerSlot + entry.
 		std::vector<int> ExtraFireAmmoCount;
@@ -319,6 +326,7 @@ public:
 		{ }
 
 		void OnEarlyUpdate();
+		bool UpdateGiftBox();
 
 		void ApplyInterceptor();
 		bool CheckDeathConditions(bool isInLimbo = false);
@@ -346,6 +354,8 @@ public:
 		void UpdateRearmInTemporal();
 		void InitializeLaserTrails();
 		void InitializeAttachEffects();
+		void InitializeAbilities();
+		void UpdateAbilities();
 		void UpdateSelfOwnedAttachEffects();
 		bool HasAttachedEffects(std::vector<AttachEffectTypeClass*> attachEffectTypes, bool requireAll, bool ignoreSameSource, TechnoClass* pInvoker, AbstractClass* pSource, std::vector<int> const* minCounts, std::vector<int> const* maxCounts) const;
 		int GetAttachedEffectCumulativeCount(AttachEffectTypeClass* pAttachEffectType, bool ignoreSameSource = false, TechnoClass* pInvoker = nullptr, AbstractClass* pSource = nullptr) const;

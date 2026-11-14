@@ -7,6 +7,7 @@
 #include <Ext/Rules/Body.h>
 
 #include <Utilities/GeneralUtils.h>
+#include <Utilities/Debug.h>
 
 OverlayTypeExt::ExtContainer OverlayTypeExt::ExtMap;
 
@@ -18,20 +19,31 @@ bool OverlayTypeExt::CanPlaceBuildingOnOverlay(int overlayTypeIndex, BuildingTyp
 	auto const pOverlayType = OverlayTypeClass::Array[overlayTypeIndex];
 	auto const pTypeExt = OverlayTypeExt::ExtMap.Find(pOverlayType);
 
-	if (!pTypeExt->CanBeBuiltOn.Get(pOverlayType->Tiberium ? RulesExt::Global()->Tiberium_CanBeBuiltOn
+	const bool globalDefault = pOverlayType->Tiberium ? RulesExt::Global()->Tiberium_CanBeBuiltOn
 		: pOverlayType->Wall ? RulesExt::Global()->Wall_CanBeBuiltOn
 		: pOverlayType->IsARock ? RulesExt::Global()->Rock_CanBeBuiltOn
-		: false))
+		: false;
+	const bool canBuildOn = pTypeExt->CanBeBuiltOn.Get(globalDefault);
+	const bool remove = pTypeExt->CanBeBuiltOn_Remove.Get(RulesExt::Global()->CanBeBuiltOnOverlay_Remove);
+	const bool wallConflict = ((pBuildingType && pBuildingType->Wall) || pOverlayType->Wall) && !remove;
+	const bool result = canBuildOn && !wallConflict && (!requireToBeRemovable || remove);
+
+	static bool loggedTiberium = false;
+
+	if (!loggedTiberium && pOverlayType->Tiberium)
 	{
-		return false;
+		loggedTiberium = true;
+		Debug::Log("[CanBeBuiltOn] overlay=%s specific=%d global=%d remove=%d building=%s buildingWall=%d result=%d\n",
+			pOverlayType->ID,
+			pTypeExt->CanBeBuiltOn.isset() ? (pTypeExt->CanBeBuiltOn.Get() ? 1 : 0) : -1,
+			globalDefault ? 1 : 0,
+			remove ? 1 : 0,
+			pBuildingType ? pBuildingType->ID : "<null>",
+			pBuildingType && pBuildingType->Wall ? 1 : 0,
+			result ? 1 : 0);
 	}
 
-	const bool remove = pTypeExt->CanBeBuiltOn_Remove.Get(RulesExt::Global()->CanBeBuiltOnOverlay_Remove);
-
-	if (((pBuildingType && pBuildingType->Wall) || pOverlayType->Wall) && !remove)
-		return false;
-
-	return requireToBeRemovable ? remove : true;
+	return result;
 }
 
 void OverlayTypeExt::RemoveOverlayFromCell(int overlayTypeIndex, CellClass* pCell, HouseClass* pSource)

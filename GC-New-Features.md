@@ -1335,6 +1335,63 @@ Anims=DUSTFOGA,LuzDisparomed
 ; 1=LuzDisparomed
 ```
 
+### Credits / 鸣谢
+
+TSFog is an independent implementation in this GC build. Its engine-behaviour
+research, hook organisation and parts of the implementation were informed by
+the **Phobos-Recya** line of Phobos:
+
+- **[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya)**
+  – the branch used as a reference.
+- **[Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack)**
+  – the Phobos-Recya platform.
+- **CrimRecya (绯红热茶)** – author of the Phobos-Recya platform and a Phobos
+  T2 maintainer.
+- **TaranDahl (航味麻酱)** – principal feature author of Phobos-Recya and a
+  Phobos T1 maintainer.
+- **wenrui1245 (凌风之云awa)** – maintainer of the linked Phobos-Recya /
+  Recloud branch.
+- **Phobos** developers, maintainers and contributors – the upstream project
+  and the engine-extension framework TSFog builds on.
+
+Special thanks from the Phobos-Recya README: **Sidoupiar**, **钢铁之锤**,
+**航味麻酱**, the **凛冬将至** community and the **pbs testing group**.
+
+TSFog is not an official Phobos or Phobos-Recya feature, and this
+acknowledgement does not imply endorsement by those projects or their authors.
+
+## Acknowledgements / 参考与鸣谢
+
+The GC build is an independent fork built on top of Phobos. The following
+projects and people are acknowledged for their work and for the references
+used while implementing GC features:
+
+- **[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya)**
+  and **[Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack)**
+  – the Phobos-Recya line, platform and branch referenced by TSFog and other
+  GC work. Credit to **CrimRecya (绯红热茶)**, **TaranDahl (航味麻酱)**,
+  **wenrui1245 (凌风之云awa)**, and the contributors and testers named in the
+  Phobos-Recya README.
+- **[Phobos](https://github.com/Phobos-developers/Phobos)** – the upstream
+  engine-extension project, its developers, maintainers and contributors. See
+  the [full Phobos credits](CREDITS.md) for the individual contribution list.
+- **[Ares](https://github.com/Ares-Developers/Ares)** – engine compatibility
+  and implementation references.
+- **[CnCNet](https://cncnet.org)** and
+  **[SyringeEx](https://github.com/Phobos-developers/SyringeEx)** – the
+  multiplayer client, launcher and injection environment.
+- **[MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements)**
+  – the original design and implementations behind the MOEE modules ported
+  into this build; credit to **MagicShiba** and the upstream contributors.
+- **Tiberian Sun** and the
+  **[CnCNet ts-patches](https://github.com/CnCNet/ts-patches)** project – the
+  fog-of-war behaviour reference used while developing TSFog.
+
+Unless a section explicitly says otherwise, GC-only features such as the
+formation preview, build-range outline, VXL portrait, aircraft shadow and HUD
+clipping fixes are independent implementations on top of the Phobos extension
+framework. They are not presented as official Phobos or Phobos-Recya features.
+
 ## Full INI key index
 
 ### `rulesmd.ini` → `[General]`

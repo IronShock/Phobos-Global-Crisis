@@ -22,6 +22,8 @@
 
 #include <Misc/ZoomManager.h>
 
+#include <UI/UnitStatusPanel.h>
+
 #include <Utilities/Debug.h>
 
 #include <algorithm>
@@ -585,8 +587,24 @@ void PerfOverlay::Draw()
 	const int blockWidth = textWidth + padding * 2;
 	const int blockHeight = static_cast<int>(lines.size()) * lineHeight
 		+ static_cast<int>(lines.size() - 1) * lineGap + padding * 2;
-	const int blockX = left;
-	const int blockY = std::max(5, bounds.Height - 65 - blockHeight - 6);
+
+	// Anchor the counter to the right edge of the selected-unit status panel when
+	// that panel is visible; otherwise keep the historical bottom-left position.
+	int blockX = left;
+	int blockY = std::max(5, bounds.Height - 65 - blockHeight - 6);
+	{
+		const auto panel = UnitStatusPanel::GetPanelRect();
+
+		if (panel.Width > 0 && panel.Height > 0)
+		{
+			constexpr int gap = 8;
+			blockX = panel.X + panel.Width + gap;
+			blockY = panel.Y + panel.Height - blockHeight - 6;
+		}
+	}
+
+	blockX = std::clamp(blockX, 5, std::max(5, bounds.Width - blockWidth - 5));
+	blockY = std::clamp(blockY, 5, std::max(5, bounds.Height - blockHeight - 5));
 
 	RectangleStruct background { blockX, blockY, blockWidth, blockHeight };
 	ColorStruct black { 0, 0, 0 };

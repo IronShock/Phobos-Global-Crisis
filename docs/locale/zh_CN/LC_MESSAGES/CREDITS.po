@@ -2734,5 +2734,169 @@ msgstr "**Dmitry Volkov** - 广泛且深入的测试"
 msgid "**Rise of the East community** - extensive playtesting of in-dev features"
 msgstr "**东方崛起社区** - 对开发功能的广泛测试"
 
+#: ../../CREDITS.md:657
+msgid "GC Build — Referenced Projects and Acknowledgements"
+msgstr "GC 构建 — 参考项目与鸣谢"
+
+#: ../../CREDITS.md:659
+msgid ""
+"The GC build is an independent fork built on top of Phobos. In addition to the "
+"individual contributions listed above, the following projects and people are "
+"acknowledged for their work and for the references used while implementing GC "
+"features."
+msgstr ""
+"GC 构建是在 Phobos 基础上独立开发的分支。除上方列出的个人贡献外，"
+"以下项目和人员也因其工作及在实现 GC 功能时提供的参考而受到鸣谢。"
+
+#: ../../CREDITS.md:664
+msgid "Phobos-Recya / Phobos-Recloud"
+msgstr "Phobos-Recya / Phobos-Recloud"
+
+#: ../../CREDITS.md:666
+msgid ""
+"**CrimRecya (绯红热茶)** — author of the Phobos-Recya platform and a Phobos "
+"T2 maintainer."
+msgstr ""
+"**CrimRecya（绯红热茶）** — Phobos-Recya 平台作者，Phobos T2 维护者。"
+
+#: ../../CREDITS.md:667
+msgid ""
+"**TaranDahl (航味麻酱)** — principal feature author of Phobos-Recya and a "
+"Phobos T1 maintainer."
+msgstr ""
+"**TaranDahl（航味麻酱）** — Phobos-Recya 主要功能作者，Phobos T1 维护者。"
+
+#: ../../CREDITS.md:668
+msgid ""
+"**wenrui1245 (凌风之云awa)** — maintainer of the linked Phobos-Recya / "
+"Recloud branch."
+msgstr ""
+"**wenrui1245（凌风之云awa）** — 所链接 Phobos-Recya / Recloud 分支的维护者。"
+
+#: ../../CREDITS.md:669
+msgid ""
+"[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) "
+"— the branch used as a reference for TSFog and other GC work."
+msgstr ""
+"[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) "
+"— 作为 TSFog 及其他 GC 工作参考的分支。"
+
+#: ../../CREDITS.md:670
+msgid ""
+"[Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack) "
+"— the Phobos-Recya platform."
+msgstr ""
+"[Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack) "
+"— Phobos-Recya 平台。"
+
+#: ../../CREDITS.md:672
+msgid ""
+"Special thanks from the Phobos-Recya README: **Sidoupiar**, **钢铁之锤**, "
+"**航味麻酱**, the **凛冬将至** community and the **pbs testing group**."
+msgstr ""
+"特别感谢 Phobos-Recya README 中列出的 **Sidoupiar**、**钢铁之锤**、"
+"**航味麻酱**、**凛冬将至**社区和 **pbs 测试群**。"
+
+#: ../../CREDITS.md:675
+msgid ""
+"TSFog in this build is an independent implementation. Its research, hook "
+"organisation and parts of the implementation were informed by the "
+"Phobos-Recya line; it is not an official Phobos or Phobos-Recya feature, and "
+"this acknowledgement does not imply endorsement by those projects or their "
+"authors."
+msgstr ""
+"本构建中的 TSFog 为独立实现。其研究、Hook 组织方式和部分实现思路参考了 "
+"Phobos-Recya 系列；它并非 Phobos 或 Phobos-Recya 的官方功能，"
+"本鸣谢也不代表上述项目及其作者的认可或背书。"
+
+#: ../../CREDITS.md:681
+msgid "Phobos"
+msgstr "Phobos"
+
+#: ../../CREDITS.md:683
+msgid ""
+"[Phobos](https://github.com/Phobos-developers/Phobos) — the upstream "
+"engine-extension project, its founders, developers, maintainers and "
+"contributors."
+msgstr ""
+"[Phobos](https://github.com/Phobos-developers/Phobos) — 上游引擎扩展项目及其创始人、"
+"开发者、维护者和贡献者。"
+
+#: ../../CREDITS.md:685
+msgid ""
+"The project was founded by **Belonit (Gluk-v48)** and **Kerbiter (Metadorius)**. "
+"The current maintenance crew includes **Kerbiter (Metadorius)**, **Starkku**, "
+"**CrimRecya (绯红热茶)**, **ZivDero**, **Ollerus (Coronia)**, "
+"**NetsuNegi**, **TaranDahl (航味麻酱)**, "
+"**Noble_Fish (DeathFishAtEase)**, **FlyStar** and **Fryone**. Former "
+"maintainers include **Belonit (Gluk-v48)**, **Uranusian**, "
+"**secsome**, **Otamaa**, **FS-21**, **Morton (MortonPL)** and "
+"**Trsdy (chaserli)**. See the contribution list above and the "
+"[official Phobos repository](https://github.com/Phobos-developers/Phobos) for "
+"the full credits."
+msgstr ""
+"本项目由 **Belonit（Gluk-v48）** 和 **Kerbiter（Metadorius）** 创立。"
+"当前维护团队包括 **Kerbiter（Metadorius）**、**Starkku**、"
+"**CrimRecya（绯红热茶）**、**ZivDero**、**Ollerus（Coronia）**、"
+"**NetsuNegi**、**TaranDahl（航味麻酱）**、"
+"**Noble_Fish（DeathFishAtEase）**、**FlyStar** 和 **Fryone**。"
+"历任维护者包括 **Belonit（Gluk-v48）**、**Uranusian**、"
+"**secsome**、**Otamaa**、**FS-21**、**Morton（MortonPL）** 和 "
+"**Trsdy（chaserli）**。完整贡献名单请参见上方的贡献列表和 "
+"[Phobos 官方仓库](https://github.com/Phobos-developers/Phobos)。"
+
+#: ../../CREDITS.md:696
+msgid "Other referenced projects"
+msgstr "其他参考项目"
+
+#: ../../CREDITS.md:698
+msgid ""
+"[Ares](https://github.com/Ares-Developers/Ares) — engine compatibility and "
+"implementation references."
+msgstr ""
+"[Ares](https://github.com/Ares-Developers/Ares) — 引擎兼容性与实现参考。"
+
+#: ../../CREDITS.md:699
+msgid ""
+"[CnCNet](https://cncnet.org) and [SyringeEx](https://github.com/Phobos-developers/SyringeEx) "
+"— the multiplayer client, launcher and injection environment."
+msgstr ""
+"[CnCNet](https://cncnet.org) 和 [SyringeEx](https://github.com/Phobos-developers/SyringeEx) "
+"— 联机客户端、启动器与注入环境。"
+
+#: ../../CREDITS.md:700
+msgid ""
+"[MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements) "
+"— the original design and implementations behind the MOEE modules ported into "
+"this build; credit to **MagicShiba** and the upstream contributors."
+msgstr ""
+"[MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements) "
+"— 移植到本构建的 MOEE 模块的原始设计与实现；感谢 **MagicShiba** 及上游贡献者。"
+
+#: ../../CREDITS.md:701
+msgid ""
+"**Tiberian Sun** (Westwood Studios / EA) and the "
+"[CnCNet ts-patches](https://github.com/CnCNet/ts-patches) project — "
+"fog-of-war behaviour reference used while developing TSFog."
+msgstr ""
+"**Tiberian Sun**（Westwood Studios / EA）和 "
+"[CnCNet ts-patches](https://github.com/CnCNet/ts-patches) 项目 — "
+"开发 TSFog 时参考的战争迷雾行为。"
+
+#: ../../CREDITS.md:703
+msgid "GC-only features"
+msgstr "GC 自有功能"
+
+#: ../../CREDITS.md:705
+msgid ""
+"Unless a section explicitly says otherwise, GC-only features such as the "
+"formation preview, build-range outline, VXL portrait, aircraft shadow and HUD "
+"clipping fixes are independent implementations on top of the Phobos extension "
+"framework. They are not presented as official Phobos or Phobos-Recya features."
+msgstr ""
+"除非某章节另有说明，列阵预览、建造范围轮廓、VXL 头像、飞机阴影和 HUD 裁剪修复等 "
+"GC 自有功能，都是在 Phobos 扩展框架之上独立实现的。它们并非 Phobos 或 "
+"Phobos-Recya 的官方功能。"
+
 #~ msgid "Third-party code"
 #~ msgstr "第三方代码"

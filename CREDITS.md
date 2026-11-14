@@ -653,3 +653,56 @@ This page lists all the individual contributions to the project by their author.
 - **Dmitry Volkov** - extensive and thorough testing
 - **Rise of the East community** - extensive playtesting of in-dev features
 - **MagicShiba** - [MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements) (心灵终结体验优化拓展): original design, reverse-engineering and implementations for several QoL, queue and observer modules ported into this fork (see `src/MOEE/`)
+
+## GC Build — Referenced Projects and Acknowledgements
+
+The GC build is an independent fork built on top of Phobos. In addition to the
+individual contributions listed above, the following projects and people are
+acknowledged for their work and for the references used while implementing GC
+features.
+
+### Phobos-Recya / Phobos-Recloud
+
+- **CrimRecya (绯红热茶)** — author of the Phobos-Recya platform and a Phobos T2 maintainer.
+- **TaranDahl (航味麻酱)** — principal feature author of Phobos-Recya and a Phobos T1 maintainer.
+- **wenrui1245 (凌风之云awa)** — maintainer of the linked Phobos-Recya / Recloud branch.
+- [Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) — the branch used as a reference for TSFog and other GC work.
+- [Phobos-Mix / Mix-ECpack](https://github.com/CrimRecya/Phobos-Mix/tree/Mix-ECpack) — the Phobos-Recya platform.
+
+Special thanks from the Phobos-Recya README: **Sidoupiar**, **钢铁之锤**,
+**航味麻酱**, the **凛冬将至** community and the **pbs testing group**.
+
+TSFog in this build is an independent implementation. Its research, hook
+organisation and parts of the implementation were informed by the
+Phobos-Recya line; it is not an official Phobos or Phobos-Recya feature, and
+this acknowledgement does not imply endorsement by those projects or their
+authors.
+
+### Phobos
+
+- [Phobos](https://github.com/Phobos-developers/Phobos) — the upstream engine-extension project, its founders, developers, maintainers and contributors.
+
+The project was founded by **Belonit (Gluk-v48)** and **Kerbiter (Metadorius)**.
+The current maintenance crew includes **Kerbiter (Metadorius)**, **Starkku**,
+**CrimRecya (绯红热茶)**, **ZivDero**, **Ollerus (Coronia)**,
+**NetsuNegi**, **TaranDahl (航味麻酱)**,
+**Noble_Fish (DeathFishAtEase)**, **FlyStar** and **Fryone**. Former
+maintainers include **Belonit (Gluk-v48)**, **Uranusian**,
+**secsome**, **Otamaa**, **FS-21**, **Morton (MortonPL)** and
+**Trsdy (chaserli)**. See the contribution list above and the
+[official Phobos repository](https://github.com/Phobos-developers/Phobos) for
+the full credits.
+
+### Other referenced projects
+
+- [Ares](https://github.com/Ares-Developers/Ares) — engine compatibility and implementation references.
+- [CnCNet](https://cncnet.org) and [SyringeEx](https://github.com/Phobos-developers/SyringeEx) — the multiplayer client, launcher and injection environment.
+- [MO_ExperienceEnhancements](https://github.com/MagicShiba/MO_ExperienceEnhancements) — the original design and implementations behind the MOEE modules ported into this build; credit to **MagicShiba** and the upstream contributors.
+- **Tiberian Sun** (Westwood Studios / EA) and the [CnCNet ts-patches](https://github.com/CnCNet/ts-patches) project — fog-of-war behaviour reference used while developing TSFog.
+
+### GC-only features
+
+Unless a section explicitly says otherwise, GC-only features such as the
+formation preview, build-range outline, VXL portrait, aircraft shadow and HUD
+clipping fixes are independent implementations on top of the Phobos extension
+framework. They are not presented as official Phobos or Phobos-Recya features.

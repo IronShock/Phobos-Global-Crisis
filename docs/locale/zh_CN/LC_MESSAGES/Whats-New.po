@@ -5979,6 +5979,24 @@ msgstr "现在侧边栏拓展工具条可以超出侧边栏边界（by Belonit�
 msgid "Lifted stupidly small limit for tooltip character amount (by Belonit)"
 msgstr "解除了拓展工具条字符数量小得愚蠢的上限（by Belonit）"
 
+#: ../Whats-New.md:373
+msgid "Credits:"
+msgstr "鸣谢："
+
+#: ../Whats-New.md:374
+msgid ""
+"[TSFog](New-or-Enhanced-Logics.md#fog-of-war) and other GC features acknowledge "
+"the [Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) "
+"reference line, [Phobos](https://github.com/Phobos-developers/Phobos), Ares, "
+"CnCNet/SyringeEx, MO_ExperienceEnhancements and the Tiberian Sun fog-of-war "
+"reference. See [Credits](CREDITS.md) for details."
+msgstr ""
+"[TSFog](New-or-Enhanced-Logics.md#fog-of-war) 及其他 GC 功能鸣谢 "
+"[Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) "
+"参考系列、[Phobos](https://github.com/Phobos-developers/Phobos)、Ares、"
+"CnCNet/SyringeEx、MO_ExperienceEnhancements 以及 Tiberian Sun 战争迷雾参考。"
+"详情请参见[鸣谢](CREDITS.md)。"
+
 #~ msgid ""
 #~ "[`BombParachute` deglobalization](Fixed-or-"
 #~ "Improved-Logics.md#bomb-parachute-anim-"

@@ -369,6 +369,9 @@ Vanilla fixes:
 Phobos fixes:
 - [INI list corruption diagnostics and repair](Fixed-or-Improved-Logics.md#gc-ini-diagnostics)
 - [Aircraft team-script movement uses Patrol](AI-Scripting-and-Mapping.md#aircraft-team-script-movement-uses-patrol)
+
+Credits:
+- [TSFog](New-or-Enhanced-Logics.md#fog-of-war) and other GC features acknowledge the [Phobos-Recya / Phobos-Recloud](https://github.com/wenrui1245/Phobos-Recya) reference line, [Phobos](https://github.com/Phobos-developers/Phobos), Ares, CnCNet/SyringeEx, MO_ExperienceEnhancements and the Tiberian Sun fog-of-war reference. See [Credits](CREDITS.md) for details.
 ```
 
 ### Version TBD (develop branch nightly builds)

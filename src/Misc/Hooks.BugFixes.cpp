@@ -1282,21 +1282,64 @@ DEFINE_HOOK(0x4C75DA, EventClass_RespondToEvent_Stop, 0x6)
 
 	if (commonAircraft)
 	{
+		// EnterIdleMode is not usable for returning to base here: the
+		// AircraftClass_EnterIdleMode_NoCrash hook rewrites non-team aircraft
+		// into a cell destination + Area_Guard, which is exactly the
+		// "descends in place instead of flying home" bug (F22 test case).
+		// Find the dock ourselves and explicitly queue Mission::Enter towards
+		// it, which is the path the engine uses for a real landing.
+		auto returnToBase = [&]() -> bool
+		{
+			auto pDock = pAircraft->DockNowHeadingTo;
+
+			if (!pDock)
+				pDock = pAircraft->TryNearestDockBuilding(&pAircraft->Type->Dock, 0, 0);
+
+			if (!pDock)
+				return false;
+
+			pAircraft->SetDestination(pDock, true);
+			pAircraft->QueueMission(Mission::Enter, false);
+			return true;
+		};
+
 		if (pAircraft->Type->AirportBound)
 		{
 			// To avoid `AirportBound=yes` aircraft with ammo at low altitudes cannot correctly receive stop command and queue Mission::Guard with a `Destination`.
 			if (pAircraft->Ammo)
 				pTechno->SetDestination(nullptr, true);
 
-			// To avoid `AirportBound=yes` aircraft pausing in the air and let they returning to air base immediately.
-			if (!pAircraft->DockNowHeadingTo || (pAircraft->DockNowHeadingTo != pAircraft->GetNthLink())) // If the aircraft have no valid dock, try to find a new one
+			// Always send the aircraft back to its airbase on Stop. The old
+			// DockNowHeadingTo/GetNthLink check left guarding aircraft hovering
+			// and descending in place (F22 + Area Guard + S).
+			if (!returnToBase())
 				pAircraft->EnterIdleMode(false, true);
 		}
 		else if (pAircraft->Ammo)
 		{
 			// To avoid `AirportBound=no` aircraft ignoring the stop task or directly return to the airport.
-			if (pAircraft->Destination && static_cast<int>(CellClass::Coord2Cell(pAircraft->Destination->GetCoords()).DistanceFromSquared(pAircraft->GetMapCoords())) > 2) // If the aircraft is moving, find the forward cell then stop in it
+			// Aircraft that are already guarding in the air must stay airborne:
+			// sending them to a ground cell makes the fly locomotor descend and
+			// land (observed as "guard area + S lands on the ground").
+			const bool guarding = mission == Mission::Area_Guard || mission == Mission::Guard;
+
+			if (guarding)
+			{
+				// Drop any leftover ground/patrol destination: keeping it made
+				// the aircraft descend towards the ground instead of returning.
+				pAircraft->SetDestination(nullptr, true);
+
+				// Stopping a guarding aircraft should send it back to its
+				// airbase/dock when one is available. EnterIdleMode is not
+				// used because its hook turns into an in-place Area_Guard.
+				if (!returnToBase())
+					pAircraft->QueueMission(Mission::Guard, true);
+			}
+			else if (pAircraft->Destination
+				&& static_cast<int>(CellClass::Coord2Cell(pAircraft->Destination->GetCoords()).DistanceFromSquared(pAircraft->GetMapCoords())) > 2) // If the aircraft is moving, find the forward cell then stop in it
+			{
 				pAircraft->SetDestination(pAircraft->GetCell()->GetNeighbourCell(static_cast<FacingType>(pAircraft->PrimaryFacing.Current().GetValue<3>())), true);
+			}
 		}
 		else if (!pAircraft->DockNowHeadingTo || (pAircraft->DockNowHeadingTo != pAircraft->GetNthLink()))
 		{

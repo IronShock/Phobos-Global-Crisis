@@ -250,6 +250,14 @@ void SWButtonClass::OnMouseLeave()
 
 bool SWButtonClass::Action(GadgetFlag flags, DWORD* pKey, KeyModifier modifier)
 {
+	auto const pSWType = SuperWeaponTypeClass::Array.GetItemOrDefault(this->SuperIndex);
+	Debug::Log("[SWButton] Action SW[%s] flags=%X enabled=%d pauseBlock=%d currentSW=%d\n",
+		pSWType ? pSWType->get_ID() : "<none>",
+		static_cast<unsigned>(flags),
+		SWSidebarClass::IsEnabled() ? 1 : 0,
+		TacticalPauseCommandClass::IsBlockingActions() ? 1 : 0,
+		DisplayClass::Instance.CurrentSWTypeIndex);
+
 	if (TacticalPauseCommandClass::IsBlockingActions())
 		return true;
 

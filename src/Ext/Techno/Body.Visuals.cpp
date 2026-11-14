@@ -342,9 +342,10 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 	if (!pDrawer)
 		return;
 
-	// 32 facings with the same 45 degree offset the existing SHP body draws use.
+	// Aircraft SHP frames start at the north/east frame without the 45-degree
+	// offset used by vehicle body frames.
 	const int facing = Math::clamp(
-		static_cast<int>(pThis->PrimaryFacing.Current().GetFacing<32>(4)),
+		static_cast<int>(pThis->PrimaryFacing.Current().GetFacing<32>(0)),
 		0, static_cast<int>(pImage->Frames) - 1);
 
 	// DSurface::Temp draws in tactical client space, so the object has to be projected with
@@ -385,7 +386,8 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 		Point2D shadowPos = drawPoint + shadowOffset;
 
 		DSurface::Temp->DrawSHP(pDrawer, pImage, facing, &shadowPos, &DSurface::ViewBounds,
-			BlitterFlags::bf_400 | BlitterFlags::Darken | BlitterFlags::Centered,
+			BlitterFlags::bf_400 | BlitterFlags::Darken
+				| BlitterFlags::TransLucent50 | BlitterFlags::Centered,
 			0, zAdjust - 1, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
 	}
 

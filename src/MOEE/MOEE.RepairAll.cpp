@@ -246,7 +246,7 @@ namespace MOEE::RepairAll
 	// Called from the two trigger hooks.
 	bool TriggerHook(bool fromButton)
 	{
-		if (Phobos::Config::MOEE_RepairAll == 0)
+		if (MOEE::Disabled() || Phobos::Config::MOEE_RepairAll == 0)
 			return false;
 
 		bool dbl = false;
@@ -273,7 +273,7 @@ namespace MOEE::RepairAll
 
 	void Poll()
 	{
-		if (Phobos::Config::MOEE_RepairAll == 0)
+		if (MOEE::Disabled() || Phobos::Config::MOEE_RepairAll == 0)
 			return;
 
 		LoadVK();

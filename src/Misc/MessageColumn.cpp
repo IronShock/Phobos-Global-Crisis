@@ -11,6 +11,7 @@
 
 #include <Misc/TextScale.h>
 #include <Misc/TacticalMap.h>
+#include <UI/UnitStatusPanel.h>
 
 #include <cmath>
 
@@ -482,10 +483,35 @@ void MessageColumnClass::InitIO()
 		return;
 
 	const auto& rect = DSurface::ViewBounds;
-	const int sideWidth = rect.Width / 6;
-	int width = rect.Width - (sideWidth * 2);
-	int posX = rect.X + sideWidth;
-	int posY = rect.Height - rect.Height / 8;
+
+	// Keep the centre message column clear of the unit status panel. The panel
+	// occupies the bottom-left corner, so the remaining columns are centred in
+	// the area to its right. If that area is too narrow (very small windows),
+	// fall back to the original full-width layout.
+	int zoneX = rect.X;
+	int zoneWidth = rect.Width;
+
+	if (Phobos::Config::UnitStatusPanel_Enable && Phobos::Config::UnitStatusPanel_MessageAvoid)
+	{
+		const auto panel = UnitStatusPanel::GetPanelRect();
+
+		if (panel.Width > 0 && panel.Height > 0)
+		{
+			const int candidateX = panel.X + panel.Width + 8;
+			const int candidateWidth = rect.X + rect.Width - candidateX;
+
+			if (candidateWidth >= 360)
+			{
+				zoneX = candidateX;
+				zoneWidth = candidateWidth;
+			}
+		}
+	}
+
+	const int sideWidth = zoneWidth / 6;
+	int width = zoneWidth - (sideWidth * 2);
+	int posX = zoneX + sideWidth;
+	int posY = rect.Y + rect.Height - rect.Height / 8;
 	// Row pitch follows the (possibly scaled) font line height.
 	const int rowPitch = static_cast<int>(std::lround(MessageToggleClass::ButtonSide * TextScale::GetScaleFactor()));
 	const int maxLines = posY / rowPitch - 1;
@@ -502,7 +528,7 @@ void MessageColumnClass::InitIO()
 
 	// Button_Main
 	{
-		const int locX = rect.Width - MessageToggleClass::ButtonSide;
+		const int locX = zoneX + zoneWidth - MessageToggleClass::ButtonSide;
 		const int locY = 0;
 		const auto pButton = GameCreate<MessageToggleClass>(0, locX, locY, MessageToggleClass::ButtonSide, MessageToggleClass::ButtonSide);
 		pButton->Zap();
@@ -522,7 +548,7 @@ void MessageColumnClass::InitIO()
 
 	// Button_Up
 	{
-		const int locX = rect.Width * 5 / 12;
+		const int locX = zoneX + zoneWidth * 5 / 12;
 		const int locY = posY - (rowPitch * this->MaxRecord) - 1 - MessageToggleClass::ButtonHeight;
 		const auto pButton = GameCreate<MessageButtonClass>(2, locX, locY, sideWidth, MessageToggleClass::ButtonHeight);
 		pButton->Zap();
@@ -532,7 +558,7 @@ void MessageColumnClass::InitIO()
 
 	// Button_Down
 	{
-		const int locX = rect.Width * 5 / 12;
+		const int locX = zoneX + zoneWidth * 5 / 12;
 		const int locY = posY;
 		const auto pButton = GameCreate<MessageButtonClass>(3, locX, locY, sideWidth, MessageToggleClass::ButtonHeight);
 		pButton->Zap();

@@ -22,10 +22,18 @@
 #include <Matrix3D.h>
 #include <MapClass.h>
 #include <CellClass.h>
+#include <IndexClass.h>
+#include <TargetClass.h>
+#include <FlyLocomotionClass.h>
+#include <JumpjetLocomotionClass.h>
 #include <Ext/TechnoType/Body.h>
+#include <Utilities/Macro.h>
+#include <Utilities/Debug.h>
 
 #include <cmath>
 #include <algorithm>
+#include <cstring>
+#include <vector>
 
 FormationManager FormationManager::Instance;
 
@@ -34,6 +42,258 @@ static const int MIN_DRAG_LEPTONS = 50;
 
 // 1 cell = 256 leptons
 static const int LEPTONS_PER_CELL = 256;
+
+namespace
+{
+	bool IsAirUnit(const FootClass* pFoot);
+
+	// Formation preview is a client-side drawing path. The VXL cache belongs to
+	// the type and is reused by the engine's normal unit drawing, so drawing the
+	// preview must not allocate a fresh cache (and leak its buffers) every frame.
+	VoxelIndexKey MakeFormationMainKey(int facing)
+	{
+		VoxelIndexKey key(0);
+		key.MainVoxel.FrameIndex = 0;
+		key.MainVoxel.BodyFacing = static_cast<unsigned>(facing);
+		key.MainVoxel.RampType = 0;
+		key.MainVoxel.AuxVoxel = 0;
+		return key;
+	}
+
+	VoxelIndexKey MakeFormationAircraftKey(int facing)
+	{
+		VoxelIndexKey key(0);
+		key.AircraftVoxel.BodyFacing = static_cast<unsigned>(facing);
+		key.AircraftVoxel.RampType = 0;
+		key.AircraftVoxel.FrameIndex = 0;
+		return key;
+	}
+
+	VoxelIndexKey MakeFormationTurretKey(int bodyFacing, int turretFacing)
+	{
+		VoxelIndexKey key(0);
+		key.MinorVoxel.TurretFacing = static_cast<unsigned>(turretFacing);
+		key.MinorVoxel.BodyFacing = static_cast<unsigned>(bodyFacing);
+		key.MinorVoxel.RampType = 0;
+		key.MinorVoxel.TurretFrameIndex = 0;
+		key.MinorVoxel.TurretWeaponIndex = 0;
+		return key;
+	}
+
+	// Draw a voxel unit into the tactical surface at the drag preview position.
+	// The engine's VXL matrix uses a four-step offset compared with the facing
+	// key; the same convention is used by the unit status-panel voxel renderer.
+	bool DrawVoxelUnitPreview(FootClass* pFoot, TechnoTypeClass* pType,
+		const Point2D& screenPos, const DirStruct& formationDir, DSurface* pSurface)
+	{
+		if (!pFoot || !pType || !pSurface || !pType->Voxel)
+			return false;
+
+		if (!pType->MainVoxel.VXL || !pType->MainVoxel.HVA)
+			return false;
+
+		if (!pFoot->GetDrawer())
+			return false;
+
+		const int desiredFacing = static_cast<int>(formationDir.GetFacing<32>());
+		const bool aircraft = pType->WhatAmI() == AbstractType::AircraftType;
+
+		// The engine's ground UnitClass Draw_Matrix lowers the facing by 8
+		// before building the Z rotation, which is exactly GetRadian<32>() on
+		// the desired facing. Do not apply the old UnitPortrait -4 offset here:
+		// that turned every ground VXL 45 degrees away from the arrow.
+		Matrix3D facingMtx = Matrix3D::GetIdentity();
+		facingMtx.RotateZ(static_cast<float>(
+			DirStruct(desiredFacing * 2048).GetRadian<32>()));
+		Matrix3D bodyMtx = Matrix3D::VoxelDefaultMatrix * facingMtx;
+
+		RectangleStruct bounds = DSurface::ViewBounds;
+		Point2D center = screenPos;
+		const int bodyKey = (aircraft
+			? MakeFormationAircraftKey(desiredFacing)
+			: MakeFormationMainKey(desiredFacing)).Value;
+
+		// Voxel blitting is reliable with the engine's normal alpha/flat path.
+		// (The SHP preview can use TransLucent25, but VXL transparency is not
+		// consistently supported by the engine's voxel blitters.)
+		constexpr BlitterFlags flags = BlitterFlags::Alpha | BlitterFlags::Flat;
+
+		pFoot->Draw_A_VXL(&pType->MainVoxel, 0, bodyKey, &pType->VoxelMainCache,
+			&bounds, &center, &bodyMtx, 1000, flags, 0);
+
+		if (pType->Turret && pType->TurretVoxel.VXL && pType->TurretVoxel.HVA)
+		{
+			const int turretKey = MakeFormationTurretKey(desiredFacing, desiredFacing).Value;
+
+			pFoot->Draw_A_VXL(&pType->TurretVoxel, 0, turretKey,
+				&pType->VoxelTurretWeaponCache, &bounds, &center,
+				&bodyMtx, 1000, flags, 0);
+
+			if (pType->BarrelVoxel.VXL && pType->BarrelVoxel.HVA)
+			{
+				pFoot->Draw_A_VXL(&pType->BarrelVoxel, 0, turretKey,
+					&pType->VoxelTurretBarrelCache, &bounds, &center,
+					&bodyMtx, 1000, flags, 0);
+			}
+		}
+
+		return true;
+	}
+
+	// Formation facing is a private EventClass type. It is queued, sent and
+	// executed by the engine exactly like an order, so every peer sees the same
+	// event stream. The payload is batched to avoid filling EventClass::OutList
+	// with one event per selected unit.
+	constexpr unsigned char FormationNetType = 0x42;
+	constexpr size_t FormationNetPayloadSize = 64;
+	constexpr unsigned char FormationNetVersion = 1;
+	constexpr size_t FormationNetMaxEntries = 8;
+
+	struct FormationFacingRequest
+	{
+		FootClass* Unit = nullptr;
+		DirStruct Facing {};
+	};
+
+#pragma pack(push, 1)
+	struct FormationFacingEntry
+	{
+		TargetClass Whom;
+		unsigned short Facing;
+	};
+
+	struct FormationFacingBatch
+	{
+		char Magic[2];
+		unsigned char Version;
+		unsigned char Count;
+		FormationFacingEntry Entries[FormationNetMaxEntries];
+	};
+#pragma pack(pop)
+
+	static_assert(sizeof(FormationFacingEntry) == 7, "Unexpected TargetClass layout");
+	static_assert(sizeof(FormationFacingBatch) <= FormationNetPayloadSize, "Formation payload too large");
+
+	bool IsAirUnit(const FootClass* pFoot)
+	{
+		if (!pFoot)
+			return false;
+
+		if (pFoot->WhatAmI() == AbstractType::Aircraft)
+			return true;
+
+		auto const pLoco = pFoot->Locomotor;
+
+		if (!pLoco)
+			return false;
+
+		return locomotion_cast<FlyLocomotionClass*>(pLoco)
+			|| locomotion_cast<JumpjetLocomotionClass*>(pLoco);
+	}
+
+	// A compact, deterministic 50% shadow for the formation preview. Drawing
+	// the VXL body a second time with Darken produced a solid black silhouette
+	// on some blitters; blending a small ellipse gives the requested opacity.
+	void DrawPreviewShadow(DSurface* pSurface, const Point2D& center,
+		int radiusX, int radiusY)
+	{
+		if (!pSurface || radiusX <= 0 || radiusY <= 0)
+			return;
+
+		const RectangleStruct& view = DSurface::ViewBounds;
+		const int rx2 = radiusX * radiusX;
+		const int ry2 = radiusY * radiusY;
+		const int limit = rx2 * ry2;
+
+		for (int y = -radiusY; y <= radiusY; ++y)
+		{
+			for (int x = -radiusX; x <= radiusX; ++x)
+			{
+				if (x * x * ry2 + y * y * rx2 > limit)
+					continue;
+
+				Point2D point { center.X + x, center.Y + y };
+
+				if (point.X < view.X || point.Y < view.Y
+					|| point.X >= view.X + view.Width
+					|| point.Y >= view.Y + view.Height)
+					continue;
+
+				BYTE r = 0, g = 0, b = 0;
+				Drawing::Int_To_RGB(pSurface->GetPixel(&point), r, g, b);
+				pSurface->SetPixel(&point,
+					Drawing::RGB_To_Int(r / 2, g / 2, b / 2));
+			}
+		}
+	}
+
+	void SendFormationFacing(const std::vector<FormationFacingRequest>& requests)
+	{
+		if (requests.empty() || !HouseClass::CurrentPlayer)
+			return;
+
+		const int house = HouseClass::CurrentPlayer->ArrayIndex;
+		static int queueFullLogCount = 0;
+
+		for (size_t offset = 0; offset < requests.size(); offset += FormationNetMaxEntries)
+		{
+			const size_t count = std::min(FormationNetMaxEntries, requests.size() - offset);
+
+			EventClass event(house, EventType::Empty);
+			event.Type = static_cast<EventType>(FormationNetType);
+			event.IsExecuted = false;
+			event.HouseIndex = static_cast<char>(house);
+			std::memset(event.DataBuffer, 0, sizeof(event.DataBuffer));
+
+			auto* data = reinterpret_cast<unsigned char*>(event.DataBuffer);
+			data[0] = 'F';
+			data[1] = 'M';
+			data[2] = FormationNetVersion;
+			data[3] = static_cast<unsigned char>(count);
+
+			for (size_t i = 0; i < count; ++i)
+			{
+				const auto& request = requests[offset + i];
+				FormationFacingEntry entry;
+				entry.Whom = TargetClass(request.Unit);
+				entry.Facing = request.Facing.Raw;
+				std::memcpy(data + 4 + i * sizeof(entry), &entry, sizeof(entry));
+			}
+
+			if (!EventClass::OutList.Add(event) && queueFullLogCount < 20)
+			{
+				++queueFullLogCount;
+				Debug::Log("[Phobos::Formation] facing event queue full, count=%d\n",
+					static_cast<int>(count));
+			}
+		}
+	}
+
+	void ReceiveFormationFacing(const EventClass& event)
+	{
+		auto const* data = reinterpret_cast<const unsigned char*>(event.DataBuffer);
+
+		if (data[0] != 'F' || data[1] != 'M' || data[2] != FormationNetVersion)
+			return;
+
+		const unsigned count = std::min<unsigned>(data[3], FormationNetMaxEntries);
+
+		for (unsigned i = 0; i < count; ++i)
+		{
+			FormationFacingEntry entry;
+			std::memcpy(&entry, data + 4 + i * sizeof(entry), sizeof(entry));
+
+			auto const pFoot = entry.Whom.As_Foot();
+
+			if (!pFoot || pFoot->Health <= 0 || pFoot->InLimbo)
+				continue;
+
+			const DirStruct dir { static_cast<int>(entry.Facing) };
+			pFoot->PrimaryFacing.SetDesired(dir);
+			pFoot->SecondaryFacing.SetDesired(dir);
+		}
+	}
+}
 
 // Spacing used by one unit: infantry line up tighter than vehicles/aircraft.
 static int GetUnitSpacing(FootClass* pFoot)
@@ -452,9 +712,44 @@ void FormationManager::DrawUnitPreview(FootClass* pFoot, const Point2D& screenPo
 	if (!pType)
 		return;
 
-	// Skip VXL units - cannot easily draw them semi-transparently
-	if (pType->Voxel)
+	auto pSurface = DSurface::Temp;
+	if (!pSurface)
 		return;
+
+	const auto& view = DSurface::ViewBounds;
+	bool drawShadow = false;
+	Point2D shadowScreenPos { 0, 0 };
+
+	if (IsAirUnit(pFoot) && pFoot->GetRenderCoords().Z > worldPos.Z + 8)
+	{
+		auto [groundScreen, visible] = TacticalClass::Instance->CoordsToClient(worldPos);
+		const bool inView = groundScreen.X >= view.X
+			&& groundScreen.Y >= view.Y
+			&& groundScreen.X < view.X + view.Width
+			&& groundScreen.Y < view.Y + view.Height;
+
+		if (visible && inView)
+		{
+			shadowScreenPos = groundScreen;
+			drawShadow = true;
+		}
+	}
+
+	if (drawShadow)
+	{
+		const int maxDimension = std::max(16, static_cast<int>(pType->MaxDimension));
+		const int radiusX = std::clamp(maxDimension / 3, 8, 32);
+		const int radiusY = std::max(4, radiusX / 2);
+		DrawPreviewShadow(pSurface, shadowScreenPos, radiusX, radiusY);
+	}
+
+	if (pType->Voxel)
+	{
+		// VXL units use their own engine draw path. If the type has no usable
+		// voxel/HVA, fall through to the SHP path when an image exists.
+		if (DrawVoxelUnitPreview(pFoot, pType, screenPos, formationDir, pSurface))
+			return;
+	}
 
 	SHPStruct* pSHP = pType->GetImage();
 	if (!pSHP || pSHP->Frames <= 0)
@@ -464,11 +759,7 @@ void FormationManager::DrawUnitPreview(FootClass* pFoot, const Point2D& screenPo
 	if (!pPalette)
 		return;
 
-	auto pSurface = DSurface::Temp;
-	if (!pSurface)
-		return;
-
-	RectangleStruct bounds = pSurface->GetRect();
+	RectangleStruct bounds = DSurface::ViewBounds;
 	BlitterFlags flags = BlitterFlags::TransLucent25 | BlitterFlags::Centered;
 
 	auto whatAmI = pFoot->WhatAmI();
@@ -480,21 +771,26 @@ void FormationManager::DrawUnitPreview(FootClass* pFoot, const Point2D& screenPo
 		if (facings <= 0)
 			facings = 32;
 
-		// YR SHP frames are offset by 45 degrees from DirStruct convention.
-		// Frame i shows direction (i * 360/Facings - 45 degrees).
-		// Use GetFacing with offset = Facings/8 to compensate (equals 45 degrees).
-		int facingOffset = facings / 8;
+		const bool jumpjet = IsAirUnit(pFoot);
+
+		// YR SHP frames are offset by 45 degrees from DirStruct convention for
+		// normal vehicles. Jumpjet helicopters use the walk-frame block and the
+		// art's frame zero is north/east, so they must not get that offset.
+		int facingOffset = jumpjet ? 0 : facings / 8;
 		int facing = 0;
 		switch (facings)
 		{
 		case 8:  facing = static_cast<int>(formationDir.GetFacing<8>(facingOffset));  break;
 		case 16: facing = static_cast<int>(formationDir.GetFacing<16>(facingOffset)); break;
 		case 32: facing = static_cast<int>(formationDir.GetFacing<32>(facingOffset)); break;
-		default: facing = static_cast<int>(formationDir.GetFacing<32>(4)); break;
+		default: facing = static_cast<int>(formationDir.GetFacing<32>(jumpjet ? 0 : 4)); break;
 		}
 
-		int standFrames = std::max(1, pUnitType->StandingFrames);
-		int bodyFrame = pUnitType->StartStandFrame + facing * standFrames;
+		const int blockStart = jumpjet ? pUnitType->StartWalkFrame : pUnitType->StartStandFrame;
+		const int blockFrames = jumpjet
+			? std::max(1, static_cast<int>(pUnitType->WalkFrames))
+			: std::max(1, pUnitType->StandingFrames);
+		int bodyFrame = blockStart + facing * blockFrames;
 
 		if (bodyFrame >= 0 && bodyFrame < pSHP->Frames)
 		{
@@ -505,8 +801,8 @@ void FormationManager::DrawUnitPreview(FootClass* pFoot, const Point2D& screenPo
 		// Draw turret if the unit has one and SHP has enough frames
 		if (pType->Turret)
 		{
-			int turretStart = pUnitType->StartStandFrame + facings * standFrames;
-			int turretFrame = turretStart + facing * standFrames;
+			int turretStart = blockStart + facings * blockFrames;
+			int turretFrame = turretStart + facing * blockFrames;
 
 			if (turretFrame >= 0 && turretFrame < pSHP->Frames)
 			{
@@ -552,8 +848,9 @@ void FormationManager::DrawUnitPreview(FootClass* pFoot, const Point2D& screenPo
 	}
 	else if (whatAmI == AbstractType::Aircraft)
 	{
-		// SHP aircraft: use 32 facings with offset
-		int facing = static_cast<int>(formationDir.GetFacing<32>(4));
+		// Aircraft SHP art starts at the north/east frame without the 45-degree
+		// offset used by vehicle body frames.
+		int facing = static_cast<int>(formationDir.GetFacing<32>(0));
 		if (facing >= 0 && facing < pSHP->Frames)
 		{
 			pSurface->DrawSHP(pPalette, pSHP, facing, &screenPos, &bounds,
@@ -572,17 +869,43 @@ void FormationManager::DrawFormationPreview(FormationType type, const std::vecto
 	// Use a single color for all formation types (no type label shown)
 	COLORREF color = RGB(255, 255, 255);
 
+	const RectangleStruct view = DSurface::ViewBounds;
 	std::vector<Point2D> screenPositions;
-	for (const auto& worldPos : positions)
+	std::vector<CoordStruct> previewPositions;
+	std::vector<bool> drawPositions;
+	screenPositions.reserve(positions.size());
+	previewPositions.reserve(positions.size());
+	drawPositions.reserve(positions.size());
+
+	for (size_t i = 0; i < positions.size(); ++i)
 	{
-		auto [screenPos, visible] = TacticalClass::Instance->CoordsToClient(worldPos);
+		CoordStruct previewPos = positions[i];
+
+		// Formation destinations stay on the ground, but air units and jumpjets
+		// must be previewed at their current altitude instead of at Z = ground.
+		// Ground units must stay on the destination plane even though their
+		// render coordinates can contain a non-zero height offset.
+		if (i < units.size() && IsAirUnit(units[i]))
+			previewPos.Z = units[i]->GetRenderCoords().Z;
+
+		auto [screenPos, visible] = TacticalClass::Instance->CoordsToClient(previewPos);
+
+		const bool inView = screenPos.X >= view.X
+			&& screenPos.Y >= view.Y
+			&& screenPos.X < view.X + view.Width
+			&& screenPos.Y < view.Y + view.Height;
+
 		screenPositions.push_back(screenPos);
+		previewPositions.push_back(previewPos);
+		drawPositions.push_back(visible && inView);
 	}
 
-	// Draw semi-transparent unit images at each position
+	// Draw semi-transparent unit images at each position. Skipping invisible
+	// positions also keeps preview pixels out of the native bottom command bar.
 	for (size_t i = 0; i < screenPositions.size() && i < units.size(); i++)
 	{
-		DrawUnitPreview(units[i], screenPositions[i], positions[i], formationDir);
+		if (drawPositions[i])
+			DrawUnitPreview(units[i], screenPositions[i], positions[i], formationDir);
 	}
 
 	// Draw formation direction arrow from start position
@@ -603,7 +926,8 @@ void FormationManager::DrawFormationPreview(FormationType type, const std::vecto
 		auto [startScreen, startVis] = TacticalClass::Instance->CoordsToClient(m_startWorldPos);
 		auto [endScreen, endVis] = TacticalClass::Instance->CoordsToClient(arrowEnd);
 
-		if (startVis || endVis)
+		if ((startVis || endVis)
+			&& Line_In_Bounds(&startScreen, &endScreen, &DSurface::ViewBounds))
 		{
 			// Draw arrow shaft
 			pSurface->DrawLine(&startScreen, &endScreen, color);
@@ -640,6 +964,8 @@ void FormationManager::ExecuteFormation(const std::vector<CoordStruct>& position
 		return;
 
 	int houseIndex = HouseClass::CurrentPlayer->ArrayIndex;
+	std::vector<FormationFacingRequest> facingRequests;
+	facingRequests.reserve(units.size());
 
 	for (size_t i = 0; i < units.size() && i < positions.size(); i++)
 	{
@@ -648,10 +974,6 @@ void FormationManager::ExecuteFormation(const std::vector<CoordStruct>& position
 			continue;
 
 		const auto& destCoord = positions[i];
-
-		// Set desired facing to formation direction (DirStruct N=0 convention)
-		pFoot->PrimaryFacing.SetDesired(formationDir);
-		pFoot->SecondaryFacing.SetDesired(formationDir);
 
 		// Queue move command
 		EventClass e(
@@ -663,15 +985,27 @@ void FormationManager::ExecuteFormation(const std::vector<CoordStruct>& position
 			TargetClass()
 		);
 
-		EventClass::OutList.Add(e);
+		if (!EventClass::OutList.Add(e))
+		{
+			Debug::Log("[Phobos::Formation] move event queue full, unit=%p\n",
+				static_cast<void*>(pFoot));
+		}
 
-		// Add to pending facings so we can re-apply facing after arrival
+		// Facing is applied by a private network event on every client. Never
+		// change it locally here: doing so desynchronises multiplayer.
+		facingRequests.push_back({ pFoot, formationDir });
+
+		// Re-apply the formation facing after arrival through the same event.
 		m_pendingFacings[pFoot] = { formationDir, 0, false };
 	}
+
+	SendFormationFacing(facingRequests);
 }
 
 void FormationManager::ProcessPendingFacings()
 {
+	std::vector<FormationFacingRequest> facingRequests;
+
 	for (auto it = m_pendingFacings.begin(); it != m_pendingFacings.end(); )
 	{
 		auto pFoot = it->first;
@@ -694,8 +1028,7 @@ void FormationManager::ProcessPendingFacings()
 			}
 			else if (pending.FramesPending > 30)
 			{
-				pFoot->PrimaryFacing.SetDesired(pending.Facing);
-				pFoot->SecondaryFacing.SetDesired(pending.Facing);
+				facingRequests.push_back({ pFoot, pending.Facing });
 				it = m_pendingFacings.erase(it);
 				continue;
 			}
@@ -704,8 +1037,7 @@ void FormationManager::ProcessPendingFacings()
 		{
 			if (pFoot->CurrentMission != Mission::Move)
 			{
-				pFoot->PrimaryFacing.SetDesired(pending.Facing);
-				pFoot->SecondaryFacing.SetDesired(pending.Facing);
+				facingRequests.push_back({ pFoot, pending.Facing });
 				it = m_pendingFacings.erase(it);
 				continue;
 			}
@@ -713,14 +1045,15 @@ void FormationManager::ProcessPendingFacings()
 
 		if (pending.FramesPending > 600)
 		{
-			pFoot->PrimaryFacing.SetDesired(pending.Facing);
-			pFoot->SecondaryFacing.SetDesired(pending.Facing);
+			facingRequests.push_back({ pFoot, pending.Facing });
 			it = m_pendingFacings.erase(it);
 			continue;
 		}
 
 		++it;
 	}
+
+	SendFormationFacing(facingRequests);
 }
 
 void FormationManager::Process()
@@ -798,4 +1131,65 @@ void FormationManager::Process()
 	}
 
 	m_wasPressed = currentPressed;
+}
+
+// Formation facing is sent as a private EventClass type. It is a normal queued
+// event (so command counts stay identical on every peer), but the handler only
+// changes the units' desired facing. All peers must run the same Phobos build
+// because older clients do not know the 0x42 payload size.
+DEFINE_HOOK(0x4C6CC8, EventClass_Execute_FormationFacing, 0x5)
+{
+	GET(EventClass*, pEvent, ESI);
+
+	if (static_cast<unsigned char>(pEvent->Type) == FormationNetType)
+		ReceiveFormationFacing(*pEvent);
+
+	return 0;
+}
+
+// The three engine event-size paths must agree on the fixed payload length.
+// TacticalMap installs its own hooks at these addresses for type 0x41; both
+// handlers return 0 for event types they do not own.
+DEFINE_HOOK(0x64B6FE, EventClass_Size_FormationFacing, 0x6)
+{
+	GET(uint32_t, type, EDI);
+
+	if ((type & 0xFF) == FormationNetType)
+	{
+		R->EDX(static_cast<int>(FormationNetPayloadSize));
+		R->EBP(static_cast<int>(FormationNetPayloadSize));
+		return 0x64B71D;
+	}
+
+	return 0;
+}
+
+DEFINE_HOOK(0x64BE7D, EventClass_ReadSize_FormationFacing, 0x6)
+{
+	GET(uint32_t, type, EDI);
+
+	if ((type & 0xFF) == FormationNetType)
+	{
+		REF_STACK(int, eventSize, STACK_OFFSET(0xAC, -0x8C));
+		eventSize = static_cast<int>(FormationNetPayloadSize);
+		R->ECX(static_cast<int>(FormationNetPayloadSize));
+		R->EBP(static_cast<int>(FormationNetPayloadSize));
+		return 0x64BE97;
+	}
+
+	return 0;
+}
+
+DEFINE_HOOK(0x64C30E, EventClass_ParseSize_FormationFacing, 0x6)
+{
+	GET(uint32_t, type, ESI);
+
+	if ((type & 0xFF) == FormationNetType)
+	{
+		R->ECX(static_cast<int>(FormationNetPayloadSize));
+		R->EBP(static_cast<int>(FormationNetPayloadSize));
+		return 0x64C321;
+	}
+
+	return 0;
 }

@@ -6,6 +6,7 @@
 #include <Unsorted.h>
 #include <Ext/Unit/FootprintDebug.h>
 #include <Utilities/Debug.h>
+#include <Utilities/CrashTrace.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -46,19 +47,27 @@ namespace MOEE
 	{
 		static int s_n = 0;
 
-		if (ep && ep->ExceptionRecord && s_n < 8)
+		if (ep && ep->ExceptionRecord)
 		{
 			const DWORD code = ep->ExceptionRecord->ExceptionCode;
 
 			if (code != 0x406D1388u && code != 0x80000003u && code != 0xE06D7363u)
 			{
-				const unsigned eip = ep->ContextRecord
-					? static_cast<unsigned>(ep->ContextRecord->Eip) : 0u;
-				s_n++;
-				Log("fault", "code=0x%08X eip=0x%08X addr=0x%08X",
-					static_cast<unsigned>(code), eip,
-					static_cast<unsigned>(
-						reinterpret_cast<size_t>(ep->ExceptionRecord->ExceptionAddress)));
+				// Dump once, before the (possibly corrupt) game state is torn down.
+				// This preserves the last GetFireError context even when the crash
+				// itself happens deep inside a virtual call.
+				CrashTrace::Dump();
+
+				if (s_n < 8)
+				{
+					const unsigned eip = ep->ContextRecord
+						? static_cast<unsigned>(ep->ContextRecord->Eip) : 0u;
+					s_n++;
+					Log("fault", "code=0x%08X eip=0x%08X addr=0x%08X",
+						static_cast<unsigned>(code), eip,
+						static_cast<unsigned>(
+							reinterpret_cast<size_t>(ep->ExceptionRecord->ExceptionAddress)));
+				}
 			}
 		}
 
@@ -78,6 +87,9 @@ namespace MOEE
 			AddVectoredExceptionHandler(1, MOEE_Veh);
 			Log("diag", "phobos base=0x%08X",
 				static_cast<unsigned>(reinterpret_cast<size_t>(Phobos::hInstance)));
+			Log("diag", "GetFireError guard=%d trace=%d",
+				Phobos::Config::GetFireErrorGuard ? 1 : 0,
+				Phobos::Config::GetFireErrorTrace ? 1 : 0);
 
 			// Keyboard-side bindings, read once the engine has loaded KeyboardMD.ini.
 			static const char* const keyNames[] =
@@ -93,6 +105,9 @@ namespace MOEE
 				Log("keys", "%s mods=%u vk=0x%02X", name, part.mods, part.vk);
 			}
 		}
+
+		if (Disabled())
+			return;
 
 		MegaListCap::Poll();
 		Observer::Poll();
@@ -110,6 +125,9 @@ namespace MOEE
 
 	void Draw()
 	{
+		if (Disabled())
+			return;
+
 		// Preview overlays from the smart-order modules are drawn here.
 		TreeChop::Draw();
 		FuzzyAttack::Draw();

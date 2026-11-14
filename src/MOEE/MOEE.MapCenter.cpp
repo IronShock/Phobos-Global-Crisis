@@ -49,7 +49,7 @@ namespace MOEE::MapCenter
 		if (vw <= 16 || vh <= 16)
 			return;
 
-		const bool fix = Phobos::Config::MOEE_MapCenter;
+		const bool fix = !MOEE::Disabled() && Phobos::Config::MOEE_MapCenter;
 
 		// Degenerate axis = map smaller than the viewport.
 		const bool degX = fix && (mw < vw);

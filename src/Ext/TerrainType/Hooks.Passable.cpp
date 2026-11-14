@@ -1,12 +1,14 @@
 #include "Body.h"
 
 #include <HouseClass.h>
+#include <MapClass.h>
 #include <OverlayClass.h>
 #include <TerrainClass.h>
 
 #include <Ext/OverlayType/Body.h>
 
 #include <Utilities/GeneralUtils.h>
+#include <Utilities/Macro.h>
 
 constexpr bool IS_CELL_OCCUPIED(CellClass* pCell)
 {
@@ -157,3 +159,114 @@ DEFINE_HOOK(0x5FD2B6, OverlayClass_Unlimbo_SkipTerrainCheck, 0x9)
 
 	return Unlimbo;
 }
+
+#pragma region FindBuildLocation
+
+namespace FindBuildLocationTemp
+{
+	// Set while the AI building-location search calls MapClass::IsAreaFree.
+	// Terrain with CanBeBuiltOn is only accepted during that search; player
+	// placement still goes through CellClass::CanThisExistHere.
+	bool EvaluatingBuildLocation = false;
+}
+
+static bool __fastcall MapClass_IsAreaFree_Wrapper(
+	MapClass* pThis, void* _, RectangleStruct* pRect, int houseID)
+{
+	FindBuildLocationTemp::EvaluatingBuildLocation = true;
+	const bool result = pThis->IsAreaFree(pRect, houseID);
+	FindBuildLocationTemp::EvaluatingBuildLocation = false;
+	return result;
+}
+
+DEFINE_FUNCTION_JUMP(CALL, 0x5069DB, MapClass_IsAreaFree_Wrapper);
+
+// Replaces MapClass::IsAreaFree (0x586780). The vanilla function rejects any
+// cell that has an overlay; that happens before CellClass::CanThisExistHere,
+// so CanBeBuiltOn on an OverlayType (notably Tiberium.CanBeBuiltOn) never got a
+// chance. This is the missing part of the buildable-overlay feature.
+// CellClass::CanThisExistHere still performs a LandType::Buildable check after
+// the overlay branch. Tiberium's land type is normally not buildable, so the
+// overlay permission above must also bypass this second gate.
+DEFINE_HOOK(0x47CA33, CellClass_CanThisExistHere_BuildableOverlay, 0x6)
+{
+	enum { ReturnBuildable = 0x47CA70 };
+
+	GET(CellClass*, pCell, EDI);
+
+	if (pCell->OverlayTypeIndex != -1
+		&& OverlayTypeExt::CanPlaceBuildingOnOverlay(pCell->OverlayTypeIndex, nullptr, false))
+	{
+		return ReturnBuildable;
+	}
+
+	return 0;
+}
+
+DEFINE_HOOK(0x586780, MapClass_IsAreaFree, 0x7)
+{
+	enum { ReturnFromFunction = 0x586887 };
+
+	GET(MapClass*, pThis, ECX);
+	GET_STACK(RectangleStruct*, pRect, 0x4);
+	GET_STACK(const int, houseID, 0x8);
+
+	const int mask = houseID >= 0 ? 1 << houseID : 0;
+
+	for (int x = pRect->X; x < pRect->X + pRect->Width; x++)
+	{
+		for (int y = pRect->Y; y < pRect->Y + pRect->Height; y++)
+		{
+			CellClass* pCell = pThis->GetCellAt(
+				CellStruct { static_cast<short>(x), static_cast<short>(y) });
+
+			auto const pTerrain = pCell->GetTerrain(false);
+			bool altPassability = false;
+
+			if (pTerrain)
+			{
+				const bool canBuild = TerrainTypeExt::ExtMap.Find(pTerrain->Type)->CanBeBuiltOn;
+
+				if (!FindBuildLocationTemp::EvaluatingBuildLocation || !canBuild)
+				{
+					R->EAX(false);
+					return ReturnFromFunction;
+				}
+
+				altPassability = true;
+			}
+
+			const bool buildableOverlay = pCell->OverlayTypeIndex != -1
+				&& OverlayTypeExt::CanPlaceBuildingOnOverlay(
+					pCell->OverlayTypeIndex, nullptr, false);
+
+			// A buildable overlay may sit on a land type whose normal passability
+			// is not what the vanilla building search expects (Tiberium is the
+			// primary example). Let the overlay permission decide in that case.
+			const bool invalidPassability = buildableOverlay
+				? false
+				: (altPassability
+					? (pCell->Passability != PassabilityType::Passable
+						&& pCell->Passability != PassabilityType::HasFreeSpots)
+					: (pCell->Passability != PassabilityType::Passable));
+
+			// The key fix: an overlay is only invalid when it cannot be built on.
+			const bool invalidOverlay = pCell->OverlayTypeIndex != -1 && !buildableOverlay;
+
+			if ((pCell->BaseSpacerOfHouses & mask) != 0
+				|| invalidOverlay
+				|| invalidPassability
+				|| pCell->SlopeIndex
+				|| pCell->GetBuilding())
+			{
+				R->EAX(false);
+				return ReturnFromFunction;
+			}
+		}
+	}
+
+	R->EAX(pThis->InLocalRadar(pRect, true));
+	return ReturnFromFunction;
+}
+
+#pragma endregion

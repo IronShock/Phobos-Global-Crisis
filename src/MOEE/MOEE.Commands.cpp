@@ -1,4 +1,5 @@
 #include "MOEE.Commands.h"
+#include "MOEE.h"
 
 #include <Commands/Commands.h>
 #include <CommandClass.h>
@@ -122,6 +123,9 @@ namespace
 
 void MOEE::RegisterCommands()
 {
+	if (Disabled())
+		return;
+
 	MakeCommand<MOEECommandClass<0>>();
 	MakeCommand<MOEECommandClass<1>>();
 	MakeCommand<MOEECommandClass<2>>();

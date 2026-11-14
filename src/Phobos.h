@@ -3,6 +3,8 @@
 #include <Windows.h>
 
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 class CCINIClass;
 class AbstractClass;
@@ -103,6 +105,7 @@ public:
 		static bool TacticalGear;
 		static bool TacticalPause;
 		static int SmudgeCapacity;
+		static bool AresWeaponAmmo;
 		static bool TSFog;
 		static bool TSFog_RevealAllClear;
 		static bool TSFog_ForceAll;
@@ -116,6 +119,43 @@ public:
 		static bool EnableBuildingPlacementPreview;
 		static bool EnableSelectBox;
 		static bool DigitalDisplay_Enable;
+		static bool GetFireErrorGuard;
+		static bool GetFireErrorTrace;
+		static bool UnitStatusPanel_Enable;
+		static double UnitStatusPanel_Scale;
+		static int UnitStatusPanel_OffsetX;
+		static int UnitStatusPanel_OffsetY;
+		static int UnitStatusPanel_MultiPortraitLimit;
+		static bool UnitStatusPanel_MessageAvoid;
+		static bool UnitStatusPanel_FilterAvoid;
+		static int UnitStatusPanel_Opacity;
+		static int UnitStatusPanel_SliceSize;
+		static int UnitStatusPanel_ShadowOpacity;
+		static bool UnitStatusPanel_HealthTint;
+		static COLORREF UnitStatusPanel_HealthTintYellow;
+		static COLORREF UnitStatusPanel_HealthTintRed;
+		static int UnitStatusPanel_TurretOffsetMode;
+		static int UnitStatusPanel_TurretOffsetX;
+		static int UnitStatusPanel_TurretOffsetY;
+		static int UnitStatusPanel_BuildingScale;
+		static bool UnitStatusPanel_SHPShadow;
+		static std::vector<std::string> UnitStatusPanel_TurretOffsetNoOffset;
+		static std::unordered_map<std::string, int> UnitStatusPanel_TurretOffsetModeOverrides;
+		static bool UnitStatusPanel_NativeDraw;
+		static bool UnitStatusPanel_VoxelNativeDraw;
+		static std::string UnitStatusPanel_Background;
+		static std::string UnitStatusPanel_Portrait;
+		static std::string UnitStatusPanel_PortraitFrame;
+		static std::string UnitStatusPanel_InfoFrame;
+		static std::string UnitStatusPanel_BottomFrame;
+		static std::string UnitStatusPanel_SkillSlot;
+		static std::string UnitStatusPanel_SkillIcon;
+		static bool AirHeightLine_Enable;
+		static bool AirHeightLine_Dashed;
+		static bool AirHeightLine_GroundMarker;
+		static bool AirHeightLine_ShowCoordinates;
+		static int AirHeightLine_Thickness;
+		static COLORREF AirHeightLine_Color;
 		static bool MessageApplyHoverState;
 		static bool MessageDisplayInCenter;
 		static int MessageDisplayInCenter_LabelsCount;
@@ -175,6 +215,7 @@ public:
 
 		// MO_ExperienceEnhancements port (src/MOEE/). Read from
 		// RA2MD.ini -> [Phobos] with the "MOEE." prefix.
+		static bool MOEE_Disabled;
 		static bool MOEE_MegaListCap;
 		static bool MOEE_Observer;
 		static int MOEE_WaypointCap;

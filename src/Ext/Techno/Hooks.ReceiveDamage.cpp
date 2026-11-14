@@ -7,6 +7,7 @@
 #include <Ext/WeaponType/Body.h>
 #include <Ext/TEvent/Body.h>
 #include <Ext/House/Body.h>
+#include <New/Entity/AbilityClass.h>
 #include <Utilities/GeneralUtils.h>
 
 namespace ReceiveDamageTemp
@@ -22,6 +23,9 @@ DEFINE_HOOK(0x701900, TechnoClass_ReceiveDamage_Shield, 0x6)
 
 	const auto pWHExt = WarheadTypeExt::ExtMap.Find(args->WH);
 	int& damage = *args->Damage;
+
+	if (damage > 0)
+		AbilityClass::OnDamaged(pThis);
 
 	// AffectsAbove/BelowPercent & AffectsNeutral can ignore IgnoreDefenses like AffectsAllies/Enmies/Owner
 	// They should be checked here to cover all cases that directly use ReceiveDamage to deal damage

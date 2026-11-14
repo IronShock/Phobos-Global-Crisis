@@ -1,5 +1,6 @@
 #pragma once
 #include <Windows.h>
+#include <Phobos.h>
 
 // Port of MagicShiba/MO_ExperienceEnhancements into Phobos.
 //
@@ -12,6 +13,13 @@
 // the in-game keyboard settings.
 namespace MOEE
 {
+	// Master switch: all gameplay modules and keyboard commands are inert when
+	// this is true. Crash diagnostics and logging are intentionally unaffected.
+	inline bool Disabled()
+	{
+		return Phobos::Config::MOEE_Disabled;
+	}
+
 	// Shared helpers, replacing MO_EE's GdiText.h / OrderUtil.h equivalents.
 	bool IsPlausiblePtr(const void* p);
 	bool IsMultiplayer();

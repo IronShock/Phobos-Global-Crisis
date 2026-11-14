@@ -21,6 +21,34 @@ void TechnoExt::ExtData::InitializeLaserTrails()
 		this->LaserTrails.emplace_back(std::make_unique<LaserTrailClass>(entry.GetType(), this->OwnerObject()->Owner, entry.FLH, entry.IsOnTurret));
 }
 
+void TechnoExt::ExtData::InitializeAbilities()
+{
+	if (!this->Abilities.empty() || !this->TypeExtData)
+		return;
+
+	this->Abilities.reserve(this->TypeExtData->Abilities.size());
+
+	for (auto const pAbilityType : this->TypeExtData->Abilities)
+	{
+		if (pAbilityType)
+			this->Abilities.emplace_back(std::make_unique<AbilityClass>(pAbilityType));
+	}
+}
+
+void TechnoExt::ExtData::UpdateAbilities()
+{
+	if (this->Abilities.empty())
+		return;
+
+	auto const pOwner = this->OwnerObject();
+
+	for (auto const& pAbility : this->Abilities)
+	{
+		if (pAbility)
+			pAbility->Update(pOwner);
+	}
+}
+
 void TechnoExt::ObjectKilledBy(TechnoClass* pVictim, TechnoClass* pKiller, HouseClass* pHouseKiller)
 {
 	TechnoClass* pObjectKiller = nullptr;

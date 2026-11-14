@@ -2294,7 +2294,7 @@ void TacticalMap::LoadFromINI(CCINIClass* pINI)
 	Settings.Toolbar = GetPrivateProfileIntA(section, "Toolbar", 1, ini) != 0;
 	Settings.BrushWidth = std::clamp(static_cast<int>(GetPrivateProfileIntA(section, "Brush.Width", 2, ini)), 1, 16);
 	Settings.EraserRadius = std::clamp(static_cast<int>(GetPrivateProfileIntA(section, "Eraser.Radius", 12, ini)), 2, 64);
-	Settings.ShareWithTeam = GetPrivateProfileIntA("Multiplayer", "ShareWithTeam", 0, ini) != 0;
+	Settings.ShareWithTeam = GetPrivateProfileIntA("Multiplayer", "ShareWithTeam", 1, ini) != 0;
 
 	char buffer[64] {};
 

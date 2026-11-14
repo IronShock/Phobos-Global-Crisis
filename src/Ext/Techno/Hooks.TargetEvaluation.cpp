@@ -5,6 +5,8 @@
 #include <Ext/Building/Body.h>
 #include <InputManagerClass.h>
 #include <Utilities/Debug.h>
+#include <Utilities/CrashTrace.h>
+#include <Utilities/PointerSanity.h>
 #include <Phobos.h>
 #include <Unsorted.h>
 #include <algorithm>  // std::find
@@ -19,6 +21,13 @@ inline FireError ApplyWeaponAmmoFireError(TechnoClass* pThis, int nWeaponIndex, 
 
 	auto const pExt = TechnoExt::ExtMap.Find(pThis);
 	TechnoExt::RefreshWeaponAmmoSlot(pThis, nWeaponIndex);
+
+	// The extension can already be gone while the object is being destroyed.
+	// RefreshWeaponAmmoSlot handles that case, so only read the runtime state
+	// when the extension still exists.
+	if (!pExt)
+		return result;
+
 	auto const& runtime = pExt->WeaponAmmo[nWeaponIndex];
 
 	if (!runtime.HasPool)
@@ -40,6 +49,141 @@ inline FireError ApplyWeaponAmmoFireError(TechnoClass* pThis, int nWeaponIndex, 
 
 	return result;
 }
+
+// ============================================================================
+// GetFireError context guard + crash tracing
+// ============================================================================
+//
+// TechnoClass::GetFireError dereferences several raw pointers:
+//   - the target object (WhatAmI and type)
+//   - this->Locomotor (ILocomotion COM interface: Is_Moving_Now / Can_Fire)
+// If the AI target scan or a type conversion left one of them stale, the
+// virtual call reads a bogus vtable slot and executes whatever value is there
+// (observed once as "EIP=0x4E0"). The helpers below validate the structure of
+// those objects without dereferencing their internals, reject the call when
+// something is obviously broken, and keep a small trace so the exception
+// handler can report the exact object that was being processed.
+namespace FireErrorSanity
+{
+	enum class Result : int
+	{
+		Ok = 0,
+		BadThis = 1,
+		BadWeaponIndex = 2,
+		BadTarget = 3,
+		BadLocomotor = 4,
+	};
+
+	inline TechnoTypeClass* SafeType(TechnoClass* pThis)
+	{
+		if (!PointerSanity::IsSaneObject(pThis))
+			return nullptr;
+
+		auto const pType = pThis->GetTechnoType();
+
+		return PointerSanity::IsSaneObject(pType) ? pType : nullptr;
+	}
+
+	inline const char* SafeObjectId(ObjectClass* pObj)
+	{
+		if (!PointerSanity::IsSaneObject(pObj))
+			return nullptr;
+
+		if (auto const pTechno = abstract_cast<TechnoClass*>(pObj))
+		{
+			auto const pType = SafeType(pTechno);
+
+			return pType ? pType->get_ID() : nullptr;
+		}
+
+		return nullptr;
+	}
+
+	inline ILocomotion* GetLocomotor(TechnoClass* pThis)
+	{
+		if (!PointerSanity::IsSaneObject(pThis))
+			return nullptr;
+
+		if (auto const pFoot = abstract_cast<FootClass*>(pThis))
+			return pFoot->Locomotor.GetInterfacePtr();
+
+		return nullptr;
+	}
+
+	inline Result Validate(TechnoClass* pThis, ObjectClass* pObj, int nWeaponIndex)
+	{
+		if (!PointerSanity::IsSaneObject(pThis))
+			return Result::BadThis;
+
+		if (nWeaponIndex >= TechnoTypeClass::MaxWeapons)
+			return Result::BadWeaponIndex;
+
+		if (!PointerSanity::IsSaneObject(pObj))
+			return Result::BadTarget;
+
+		if (auto const pLoco = GetLocomotor(pThis))
+		{
+			if (!PointerSanity::IsSaneLocomotor(pLoco))
+				return Result::BadLocomotor;
+		}
+
+		return Result::Ok;
+	}
+
+	inline void Record(uint32_t event, TechnoClass* pThis, ObjectClass* pObj,
+		int nWeaponIndex, uint32_t phase = 0, uint32_t flags = 0)
+	{
+		if (!CrashTrace::Enabled)
+			return;
+
+		auto const pType = SafeType(pThis);
+		auto const pLoco = GetLocomotor(pThis);
+
+		CrashTrace::Push(event, pThis, pObj, pType,
+			pType ? pType->get_ID() : nullptr, SafeObjectId(pObj), pLoco,
+			pLoco ? CrashTrace::GetVTable(pLoco) : nullptr,
+			nWeaponIndex, phase, flags);
+	}
+
+	inline void Reject(TechnoClass* pThis, ObjectClass* pObj, int nWeaponIndex,
+		Result reason, const char* pWho)
+	{
+		Record(CrashTrace::FireErrorRejected, pThis, pObj, nWeaponIndex, 0,
+			static_cast<uint32_t>(reason));
+
+		// A rejected context usually repeats every frame for the same unit.
+		// One line per 30 frames keeps the log readable.
+		static int lastLoggedFrame = -1000;
+		const int frame = Unsorted::CurrentFrame;
+
+		if (frame - lastLoggedFrame >= 30)
+		{
+			lastLoggedFrame = frame;
+
+			auto const pType = SafeType(pThis);
+			const char* const pId = pType ? pType->get_ID() : "?";
+			const char* const pTargetId = SafeObjectId(pObj);
+
+			Debug::Log("[FireErrorGuard] %s rejected (reason=%d) this=%p(%s) target=%p(%s) weapon=%d\n",
+				pWho, static_cast<int>(reason), pThis, pId, pObj, pTargetId ? pTargetId : "?", nWeaponIndex);
+		}
+	}
+
+	inline bool Guard(TechnoClass* pThis, ObjectClass* pObj, int nWeaponIndex, const char* pWho)
+	{
+		if (!Phobos::Config::GetFireErrorGuard)
+			return true;
+
+		auto const result = Validate(pThis, pObj, nWeaponIndex);
+
+		if (result == Result::Ok)
+			return true;
+
+		Reject(pThis, pObj, nWeaponIndex, result, pWho);
+		return false;
+	}
+}
+
 
 // TA.VirtualUnit: virtual TA child units cannot be attacked. Any attempt to
 // target one fails as ILLEGAL.
@@ -112,28 +256,39 @@ namespace UrbanCombatTargetHelper
 }
 
 // TechnoClass::GetFireError - let a defender-side unit pass the allied-target
-// check for a contested UC building. Hooked on the `call IsAlliedWith`
-// (0x6FC296); when the fix applies we report "not allied" so the target is
-// treated as hostile, otherwise the original alliance result is reproduced.
-// The callee cleans its own argument (ret 4), so the pushed arg is popped and
-// execution resumes right after the call.
-DEFINE_HOOK(0x6FC296, TechnoClass_GetFireError_UCAllowDefender, 0x5)
+// check for a contested UC building.
+//
+// Original engine code:
+//   6FC296  call HouseClass::IsAlliedWith   ; __thiscall, ret 4
+//   6FC29B  test al, al
+//   6FC29D  je   0x6FCD29                   ; not allied -> CANT
+//   6FC2A3                                  ; allied -> continue
+//
+// The previous implementation hooked the call at 0x6FC296 and simulated the
+// callee's `ret 4` with R->ESP(R->ESP() + 4). That only works when the hook
+// engine applies ESP modifications to the real stack. The deployed Syringe
+// 0.7.3.0 does not: its hook stub restores the registers with `popad`, which
+// discards the modified ESP (SyringeFeatures::ESPModification stays false).
+// The pushed argument therefore stayed on the stack, the base GetFireError's
+// `ret 0xC` popped a value from the wrong slot and jumped to a garbage address
+// (observed as EIP=0x4E0, EAX=6, ESP exactly one dword above the normal value,
+// for an AI spy scanning the neutral NEGLAMP building).
+//
+// Hook the instruction after the call instead: IsAlliedWith runs normally and
+// pops its own argument, so the stack stays balanced. We only pick the branch
+// that the removed `test/je` would have taken.
+DEFINE_HOOK(0x6FC29B, TechnoClass_GetFireError_UCAllowDefender, 0x8)
 {
 	GET(TechnoClass* const, pThis, ESI);
 	GET(TechnoClass* const, pTarget, EBP);
 
-	if (UrbanCombatTargetHelper::CanDefenderAttackUC(pThis, pTarget))
-	{
-		R->EAX(0);
-	}
-	else
-	{
-		R->EAX(pTarget->Owner->IsAlliedWith(pThis->Owner));
-	}
+	// AL still holds IsAlliedWith's result. A defender-side unit must be able
+	// to attack the contested building, so force the "not allied" branch.
+	const bool allied = UrbanCombatTargetHelper::CanDefenderAttackUC(pThis, pTarget)
+		? false
+		: R->AL() != 0;
 
-	R->ESP(R->ESP() + 4);
-
-	return 0x6FC29B;
+	return allied ? 0x6FC2A3 : 0x6FCD29;
 }
 
 #pragma region TargetAcquisition
@@ -569,12 +724,19 @@ inline MouseOverObjectPtr GetOriginalAircraftMouseOverObject()
 
 FireError __fastcall UnitClass__GetFireError_Wrapper(UnitClass* pThis, void* _, ObjectClass* pObj, int nWeaponIndex, bool ignoreRange)
 {
+	if (!FireErrorSanity::Guard(pThis, pObj, nWeaponIndex, "Unit"))
+		return FireError::ILLEGAL;
+
 	// TA.VirtualUnit: cannot attack virtual units.
 	if (IsUnattackableTarget(pObj))
 		return FireError::ILLEGAL;
 
+	FireErrorSanity::Record(CrashTrace::FireErrorEnter, pThis, pObj, nWeaponIndex);
 	AresScheme::Prefix(pThis, pObj, nWeaponIndex, false);
+	FireErrorSanity::Record(CrashTrace::FireErrorBeforeEngine, pThis, pObj, nWeaponIndex);
 	auto const result = pThis->UnitClass::GetFireError(pObj, nWeaponIndex, ignoreRange);
+	FireErrorSanity::Record(CrashTrace::FireErrorAfterEngine, pThis, pObj, nWeaponIndex,
+		static_cast<uint32_t>(result));
 	AresScheme::Suffix();
 
 	// === Target Filter System ===
@@ -603,12 +765,19 @@ DEFINE_FUNCTION_JUMP(VTABLE, 0x7F6030, UnitClass__GetFireError_Wrapper)
 
 FireError __fastcall InfantryClass__GetFireError_Wrapper(InfantryClass* pThis, void* _, ObjectClass* pObj, int nWeaponIndex, bool ignoreRange)
 {
+	if (!FireErrorSanity::Guard(pThis, pObj, nWeaponIndex, "Infantry"))
+		return FireError::ILLEGAL;
+
 	// TA.VirtualUnit: cannot attack virtual units.
 	if (IsUnattackableTarget(pObj))
 		return FireError::ILLEGAL;
 
+	FireErrorSanity::Record(CrashTrace::FireErrorEnter, pThis, pObj, nWeaponIndex);
 	AresScheme::Prefix(pThis, pObj, nWeaponIndex, false);
+	FireErrorSanity::Record(CrashTrace::FireErrorBeforeEngine, pThis, pObj, nWeaponIndex);
 	auto const result = pThis->InfantryClass::GetFireError(pObj, nWeaponIndex, ignoreRange);
+	FireErrorSanity::Record(CrashTrace::FireErrorAfterEngine, pThis, pObj, nWeaponIndex,
+		static_cast<uint32_t>(result));
 	AresScheme::Suffix();
 
 	// === Target Filter System ===
@@ -749,21 +918,31 @@ inline GetFireErrorPtr GetOriginalAircraftGetFireError()
 
 FireError __fastcall BuildingClass__GetFireError_Wrapper(BuildingClass* pThis, void* _, ObjectClass* pObj, int nWeaponIndex, bool ignoreRange)
 {
+	if (!FireErrorSanity::Guard(pThis, pObj, nWeaponIndex, "Building"))
+		return FireError::ILLEGAL;
+
 	// TA.VirtualUnit: cannot attack virtual units.
 	if (IsUnattackableTarget(pObj))
 		return FireError::ILLEGAL;
 
 	// UrbanCombat: while an indoor battle is running the building's occupants
 	// fight only inside - they stop firing at outside units.
-	if (BuildingExt::ExtMap.Find(pThis)->UrbanCombat_State != BuildingExt::ExtData::UrbanCombatState::None)
+	if (auto const pBuildingExt = BuildingExt::ExtMap.Find(pThis))
 	{
-		if (pThis->Target == pObj)
-			pThis->Target = nullptr;
+		if (pBuildingExt->UrbanCombat_State != BuildingExt::ExtData::UrbanCombatState::None)
+		{
+			if (pThis->Target == pObj)
+				pThis->Target = nullptr;
 
-		return FireError::CANT;
+			return FireError::CANT;
+		}
 	}
 
+	FireErrorSanity::Record(CrashTrace::FireErrorEnter, pThis, pObj, nWeaponIndex);
+	FireErrorSanity::Record(CrashTrace::FireErrorBeforeEngine, pThis, pObj, nWeaponIndex);
 	auto const result = GetOriginalBuildingGetFireError()(pThis, nullptr, pObj, nWeaponIndex, ignoreRange);
+	FireErrorSanity::Record(CrashTrace::FireErrorAfterEngine, pThis, pObj, nWeaponIndex,
+		static_cast<uint32_t>(result));
 
 	if (result == FireError::OK)
 	{
@@ -809,11 +988,18 @@ DEFINE_FUNCTION_JUMP(VTABLE, 0x7E3F30, BuildingClass__WhatAction_Wrapper)
 
 FireError __fastcall AircraftClass__GetFireError_Wrapper(AircraftClass* pThis, void* _, ObjectClass* pObj, int nWeaponIndex, bool ignoreRange)
 {
+	if (!FireErrorSanity::Guard(pThis, pObj, nWeaponIndex, "Aircraft"))
+		return FireError::ILLEGAL;
+
 	// TA.VirtualUnit: cannot attack virtual units.
 	if (IsUnattackableTarget(pObj))
 		return FireError::ILLEGAL;
 
+	FireErrorSanity::Record(CrashTrace::FireErrorEnter, pThis, pObj, nWeaponIndex);
+	FireErrorSanity::Record(CrashTrace::FireErrorBeforeEngine, pThis, pObj, nWeaponIndex);
 	auto const result = GetOriginalAircraftGetFireError()(pThis, nullptr, pObj, nWeaponIndex, ignoreRange);
+	FireErrorSanity::Record(CrashTrace::FireErrorAfterEngine, pThis, pObj, nWeaponIndex,
+		static_cast<uint32_t>(result));
 
 	if (result == FireError::OK)
 	{

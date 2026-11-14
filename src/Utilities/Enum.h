@@ -126,6 +126,27 @@ enum class AffectedHouse : unsigned char
 
 MAKE_ENUM_FLAGS(AffectedHouse);
 
+enum class AbilityActivation : unsigned char
+{
+	Active = 0,
+	Passive
+};
+
+enum class AbilityTarget : unsigned char
+{
+	Self = 0,
+	Ally,
+	Enemy,
+	Cell
+};
+
+enum class AbilityPassiveTrigger : unsigned char
+{
+	Always = 0,
+	Interval,
+	OnDamaged
+};
+
 enum class OwnerHouseKind : int
 {
 	Default,
