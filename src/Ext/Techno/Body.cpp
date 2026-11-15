@@ -1703,6 +1703,11 @@ bool TechnoExt::IsAtAirfield(TechnoClass* pThis)
 
 	auto const pAircraft = static_cast<AircraftClass*>(pThis);
 
+	// A carrier payload parked on a deck reloads exactly like one sitting on a
+	// UnitReload/Helipad building, even though the carrier is a unit.
+	if (Footprint::IsCarrierPayloadParked(pAircraft))
+		return true;
+
 	if (pAircraft->IsInAir())
 		return false;
 

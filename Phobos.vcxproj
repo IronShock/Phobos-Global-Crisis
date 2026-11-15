@@ -83,6 +83,7 @@
     <ClCompile Include="src\Commands\ToggleDigitalDisplay.cpp" />
     <ClCompile Include="src\Commands\SaveVariablesToFile.cpp" />
     <ClCompile Include="src\Commands\DumpCarrierState.cpp" />
+    <ClCompile Include="src\Commands\RecallCarrierAircraft.cpp" />
     <ClCompile Include="src\Commands\ZoomCommands.cpp" />
     <ClCompile Include="src\Ext\Anim\Body.cpp" />
     <ClCompile Include="src\Ext\Anim\Hooks.cpp" />
@@ -315,6 +316,7 @@
     <ClInclude Include="src\Commands\FireTacticalSW.h" />
     <ClInclude Include="src\Commands\ToggleSWSidebar.h" />
     <ClInclude Include="src\Commands\DumpCarrierState.h" />
+    <ClInclude Include="src\Commands\RecallCarrierAircraft.h" />
     <ClInclude Include="src\Ext\Sidebar\SWSidebar\SWColumnClass.h" />
     <ClInclude Include="src\Ext\Sidebar\SWSidebar\SWSidebarClass.h" />
     <ClInclude Include="src\Ext\Sidebar\SWSidebar\SWButtonClass.h" />

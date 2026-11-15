@@ -18,6 +18,7 @@
 #include "ToggleTacticalMap.h"
 #include "ZoomCommands.h"
 #include "DumpCarrierState.h"
+#include "RecallCarrierAircraft.h"
 #include <New/Entity/FilterButtonClass.h>
 #include <MOEE/MOEE.Commands.h>
 
@@ -87,6 +88,7 @@ DEFINE_HOOK(0x533066, CommandClassCallback_Register, 0x6)
 		MakeCommand<SaveVariablesToFileCommandClass>();
 		MakeCommand<ObjectInfoCommandClass>();
 		MakeCommand<DumpCarrierStateCommandClass>();
+	MakeCommand<RecallCarrierAircraftCommandClass>();
 		MakeCommand<FrameByFrameCommandClass>();
 		MakeCommand<FrameStepCommandClass<1>>(); // Single step in
 		MakeCommand<FrameStepCommandClass<5>>(); // Speed 1
