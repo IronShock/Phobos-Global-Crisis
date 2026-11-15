@@ -94,6 +94,30 @@ namespace
 			+ CoordStruct { static_cast<int>(result.X), static_cast<int>(result.Y), static_cast<int>(result.Z) };
 	}
 
+	// Legacy / pre-rewrite carrier builds used one real 1x1 BuildingClass per
+	// deck slot as a native airport proxy. They are no longer needed; release
+	// any that a loaded save restored so they cannot keep blocking cells.
+	void ReleaseDockProxies(FootprintState* pState)
+	{
+		if (!pState)
+			return;
+
+		for (auto const pDock : pState->CarrierDockBuildings)
+		{
+			if (!pDock)
+				continue;
+
+			if (!pDock->InLimbo)
+				pDock->Limbo();
+
+			BuildingClass::Array.Remove(pDock);
+			pDock->UnInit();
+		}
+
+		pState->CarrierDockBuildings.clear();
+		pState->CarrierDockBuilding = nullptr;
+	}
+
 	void EnsureGrid()
 	{
 		if (s_gridReady)
@@ -1153,216 +1177,76 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 		pState->CarrierPayloads.clear();
 		pState->CarrierPayloadDocked.clear();
 		pState->CarrierPayloadLastCoords.clear();
+		pState->CarrierPayloadReloadTimer.clear();
 
 		Debug::CarrierLog("[AircraftCarrier] removed legacy SpawnManager for %s\n", pType->ID);
 	}
 
-	// A dedicated hidden airport type is used so the global FAKEPAD and normal
-	// aircraft landing data are never modified. One 1-dock proxy is created per
-	// parking slot: NumberOfDocks==1 makes native GetDockCoords use the first
-	// offset unconditionally, without depending on a radio-link index.
-	if (auto const pDockType = BuildingTypeClass::Find("AIRCARRDOCK"))
+	// The deck no longer uses native airport proxies. Saves made before the
+	// rewrite may still restore them; release them once.
+	if (pState->CarrierDockBuilding || !pState->CarrierDockBuildings.empty())
 	{
-		const int docks = std::max(1, pTypeExt->AircraftCarrier_NumberOfDocks.Get());
-
-		// Type-level setup is process-wide and identical for every carrier, so
-		// run it once instead of on every AI tick.
-		static bool dockTypeConfigured = false;
-
-		if (!dockTypeConfigured)
-		{
-			pDockType->NumberOfDocks = 1;
-			pDockType->DockingOffsets.SetCapacity(1);
-			pDockType->DockingOffsets[0] = CoordStruct::Empty;
-
-			// Keep the proxy visible to native dock search. Click filtering is
-			// handled separately; InvisibleInGame made the airport unusable.
-			pDockType->InvisibleInGame = false;
-			pDockType->Selectable = false;
-			pDockType->LegalTarget = false;
-			pDockType->Insignificant = false;
-			pDockType->IsSelectableCombatant = false;
-			pDockType->ClickRepairable = false;
-			pDockType->Unsellable = true;
-
-			auto const pDockTypeExt = BuildingTypeExt::ExtMap.Find(pDockType);
-			pDockTypeExt->AircraftDockingDirs.resize(1);
-			pDockTypeExt->AircraftDockingDirs[0] = std::nullopt;
-
-			dockTypeConfigured = true;
-		}
-
-		pState->CarrierDockBuildings.resize(docks, nullptr);
-
-		// Legacy saves kept a single dock pointer; fold it back into slot 0.
-		if (pState->CarrierDockBuilding && !pState->CarrierDockBuildings.empty()
-			&& !pState->CarrierDockBuildings[0])
-		{
-			pState->CarrierDockBuildings[0] = pState->CarrierDockBuilding;
-		}
-
-		for (int i = 0; i < docks; ++i)
-		{
-			if (pState->CarrierDockBuildings[i])
-				continue;
-
-			const auto coords = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
-			auto const pDock = static_cast<BuildingClass*>(pDockType->CreateObject(pThis->Owner));
-
-			if (!pDock)
-			{
-				Debug::Log("[AircraftCarrier] failed to create AIRCARRDOCK slot %d for %s\n",
-					i, pType->ID);
-				continue;
-			}
-
-			pDock->SetLocation(coords);
-			pDock->PrimaryFacing.SetCurrent(pThis->PrimaryFacing.Current());
-
-			++Unsorted::ScenarioInit;
-			const bool placed = pDock->Unlimbo(coords, pThis->PrimaryFacing.Current().GetDir());
-			--Unsorted::ScenarioInit;
-
-			if (!placed)
-			{
-				Debug::Log("[AircraftCarrier] failed to place AIRCARRDOCK slot %d for %s at (%d,%d)\n",
-					i, pType->ID, coords.X, coords.Y);
-				continue;
-			}
-
-			// Keep the proxy at the exact deck coordinate used by the
-			// payload. Without this the building is snapped back to the
-			// cell floor/centre by Unlimbo.
-			pDock->SetLocation(coords);
-			pDock->SetLinkCount(1);
-
-			const auto dockCoords = pDock->GetDockCoords(nullptr);
-			Debug::CarrierLog("[AircraftCarrier] slot %d docks=%d links=%d dock=(%d,%d,%d)\n",
-				i, pDock->Type->NumberOfDocks, pDock->RadioLinks.Capacity,
-				dockCoords.X, dockCoords.Y, dockCoords.Z);
-
-			bool inArray = false;
-
-			for (auto const pItem : BuildingClass::Array)
-			{
-				if (pItem == pDock)
-				{
-					inArray = true;
-					break;
-				}
-			}
-
-			if (!inArray)
-				BuildingClass::Array.AddItem(pDock);
-
-			pState->CarrierDockBuildings[i] = pDock;
-
-			if (!pState->CarrierDockBuilding)
-				pState->CarrierDockBuilding = pDock;
-
-			Debug::CarrierLog("[AircraftCarrier] created AIRCARRDOCK slot %d for %s at (%d,%d)\n",
-				i, pType->ID, pDock->Location.X, pDock->Location.Y);
-		}
-	}
-
-	// Register the dock on every carrier, including carriers restored from
-	// saves where the payload list was already initialized. This must happen
-	// before the early return below.
-	if (auto const pCarrierDockType = BuildingTypeClass::Find("AIRCARRDOCK"))
-	{
-		for (const auto pPayloadType : pTypeExt->AircraftCarrier_Payloads)
-		{
-			if (pPayloadType && pPayloadType->Dock.FindItemIndex(pCarrierDockType) < 0)
-				pPayloadType->Dock.AddItem(pCarrierDockType);
-		}
-	}
-
-	for (size_t i = 0; i < pState->CarrierDockBuildings.size(); ++i)
-	{
-		if (auto const pDock = pState->CarrierDockBuildings[i])
-		{
-			pDock->SetLocation(GetCarrierDockSlotCoords(pThis, pTypeExt, i));
-			pDock->PrimaryFacing.SetCurrent(pThis->PrimaryFacing.Current());
-		}
+		ReleaseDockProxies(pState);
+		Debug::CarrierLog("[AircraftCarrier] released legacy dock proxies for %s\n", pType->ID);
 	}
 
 	if (pState->CarrierPayloadsInitialized)
 	{
-		// Rebuild the payload lookup cache after a load (the map itself is not
-		// serialized). Dead entries were already nulled by InvalidatePointer.
+		// The payload lookup is only a cache; rebuild it after a load.
 		for (auto const pAircraft : pState->CarrierPayloads)
 		{
 			if (pAircraft)
 				s_carrierPayloads[pAircraft] = pThis;
 		}
 
-		// Restore carrier-side movement handling only for parked payloads.
-		// Flight, landing and facing remain owned by the native airport code.
+		const size_t count = pState->CarrierPayloads.size();
+
+		// Keep the parallel arrays in step with saves that predate a field.
+		if (pState->CarrierPayloadDocked.size() < count)
+			pState->CarrierPayloadDocked.resize(count, 1);
+
+		if (pState->CarrierPayloadLastCoords.size() < count)
+			pState->CarrierPayloadLastCoords.resize(count, CoordStruct::Empty);
+
+		if (pState->CarrierPayloadReloadTimer.size() < count)
+			pState->CarrierPayloadReloadTimer.resize(count, 0);
+
 		const bool moved = pState->CarrierLastCoords.X != pThis->Location.X
 			|| pState->CarrierLastCoords.Y != pThis->Location.Y
 			|| pState->CarrierLastCoords.Z != pThis->Location.Z
 			|| pState->CarrierLastBucket != pState->Bucket;
 
-		for (size_t i = 0; i < pState->CarrierPayloads.size(); ++i)
+		for (size_t i = 0; i < count; ++i)
 		{
 			const auto pAircraft = pState->CarrierPayloads[i];
 
 			if (!pAircraft || !pAircraft->IsAlive || pAircraft->InLimbo)
 				continue;
 
-			auto const pDock = i < pState->CarrierDockBuildings.size()
-				? pState->CarrierDockBuildings[i]
-				: nullptr;
-
-			const auto expected = pDock
-				? pDock->GetCoords()
-				: GetCarrierDockSlotCoords(pThis, pTypeExt, i);
-
-			const auto mission = pAircraft->GetCurrentMission();
-
-			// IsInAir() is based on altitude above the terrain, so a plane
-			// parked on a carrier deck also reports true. Detect the deck by
-			// comparing against the expected world altitude instead.
-			const bool atDeckHeight = std::abs(pAircraft->Location.Z - expected.Z) <= 256;
-			const bool dockedLink = pDock
-				&& (pDock->ContainsLink(pAircraft)
-					|| pAircraft->DockNowHeadingTo == pDock);
-
-			// Enter is the native approach/landing mission. Never touch an
-			// aircraft in that mission: it is still flying and must be allowed
-			// to complete the original airport landing.
-			const bool parked = mission != Mission::Enter
-				&& atDeckHeight
-				&& (mission == Mission::Sleep || dockedLink);
-
-			if (!moved)
-			{
-				// Refresh the reference position while the carrier is still,
-				// including after a native landing, so the next movement can
-				// distinguish a parked plane from one that is still flying.
-				if (parked && i < pState->CarrierPayloadLastCoords.size())
-					pState->CarrierPayloadLastCoords[i] = pAircraft->Location;
-
-				continue;
-			}
-
-			if (!parked)
+			// Airborne payloads are owned by UpdateCarrierPayload / the engine.
+			if (!pState->CarrierPayloadDocked[i])
 				continue;
 
-			const bool stationary = i < pState->CarrierPayloadLastCoords.size()
-				&& std::abs(pAircraft->Location.X - pState->CarrierPayloadLastCoords[i].X) <= 16
-				&& std::abs(pAircraft->Location.Y - pState->CarrierPayloadLastCoords[i].Y) <= 16
-				&& std::abs(pAircraft->Location.Z - pState->CarrierPayloadLastCoords[i].Z) <= 16;
+			const auto expected = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+			const bool unchanged = !moved
+				&& pState->CarrierPayloadLastCoords[i].X == expected.X
+				&& pState->CarrierPayloadLastCoords[i].Y == expected.Y
+				&& pState->CarrierPayloadLastCoords[i].Z == expected.Z;
 
-			// A just-landed plane can briefly differ from the cached position;
-			// only Mission::Sleep is trusted in that case.
-			if (!stationary && mission != Mission::Sleep)
+			if (unchanged)
 				continue;
+
+			const int dockDir = i < pTypeExt->AircraftCarrier_DockingDirs.size()
+				? pTypeExt->AircraftCarrier_DockingDirs[i]
+				: 0;
 
 			pAircraft->SetLocation(expected);
+			pAircraft->InAir = false;
+			pAircraft->PrimaryFacing.SetCurrent(dockDir != 0
+				? DirStruct(static_cast<DirType>(dockDir & 0xFF))
+				: pThis->PrimaryFacing.Current());
 
-			if (i < pState->CarrierPayloadLastCoords.size())
-				pState->CarrierPayloadLastCoords[i] = expected;
+			pState->CarrierPayloadLastCoords[i] = expected;
 		}
 
 		pState->CarrierLastCoords = pThis->Location;
@@ -1404,13 +1288,7 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 			if (!pAircraft)
 				continue;
 
-			const auto pDock = i < pState->CarrierDockBuildings.size()
-				? pState->CarrierDockBuildings[i]
-				: nullptr;
-
-			const auto coords = pDock
-				? pDock->GetCoords()
-				: GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+			const auto coords = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
 
 			pAircraft->Spawned = false;
 			pAircraft->SpawnOwner = nullptr;
@@ -1424,8 +1302,6 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 			}
 
 			// Unlimbo does not reliably preserve the aircraft's parked facing.
-			// Explicitly use the per-slot docking direction when one is
-			// configured; slots without one inherit the carrier facing.
 			const int dockDir = i < pTypeExt->AircraftCarrier_DockingDirs.size()
 				? pTypeExt->AircraftCarrier_DockingDirs[i]
 				: 0;
@@ -1434,16 +1310,17 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 				? DirStruct(static_cast<DirType>(dockDir & 0xFF))
 				: pThis->PrimaryFacing.Current());
 
-			// The initial payload is already spawned on the deck. Sending it
-			// through Mission::Enter made every plane fly to the AIRCARRDOCK
-			// anchor cell again, even though it was already parked.
+			// Parked payloads are real units, but they must not be treated as
+			// airborne targets while they sit on the deck.
 			pAircraft->DockNowHeadingTo = nullptr;
 			pAircraft->SetDestination(nullptr, true);
+			pAircraft->InAir = false;
 			pAircraft->QueueMission(Mission::Sleep, true);
 
 			pState->CarrierPayloads.push_back(pAircraft);
 			pState->CarrierPayloadDocked.push_back(1);
 			pState->CarrierPayloadLastCoords.push_back(pAircraft->Location);
+			pState->CarrierPayloadReloadTimer.push_back(0);
 			s_carrierPayloads[pAircraft] = pThis;
 		}
 	}
@@ -1452,7 +1329,7 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 	pState->CarrierLastCoords = pThis->Location;
 	pState->CarrierLastBucket = pState->Bucket;
 
-	Debug::CarrierLog("[AircraftCarrier] initialized %d normal payload aircraft for %s\n",
+	Debug::CarrierLog("[AircraftCarrier] initialized %d payload aircraft for %s\n",
 		static_cast<int>(pState->CarrierPayloads.size()), pType->ID);
 }
 
@@ -1469,12 +1346,12 @@ bool Footprint::IsCarrierPayloadParked(TechnoClass* pPayload)
 
 	const auto pCarrier = GetCarrierPayloadOwner(pPayload);
 
-	if (!pCarrier)
+	if (!pCarrier || !pCarrier->IsAlive)
 		return false;
 
 	const auto pState = GetState(pCarrier);
 
-	if (!pState || pState->CarrierDockBuildings.empty())
+	if (!pState)
 		return false;
 
 	const auto pAircraft = static_cast<AircraftClass*>(pPayload);
@@ -1483,31 +1360,196 @@ bool Footprint::IsCarrierPayloadParked(TechnoClass* pPayload)
 	if (it == pState->CarrierPayloads.end())
 		return false;
 
+	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
+
+	return index < pState->CarrierPayloadDocked.size()
+		&& pState->CarrierPayloadDocked[index] != 0;
+}
+
+void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
+{
+	if (!pAircraft || !pAircraft->IsAlive)
+		return;
+
+	const auto pCarrier = GetCarrierPayloadOwner(pAircraft);
+
+	if (!pCarrier || !pCarrier->IsAlive)
+	{
+		s_carrierPayloads.erase(pAircraft);
+		return;
+	}
+
+	const auto pState = GetState(pCarrier);
+
+	if (!pState)
+		return;
+
+	const auto it = std::find(pState->CarrierPayloads.begin(), pState->CarrierPayloads.end(), pAircraft);
+
+	if (it == pState->CarrierPayloads.end())
+		return;
+
+	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
+
+	if (index >= pState->CarrierPayloadDocked.size())
+		return;
+
+	if (pState->CarrierPayloadReloadTimer.size() < pState->CarrierPayloads.size())
+		pState->CarrierPayloadReloadTimer.resize(pState->CarrierPayloads.size(), 0);
+
 	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
 
 	if (!pTypeExt)
-		return false;
+		return;
 
-	// Enter means the aircraft is still approaching/landing and must keep its
-	// normal flight visuals until the native airport code completes the landing.
-	if (pAircraft->GetCurrentMission() == Mission::Enter)
-		return false;
+	const auto mission = pAircraft->GetCurrentMission();
+	auto& docked = pState->CarrierPayloadDocked[index];
 
-	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
-	auto const pDock = index < pState->CarrierDockBuildings.size()
-		? pState->CarrierDockBuildings[index]
-		: nullptr;
+	if (docked)
+	{
+		// AirportBound aircraft keep trying to enter a dock that no longer
+		// exists. Enter is noise here, not a player order, but the mission must
+		// still be reset every time the engine queues it or the aircraft would
+		// stop rearming.
+		if (mission == Mission::Enter)
+		{
+			pAircraft->DockNowHeadingTo = nullptr;
+			pAircraft->SetDestination(nullptr, true);
+			pAircraft->QueueMission(Mission::Sleep, true);
+		}
 
-	const auto expected = pDock
-		? pDock->GetCoords()
-		: GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+		const bool ordered = pAircraft->Destination != nullptr
+			|| pAircraft->Target != nullptr
+			|| mission == Mission::Move
+			|| mission == Mission::QMove
+			|| mission == Mission::Attack
+			|| mission == Mission::AttackMove;
 
-	if (std::abs(pAircraft->Location.Z - expected.Z) > 256)
-		return false;
+		if (ordered)
+		{
+			// Launch: leave the deck and let the engine fly the ordered mission.
+			docked = 0;
 
-	return pAircraft->GetCurrentMission() == Mission::Sleep
-		|| (pDock && pDock->ContainsLink(pAircraft))
-		|| (pDock && pAircraft->DockNowHeadingTo == pDock);
+			CoordStruct lift = pAircraft->Location;
+			lift.Z += 192;
+			pAircraft->SetLocation(lift);
+			pAircraft->InAir = true;
+
+			if (index < pState->CarrierPayloadReloadTimer.size())
+				pState->CarrierPayloadReloadTimer[index] = 0;
+
+			Debug::CarrierLog("[AircraftCarrier] %s launched from slot %d\n",
+				pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<int>(index));
+			return;
+		}
+
+		// Rearm on deck.
+		const int maxAmmo = pAircraft->Type ? pAircraft->Type->Ammo : 0;
+
+		if (maxAmmo > 0 && pAircraft->Ammo < maxAmmo)
+		{
+			auto& timer = pState->CarrierPayloadReloadTimer[index];
+
+			if (++timer >= 30)
+			{
+				timer = 0;
+				++pAircraft->Ammo;
+			}
+		}
+		else if (index < pState->CarrierPayloadReloadTimer.size())
+		{
+			pState->CarrierPayloadReloadTimer[index] = 0;
+		}
+
+		// Keep the parked aircraft pinned to the moving deck.
+		const auto expected = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+
+		if (pAircraft->Location.X != expected.X
+			|| pAircraft->Location.Y != expected.Y
+			|| pAircraft->Location.Z != expected.Z)
+		{
+			pAircraft->SetLocation(expected);
+		}
+
+		pAircraft->InAir = false;
+
+		return;
+	}
+
+	// Airborne. Only intervene when the aircraft wants to come home. Aircraft
+	// with unlimited ammo (Ammo < 0) never return on their own.
+	const bool outOfAmmo = pAircraft->Type && pAircraft->Type->Ammo > 0
+		&& pAircraft->Ammo <= 0;
+	const bool wantsReturn = mission == Mission::Enter || outOfAmmo;
+
+	if (!wantsReturn)
+		return;
+
+	const auto slotCoords = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+	const auto current = pAircraft->Location;
+	const int dx = slotCoords.X - current.X;
+	const int dy = slotCoords.Y - current.Y;
+	const int dz = slotCoords.Z - current.Z;
+	const double horizontal = std::sqrt(static_cast<double>(dx) * dx + static_cast<double>(dy) * dy);
+	const double distance = std::sqrt(
+		static_cast<double>(dx) * dx + static_cast<double>(dy) * dy + static_cast<double>(dz) * dz);
+
+	// Far away: let the native fly locomotor bring the aircraft to the ship.
+	if (horizontal > 768.0)
+	{
+		if (pAircraft->Destination != pCarrier)
+		{
+			pAircraft->SetDestination(pCarrier, true);
+			pAircraft->QueueMission(Mission::Move, true);
+		}
+
+		return;
+	}
+
+	// Final approach: stop the locomotor and glide onto the live deck slot by
+	// hand. Native landing requires a BuildingClass dock, which this design no
+	// longer has, so the last few hundred leptons are driven here.
+	if (pAircraft->Destination)
+		pAircraft->SetDestination(nullptr, true);
+
+	if (mission != Mission::Sleep)
+		pAircraft->QueueMission(Mission::Sleep, true);
+
+	if (distance <= 48.0)
+	{
+		pAircraft->SetLocation(slotCoords);
+		pAircraft->SetDestination(nullptr, true);
+		pAircraft->InAir = false;
+		pAircraft->QueueMission(Mission::Sleep, true);
+
+		const int dockDir = index < pTypeExt->AircraftCarrier_DockingDirs.size()
+			? pTypeExt->AircraftCarrier_DockingDirs[index]
+			: 0;
+
+		pAircraft->PrimaryFacing.SetCurrent(dockDir != 0
+			? DirStruct(static_cast<DirType>(dockDir & 0xFF))
+			: pCarrier->PrimaryFacing.Current());
+
+		docked = 1;
+
+		if (index < pState->CarrierPayloadReloadTimer.size())
+			pState->CarrierPayloadReloadTimer[index] = 0;
+
+		Debug::CarrierLog("[AircraftCarrier] %s landed in slot %d\n",
+			pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<int>(index));
+
+		return;
+	}
+
+	constexpr double kGlideSpeed = 64.0;
+	const double t = std::min(1.0, kGlideSpeed / distance);
+
+	pAircraft->SetLocation(CoordStruct
+	{
+		current.X + static_cast<int>(std::lround(dx * t)),
+		current.Y + static_cast<int>(std::lround(dy * t)),
+		current.Z + static_cast<int>(std::lround(dz * t))
+	});
 }
 
 bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
@@ -2429,37 +2471,36 @@ void Footprint::OnUnitDestroyed(UnitClass* pThis)
 	if (!pState)
 		return;
 
-	// Untrack every payload first so nothing can look at the carrier after this
-	// point. The aircraft themselves are intentionally left alive: whether they
-	// die with the carrier or fly off is a gameplay decision handled elsewhere.
-	for (auto const pAircraft : pState->CarrierPayloads)
+	// Parked aircraft are part of the deck: they die with the ship. Airborne
+	// payloads simply lose their home and continue as normal aircraft.
+	for (size_t i = 0; i < pState->CarrierPayloads.size(); ++i)
 	{
-		if (pAircraft)
-			s_carrierPayloads.erase(pAircraft);
+		auto const pAircraft = pState->CarrierPayloads[i];
+
+		if (!pAircraft)
+			continue;
+
+		s_carrierPayloads.erase(pAircraft);
+
+		const bool parked = i < pState->CarrierPayloadDocked.size()
+			&& pState->CarrierPayloadDocked[i] != 0;
+
+		if (parked && pAircraft->IsAlive && !pAircraft->InLimbo)
+		{
+			pAircraft->Limbo();
+			pAircraft->UnInit();
+		}
 	}
 
 	pState->CarrierPayloads.clear();
 	pState->CarrierPayloadDocked.clear();
 	pState->CarrierPayloadLastCoords.clear();
+	pState->CarrierPayloadReloadTimer.clear();
 	pState->CarrierPayloadsInitialized = false;
-	pState->CarrierDockBuilding = nullptr;
 
-	// Dock proxies are real BuildingClass objects created for native dock
-	// search. They must not outlive the carrier: they are immune to damage, so
-	// nothing else would ever remove them from the map.
-	for (auto const pDock : pState->CarrierDockBuildings)
-	{
-		if (!pDock)
-			continue;
-
-		if (!pDock->InLimbo)
-			pDock->Limbo();
-
-		BuildingClass::Array.Remove(pDock);
-		pDock->UnInit();
-	}
-
-	pState->CarrierDockBuildings.clear();
+	// Legacy / pre-rewrite dock proxies cannot outlive the carrier: they are
+	// immune to damage, so nothing else would ever remove them from the map.
+	ReleaseDockProxies(pState);
 
 	Debug::Log("[AircraftCarrier] released deck of destroyed %s\n",
 		pThis->GetTechnoType() ? pThis->GetTechnoType()->ID : "?");

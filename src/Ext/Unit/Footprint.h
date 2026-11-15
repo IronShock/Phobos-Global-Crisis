@@ -94,6 +94,7 @@ struct FootprintState
 	std::vector<AircraftClass*> CarrierPayloads;
 	std::vector<unsigned char> CarrierPayloadDocked;
 	std::vector<CoordStruct> CarrierPayloadLastCoords;
+	std::vector<int> CarrierPayloadReloadTimer;
 	CoordStruct CarrierLastCoords {};
 	int CarrierLastBucket = -1;
 
@@ -124,6 +125,7 @@ struct FootprintState
 			.Process(this->CarrierPayloads)
 			.Process(this->CarrierPayloadDocked)
 			.Process(this->CarrierPayloadLastCoords)
+			.Process(this->CarrierPayloadReloadTimer)
 			.Process(this->CarrierLastCoords)
 			.Process(this->CarrierLastBucket);
 	}
@@ -165,6 +167,9 @@ public:
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, const CellStruct& anchor, CellStruct* pBlocked = nullptr);
 	static bool IsClimbAllowed(UnitClass* pThis, const CellStruct& from, const CellStruct& to);
 	static void EnsureAircraftCarrierSpawns(UnitClass* pThis);
+	// Per-frame deck update for one payload aircraft: parked/rearm/launch and
+	// the custom return-to-deck landing that replaces native airport docking.
+	static void UpdateCarrierPayload(AircraftClass* pAircraft);
 	static UnitClass* GetCarrierPayloadOwner(TechnoClass* pPayload);
 	static bool IsCarrierPayloadParked(TechnoClass* pPayload);
 	static bool Mark(UnitClass* pThis, const CoordStruct& coords);

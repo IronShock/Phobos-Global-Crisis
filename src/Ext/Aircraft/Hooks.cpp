@@ -941,11 +941,14 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 {
 	GET(AircraftClass* const, pThis, ESI);
 
-	// Parked carrier payloads are already on the deck. The automatic
-	// TryNearestDockBuilding call below would make them fly to the hidden
-	// AIRCARRDOCK anchor every frame instead of staying on the ship.
-	if (Footprint::IsCarrierPayloadParked(pThis))
+	// Carrier payloads use a custom deck (no native airport). Handle their
+	// launch/park/rearm/return state here and keep the vanilla dock search out
+	// of the picture entirely.
+	if (Footprint::GetCarrierPayloadOwner(pThis))
+	{
+		Footprint::UpdateCarrierPayload(pThis);
 		return 0;
+	}
 
 	const auto pType = pThis->Type;
 
@@ -986,35 +989,7 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 			}
 
 			// Check dock building
-			auto const pNearestDock = pThis->TryNearestDockBuilding(&pType->Dock, 0, 0);
-
-			if (Footprint::GetCarrierPayloadOwner(pThis))
-			{
-				const auto mission = pThis->GetCurrentMission();
-
-				if (Unsorted::CurrentFrame % 30 == 0)
-				{
-					Debug::CarrierLog("[AircraftCarrier] payload dock check mission=%d ammo=%d air=%d dest=%p dock=%p nearest=%p\n",
-						static_cast<int>(mission), pThis->Ammo, pThis->IsInAir() ? 1 : 0,
-						static_cast<void*>(pThis->Destination),
-						static_cast<void*>(pThis->DockNowHeadingTo),
-						static_cast<void*>(pNearestDock));
-				}
-
-				// TryNearestDockBuilding sets DockNowHeadingTo but not always
-				// Destination. Mission::Enter with a dock but no Destination
-				// makes the aircraft hover in place forever, so bind the
-				// native destination to the same dock once.
-				auto const pDock = pNearestDock ? pNearestDock : pThis->DockNowHeadingTo;
-
-				if (pDock && !pThis->Destination
-					&& (pThis->Ammo <= 0 || mission == Mission::Enter
-						|| mission == Mission::Guard || mission == Mission::Area_Guard))
-				{
-					pThis->SetDestination(pDock, true);
-					pThis->QueueMission(Mission::Enter, true);
-				}
-			}
+			pThis->TryNearestDockBuilding(&pType->Dock, 0, 0);
 		}
 
 		if (pThis->DockNowHeadingTo)
