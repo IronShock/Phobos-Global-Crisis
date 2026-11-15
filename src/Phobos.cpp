@@ -20,6 +20,7 @@
 #include <New/Entity/FilterButtonClass.h>
 #include <New/Entity/AttachmentClass.h>
 #include <Misc/PerfOverlay.h>
+#include <Misc/CarrierSelfTest.h>
 #include <Ext/Unit/Footprint.h>
 #include <Misc/TacticalMap.h>
 #include <UI/UnitStatusPanel.h>
@@ -280,6 +281,7 @@ DEFINE_HOOK(0x683E7F, ScenarioClass_Start_Optimizations, 0x7)
 
 	PerfOverlay::Reset();
 	Footprint::ClearAll();
+	CarrierSelfTest::Start();
 	TacticalMap::Close();
 	TacticalMap::ResetCanvas();
 

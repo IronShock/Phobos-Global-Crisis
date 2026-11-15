@@ -2258,6 +2258,14 @@ namespace DamageAreaTemp
 		if (!config.HitAllCells)
 			return false;
 
+		// Retired: this used to call ReceiveDamage() once per hull cell with
+		// the unmodified base damage, i.e. a 36x9 carrier took 324 hits from a
+		// single missile. The normal path below already resolves peripheral
+		// hull cells to the footprint owner (see DamageItemsFix1), so one
+		// warhead damages the ship once unless PerCellDamage asks for per-cell
+		// resolution.
+		return false;
+
 		if (!FullFootprintApplied.insert(pUnit).second)
 			return true;
 

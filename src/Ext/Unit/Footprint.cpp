@@ -81,13 +81,17 @@ namespace
 		auto offset = GetCarrierDockOffset(pTypeExt, index);
 		offset.Z += Unsorted::CellHeight;
 
-		// The deck offsets are authored directly relative to the hull centre.
-		// GetFLHAbsoluteCoords() is meant for FLH/voxel offsets and mirrors Y,
-		// which put every proxy on the wrong side of the ship. Rotate the raw
-		// offset with the carrier facing here instead.
+		// The deck offsets are authored relative to the hull centre with +Y as
+		// the bow direction and +X as starboard. DirStruct::GetRadian<32>()
+		// carries a -90 degree screen convention (-Y is north), which rotated
+		// every slot by an extra quarter turn. Use the raw BAM angle and flip
+		// the local forward axis before rotating.
+		const double theta = static_cast<double>(pCarrier->PrimaryFacing.Current().Raw)
+			* (2.0 * kPi / 65536.0);
+
 		auto mtx = Matrix3D::GetIdentity();
-		mtx.RotateZ(static_cast<float>(pCarrier->PrimaryFacing.Current().GetRadian<32>()));
-		mtx.Translate(static_cast<float>(offset.X), static_cast<float>(offset.Y), static_cast<float>(offset.Z));
+		mtx.RotateZ(static_cast<float>(theta));
+		mtx.Translate(static_cast<float>(offset.X), static_cast<float>(-offset.Y), static_cast<float>(offset.Z));
 
 		const auto result = mtx.GetTranslation();
 		return pCarrier->GetRenderCoords()
@@ -1270,10 +1274,15 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 				continue;
 
 			const auto expected = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+
+			// Compare against the aircraft's real position, not the cached
+			// value: the engine moves parked aircraft (mission Move / flight
+			// update) even while they are supposed to be sitting on the deck.
+			// The old cached comparison then skipped the correction forever.
 			const bool unchanged = !moved
-				&& pState->CarrierPayloadLastCoords[i].X == expected.X
-				&& pState->CarrierPayloadLastCoords[i].Y == expected.Y
-				&& pState->CarrierPayloadLastCoords[i].Z == expected.Z;
+				&& pAircraft->Location.X == expected.X
+				&& pAircraft->Location.Y == expected.Y
+				&& pAircraft->Location.Z == expected.Z;
 
 			if (unchanged)
 				continue;
@@ -1357,7 +1366,7 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 			pState->CarrierPayloads.push_back(pAircraft);
 			pState->CarrierPayloadDocked.push_back(1);
 			pState->CarrierPayloadLastCoords.push_back(pAircraft->Location);
-			pState->CarrierPayloadReloadTimer.push_back(0);
+			pState->CarrierPayloadReloadTimer.push_back(-60);
 			s_carrierPayloads[pAircraft] = pThis;
 		}
 	}
@@ -1447,33 +1456,54 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 	// dock to satisfy it any more.
 	unsigned char& state = pState->CarrierPayloadDocked[index];
 
-	const bool playerOrder = pAircraft->Target != nullptr
-		|| mission == Mission::Move
-		|| mission == Mission::QMove
-		|| mission == Mission::Attack
-		|| mission == Mission::AttackMove;
-
-	// Enter is the engine's "go home" request, not a player order. Cancel it so
-	// it cannot replace the order we are about to issue.
-	if (mission == Mission::Enter)
+	// A real player order is either an attack target or a destination away from
+	// the deck. The engine keeps assigning short Move orders to parked aircraft
+	// (their own cell), so mission state alone cannot be trusted.
+	const auto hasPlayerOrder = [&]() -> bool
 	{
-		pAircraft->DockNowHeadingTo = nullptr;
-		pAircraft->SetDestination(nullptr, true);
+		if (pAircraft->Target)
+			return true;
 
-		if (state != 1)
-			pAircraft->QueueMission(Mission::Sleep, false);
-	}
+		if (pAircraft->Destination)
+		{
+			// Compare against the carrier, not the aircraft: the engine's own
+			// "go home" Move targets a cell next to the ship, and by the time
+			// this runs it may already have dragged the aircraft away.
+			const auto dest = pAircraft->Destination->GetCoords();
+
+			if (dest.DistanceFrom(pCarrier->GetCoords()) > 1024.0)
+				return true;
+		}
+
+		return mission == Mission::Attack || mission == Mission::AttackMove;
+	};
 
 	if (state == 1)
 	{
-		// Launch when the player gives a real order (or clicks a destination:
-		// the command sets Destination before the mission switches).
-		const bool ordered = playerOrder || pAircraft->Destination != nullptr;
+		// Unlimbo and the scenario/AI set a Move destination on freshly spawned
+		// aircraft. Ignore every order for a short grace period, otherwise all
+		// payloads launch themselves on the frame they are created.
+		if (index < pState->CarrierPayloadReloadTimer.size()
+			&& pState->CarrierPayloadReloadTimer[index] < 0)
+		{
+			++pState->CarrierPayloadReloadTimer[index];
+			pAircraft->DockNowHeadingTo = nullptr;
+			pAircraft->SetDestination(nullptr, true);
+			pAircraft->InAir = false;
+			pAircraft->QueueMission(Mission::Sleep, true);
+			return;
+		}
 
+		const bool ordered = hasPlayerOrder();
+
+		// Enter is the engine's "go home" request, not a player order. Replace
+		// it (start_mission=true) so Mission_Enter stops running; there is no
+		// order to lose here.
 		if (mission == Mission::Enter && !ordered)
 		{
+			pAircraft->DockNowHeadingTo = nullptr;
 			pAircraft->SetDestination(nullptr, true);
-			pAircraft->QueueMission(Mission::Sleep, false);
+			pAircraft->QueueMission(Mission::Sleep, true);
 		}
 
 		if (ordered)
@@ -1488,12 +1518,26 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 			if (index < pState->CarrierPayloadReloadTimer.size())
 				pState->CarrierPayloadReloadTimer[index] = 0;
 
-			Debug::CarrierLog("[AircraftCarrier] %s launched from slot %d (mission=%d target=%p dest=%p)\n",
+			const auto destCoords = pAircraft->Destination
+				? pAircraft->Destination->GetCoords()
+				: CoordStruct::Empty;
+
+			Debug::CarrierLog("[AircraftCarrier] %s launched from slot %d (mission=%d target=%p dest=%p destCell=(%d,%d,%d) self=(%d,%d,%d))\n",
 				pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<int>(index),
 				static_cast<int>(mission), static_cast<void*>(pAircraft->Target),
-				static_cast<void*>(pAircraft->Destination));
+				static_cast<void*>(pAircraft->Destination),
+				destCoords.X, destCoords.Y, destCoords.Z,
+				pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
 			return;
 		}
+
+		// No order: kill the engine's own Move/Enter so it cannot drag the
+		// aircraft off the deck between frames.
+		if (pAircraft->Destination)
+			pAircraft->SetDestination(nullptr, true);
+
+		if (mission != Mission::Sleep)
+			pAircraft->QueueMission(Mission::Sleep, true);
 
 		// Rearm on deck (legacy Ammo field). Per-weapon pools reload through
 		// TechnoExt::IsAtAirfield().
@@ -1529,7 +1573,7 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 	}
 
 	// Returning aircraft can be recalled by the player with a new order.
-	if (state == 2 && playerOrder)
+	if (state == 2 && hasPlayerOrder())
 	{
 		state = 0;
 		pAircraft->InAir = true;
@@ -1550,12 +1594,15 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 			return;
 
 		state = 2;
+		pAircraft->DockNowHeadingTo = nullptr;
 		pAircraft->SetDestination(nullptr, true);
 
 		if (pAircraft->Locomotor)
 			pAircraft->Locomotor->Stop_Moving();
 
-		pAircraft->QueueMission(Mission::Sleep, false);
+		// Force Sleep (not queue) so the engine's Enter/Move mission cannot fly
+		// the aircraft away between our manual steps.
+		pAircraft->QueueMission(Mission::Sleep, true);
 
 		Debug::CarrierLog("[AircraftCarrier] %s returning (mission=%d ammo=%d hasAmmo=%d)\n",
 			pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<int>(mission),
@@ -1614,12 +1661,18 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		current.Z + static_cast<int>(std::lround(dz * t))
 	});
 
-	// Keep the locomotor stopped and the aircraft pointed where it is going.
+	// Keep the locomotor and the mission state stopped, pointed where it is
+	// going. The engine re-queues Enter for AirportBound aircraft every time it
+	// decides it should go home; without this it moves the aircraft between our
+	// steps and it never reaches the deck.
 	if (pAircraft->Destination)
 		pAircraft->SetDestination(nullptr, true);
 
 	if (pAircraft->Locomotor && pAircraft->Locomotor->Is_Moving_Now())
 		pAircraft->Locomotor->Stop_Moving();
+
+	if (mission != Mission::Sleep)
+		pAircraft->QueueMission(Mission::Sleep, true);
 
 	pAircraft->InAir = distance > 128.0;
 

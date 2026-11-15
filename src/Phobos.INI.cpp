@@ -155,6 +155,7 @@ bool Phobos::Config::DebugPerfProbe = false;
 bool Phobos::Config::DebugPerfLog = false;
 bool Phobos::Config::MultiCellDisabled = false;
 bool Phobos::Config::MultiCellDisabledInMultiplayer = true;
+bool Phobos::Config::DebugCarrierSelfTest = false;
 double Phobos::Config::TacticalZoom_Step = 0.2;
 bool Phobos::Config::TacticalZoom_Smooth = true;
 bool Phobos::Config::ShowFPS = false;
@@ -320,6 +321,7 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 	Phobos::Config::MultiCellDisabled = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCell.Disabled", false);
 	Phobos::Config::MultiCellDisabledInMultiplayer = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCell.DisabledInMultiplayer", true);
 	Debug::VerboseCarrier = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.AircraftCarrier", false);
+	Phobos::Config::DebugCarrierSelfTest = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.CarrierSelfTest", false);
 	PerfProbe::Enabled = Phobos::Config::DebugPerfProbe;
 	Phobos::Config::ToolTipBlur = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ToolTipBlur", false);
 	Phobos::Config::PrioritySelectionFiltering = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "PrioritySelectionFiltering", true);

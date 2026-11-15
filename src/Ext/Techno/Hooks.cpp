@@ -23,6 +23,7 @@
 #include <Ext/WeaponType/Body.h>
 #include <Ext/TechnoType/Body.h>
 #include <Ext/Unit/Footprint.h>
+#include <Misc/CarrierSelfTest.h>
 #include <Ext/Techno/RadarSignal.h>
 #include <Utilities/EnumFunctions.h>
 #include <Utilities/GeneralUtils.h>
@@ -75,6 +76,7 @@ DEFINE_HOOK(0x736480, UnitClass_AI, 0x6)
 	GET(UnitClass*, pThis, ESI);
 
 	Footprint::EnsureAircraftCarrierSpawns(pThis);
+	CarrierSelfTest::Tick();
 
 	auto const pExt = TechnoExt::ExtMap.Find(pThis);
 	pExt->UpdateKeepTargetOnMove();

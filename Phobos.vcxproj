@@ -292,6 +292,7 @@
     <ClCompile Include="src\Misc\ZoomManager.cpp" />
     <ClCompile Include="src\Misc\ZoomManager.Hooks.cpp" />
     <ClCompile Include="src\Misc\FootprintPathfinder.cpp" />
+    <ClCompile Include="src\Misc\CarrierSelfTest.cpp" />
     <ClCompile Include="src\Misc\TacticalMap.cpp" />
     <ClCompile Include="src\Misc\TacticalMap.Canvas.cpp" />
     <ClCompile Include="src\Misc\TacticalMap.GdiText.cpp" />
@@ -374,6 +375,7 @@
     <ClInclude Include="src\Misc\SyncLogging.h" />
     <ClInclude Include="src\Misc\ZoomManager.h" />
     <ClInclude Include="src\Misc\FootprintPathfinder.h" />
+    <ClInclude Include="src\Misc\CarrierSelfTest.h" />
     <ClInclude Include="src\Misc\TacticalMap.h" />
     <ClInclude Include="src\Misc\TacticalMap.Canvas.h" />
     <ClInclude Include="src\Misc\TacticalMap.GdiText.h" />

@@ -219,6 +219,9 @@ public:
 		static bool MultiCellDisabled;
 		static bool MultiCellDisabledInMultiplayer;
 
+		// [GC] Automated in-game carrier deck check (Debug.CarrierSelfTest).
+		static bool DebugCarrierSelfTest;
+
 
 		// MO_ExperienceEnhancements port (src/MOEE/). Read from
 		// RA2MD.ini -> [Phobos] with the "MOEE." prefix.
