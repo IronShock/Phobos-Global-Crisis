@@ -887,6 +887,11 @@ int __fastcall TechnoClass_SortY_Wrapper(ObjectClass* pThis)
 
 	if (pTechno)
 	{
+		// Keep carrier payload aircraft above the 36x9 carrier hull without
+		// changing their flight facing or native airport behavior.
+		if (auto const pCarrier = Footprint::GetCarrierPayloadOwner(pTechno))
+			return Footprint::GetYSort(pCarrier) + 1;
+
 		if (Footprint::IsMultiCell(pTechno))
 			return Footprint::GetYSort(pTechno);
 

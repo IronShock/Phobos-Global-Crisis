@@ -971,6 +971,11 @@ DEFINE_FUNCTION_JUMP(VTABLE, 0x7E427C, BuildingClass__GetFireError_Wrapper)
 
 Action __fastcall BuildingClass__WhatAction_Wrapper(BuildingClass* pThis, void* _, ObjectClass* pObj, bool ignoreForce)
 {
+	// The carrier's hidden airport proxies must never intercept the cursor or
+	// a click. They remain fully functional as native docks.
+	if (pThis->Type == BuildingTypeClass::Find("AIRCARRDOCK"))
+		return Action::None;
+
 	auto const result = GetOriginalBuildingMouseOverObject()(pThis, nullptr, pObj, ignoreForce);
 
 	// UrbanCombat: while an indoor battle is running the occupants must not be

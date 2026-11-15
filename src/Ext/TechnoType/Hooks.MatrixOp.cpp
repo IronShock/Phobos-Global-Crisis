@@ -10,6 +10,7 @@
 #include <Utilities/AresHelper.h>
 #include <Utilities/Macro.h>
 #include <Ext/Techno/Body.h>
+#include <Ext/Unit/Footprint.h>
 
 #include "Body.h"
 
@@ -821,8 +822,13 @@ DEFINE_HOOK(0x4147F9, AircraftClass_Draw_Shadow, 0x6)
 	AircraftTypeClass* pAircraftType = pThis->Type;
 	const auto loco = pThis->Locomotor.GetInterfacePtr();
 
-	if (pAircraftType->NoShadow || pThis->CloakState != CloakState::Uncloaked || pThis->IsSinking || !loco->Is_To_Have_Shadow())
+	if (pAircraftType->NoShadow
+		|| pThis->CloakState != CloakState::Uncloaked
+		|| pThis->IsSinking
+		|| !loco->Is_To_Have_Shadow())
+	{
 		return FinishDrawing;
+	}
 
 	pAircraftType = TechnoExt::GetAircraftTypeExtra(pThis);
 

@@ -503,7 +503,8 @@ Note that the AircraftTypes had to be defined under [AircraftTypes].
 
 - Vanilla's aircraft drawing code is voxel-only: an `AircraftType` whose art provides no voxel (no `Voxel=yes`, no `VXL`) is not drawn at all. Such aircraft are now drawn from their SHP image instead, with a matching shadow.
 - The SHP is expected to hold 32 rotation frames per animation, laid out the same way as the existing SHP body draws (`frame` follows the aircraft's body facing, with the usual 45 degree offset).
-- The shadow uses the engine's own shadow positioning (the locomotor's `Shadow_Point`) with a darkened blit of the same frame, so it follows the aircraft's altitude.
+- The pre-rendered shadow sequence is expected in the second half of the SHP (32 body + 32 shadow frames for the usual 64-frame art), the same layout native SHP shadows use. The shadow uses the art's own shadow frame, drawn with the engine's shadow (darken) blit and skips drawing entirely when the type has `NoShadow=yes` or the image has no shadow frames.
+- The shadow uses the engine's own shadow positioning (the locomotor's `Shadow_Point`), falling back to the ground projection of the aircraft's position, so it follows the aircraft's altitude.
 - This works together with `Image.Empty` / `Image.ConditionYellow` / `Image.ConditionRed`, since the image is picked by the same code.
 - Known limitation: the shadow does not react to pitch/roll (the voxel shadow's tilt handling is not replicated).
 

@@ -342,10 +342,11 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 	if (!pDrawer)
 		return;
 
-	// Aircraft SHP frames start at the north/east frame without the 45-degree
-	// offset used by vehicle body frames.
+	// Aircraft SHP art uses the same convention as the SHP body draws: frame 0 is the
+	// screen-up (north-west) view, so a world facing needs the usual 45-degree (+4 frames)
+	// offset.
 	const int facing = Math::clamp(
-		static_cast<int>(pThis->PrimaryFacing.Current().GetFacing<32>(0)),
+		static_cast<int>(pThis->PrimaryFacing.Current().GetFacing<32>(4)),
 		0, static_cast<int>(pImage->Frames) - 1);
 
 	// DSurface::Temp draws in tactical client space, so the object has to be projected with
@@ -383,12 +384,20 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 
 	if (shadowOffset.X != 0 || shadowOffset.Y != 0)
 	{
-		Point2D shadowPos = drawPoint + shadowOffset;
+		// SHP aircraft art carries the pre-rendered ground shadow in the second half of the
+		// frame sequence (32 body + 32 shadow frames for the usual 64-frame art), the same
+		// layout native SHP shadows use. Draw those frames instead of reusing the body frame,
+		// which has cockpit/wing gaps and needs to be faked with a translucent blit.
+		const int shadowFrame = facing + static_cast<int>(pImage->Frames) / 2;
 
-		DSurface::Temp->DrawSHP(pDrawer, pImage, facing, &shadowPos, &DSurface::ViewBounds,
-			BlitterFlags::bf_400 | BlitterFlags::Darken
-				| BlitterFlags::TransLucent50 | BlitterFlags::Centered,
-			0, zAdjust - 1, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
+		if (!pType->NoShadow && pImage->Frames >= 64 && shadowFrame < pImage->Frames)
+		{
+			Point2D shadowPos = drawPoint + shadowOffset;
+
+			DSurface::Temp->DrawSHP(pDrawer, pImage, shadowFrame, &shadowPos, &DSurface::ViewBounds,
+				BlitterFlags::bf_400 | BlitterFlags::Darken | BlitterFlags::Centered,
+				0, zAdjust - 1, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
+		}
 	}
 
 	Point2D bodyPos = drawPoint;
