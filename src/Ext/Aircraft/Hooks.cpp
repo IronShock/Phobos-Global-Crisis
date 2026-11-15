@@ -947,6 +947,13 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 	if (Footprint::GetCarrierPayloadOwner(pThis))
 	{
 		Footprint::UpdateCarrierPayload(pThis);
+
+		// A parked payload must not run the rest of AircraftClass::Update: its
+		// airport/landing logic keeps moving the aircraft and fights the deck
+		// pin every frame (visible jitter). Jump straight to the epilogue.
+		if (Footprint::IsCarrierPayloadParked(pThis) || Footprint::IsCarrierPayloadLanding(pThis))
+			return 0x4151B0;
+
 		return 0;
 	}
 

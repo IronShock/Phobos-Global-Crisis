@@ -160,3 +160,4 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 		return Continue;
 	}
 
+

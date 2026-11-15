@@ -6,6 +6,7 @@
 #include <Unsorted.h>
 
 #include <Utilities/Debug.h>
+#include <Ext/Unit/Footprint.h>
 #include <Utilities/Macro.h>
 #include <Utilities/GeneralUtils.h>
 #include <Utilities/AresHelper.h>
@@ -474,6 +475,8 @@ DEFINE_HOOK(0x41AA80, AircraftClass_AssignDestination_SyncLog, 0x7)
 	GET_STACK(const unsigned int, callerAddress, 0x0);
 
 	SyncLogger::AddDestinationChangeSyncLogEvent(pThis, pDest, callerAddress);
+
+	Footprint::NotifyDestinationAssigned(pThis, pDest);
 
 	return 0;
 }

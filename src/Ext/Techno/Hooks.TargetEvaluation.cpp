@@ -1030,7 +1030,24 @@ DEFINE_FUNCTION_JUMP(VTABLE, 0x7E2664, AircraftClass__GetFireError_Wrapper)
 
 Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* _, ObjectClass* pObj, bool ignoreForce)
 {
-	return GetOriginalAircraftMouseOverObject()(pThis, nullptr, pObj, ignoreForce);
+	auto const result = GetOriginalAircraftMouseOverObject()(pThis, nullptr, pObj, ignoreForce);
+
+	// Carrier payload interactions:
+	//  - hovering the home carrier with an airborne payload shows the return
+	//    (Enter) cursor, so clicking it sends the aircraft back to its slot;
+	//  - hovering a ground cell with a parked payload temporarily marks it as
+	//    airborne so the click assigns the real clicked destination instead of
+	//    clamping it to the aircraft's own cell.
+	if (auto const pCarrier = Footprint::GetCarrierPayloadOwner(pThis))
+	{
+		if (pObj == pCarrier && !Footprint::IsCarrierPayloadParked(pThis))
+			return Action::Enter;
+
+		if (!pObj && result == Action::Move && Footprint::IsCarrierPayloadParked(pThis))
+			pThis->InAir = true;
+	}
+
+	return result;
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7E2318, AircraftClass__WhatAction_Wrapper)
 

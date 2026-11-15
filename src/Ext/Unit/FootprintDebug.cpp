@@ -39,7 +39,7 @@ namespace
 		{
 			s_config.Initialized = true;
 			s_config.Enabled = CCINIClass::INI_RA2MD.ReadBool(
-				"Phobos", "Debug.FootprintOverlay", false);
+				"Phobos", "Debug.FootprintOverlay", true);
 
 			Debug::Log("[Footprint] debug overlay %s\n", s_config.Enabled ? "ON" : "OFF");
 		}

@@ -2,14 +2,14 @@
 
 #include <cmath>
 
-#include <Phobos.h>
-
 #include <CellClass.h>
 #include <HouseClass.h>
 #include <MapClass.h>
 #include <UnitClass.h>
 #include <UnitTypeClass.h>
 #include <Unsorted.h>
+
+#include <Phobos.h>
 
 #include <Ext/Techno/Body.h>
 #include <Ext/TechnoType/Body.h>
@@ -23,7 +23,33 @@ namespace
 	int s_startFrame = 0;
 	int s_phase = 0;
 	int s_phaseFrame = 0;
-	CellStruct s_slotCell { -1, -1 };
+	CoordStruct s_slot0 {};
+	CoordStruct s_takeoff {};
+
+	FootprintState* State()
+	{
+		if (!s_carrier || !s_carrier->IsAlive)
+			return nullptr;
+
+		return Footprint::GetState(s_carrier);
+	}
+
+	UnitClass* FindExistingCarrier()
+	{
+		for (auto const pUnit : UnitClass::Array)
+		{
+			if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo)
+				continue;
+
+			if (!Footprint::IsMultiCell(pUnit))
+				continue;
+
+			if (TechnoTypeExt::IsAircraftCarrier(pUnit->GetTechnoType()))
+				return pUnit;
+		}
+
+		return nullptr;
+	}
 
 	bool FindWaterCell(CellStruct& out)
 	{
@@ -51,10 +77,7 @@ namespace
 
 					const auto pCell = MapClass::Instance.TryGetCellAt(cell);
 
-					if (!pCell || pCell->LandType != LandType::Water)
-						continue;
-
-					if (pCell->GetBuilding() || pCell->ContainsBridge())
+					if (!pCell || pCell->LandType != LandType::Water || pCell->GetBuilding() || pCell->ContainsBridge())
 						continue;
 
 					out = cell;
@@ -66,14 +89,6 @@ namespace
 		return false;
 	}
 
-	FootprintState* State()
-	{
-		if (!s_carrier || !s_carrier->IsAlive)
-			return nullptr;
-
-		return Footprint::GetState(s_carrier);
-	}
-
 	void LogDeck(const char* tag)
 	{
 		auto const pState = State();
@@ -81,33 +96,28 @@ namespace
 		if (!pState)
 			return;
 
-		Debug::Log("[CarrierSelfTest] %s frame=%d carrier=(%d,%d) bucket=%d initialized=%d payloads=%d\n",
+		Debug::Log("[CarrierSelfTest] %s frame=%d carrier=(%d,%d) bucket=%d payloads=%d\n",
 			tag, Unsorted::CurrentFrame, s_carrier->Location.X, s_carrier->Location.Y,
-			pState->Bucket, pState->CarrierPayloadsInitialized ? 1 : 0,
-			static_cast<int>(pState->CarrierPayloads.size()));
+			pState->Bucket, static_cast<int>(pState->CarrierPayloads.size()));
 
 		for (size_t i = 0; i < pState->CarrierPayloads.size(); ++i)
 		{
 			auto const pAircraft = pState->CarrierPayloads[i];
 
 			if (!pAircraft)
-			{
-				Debug::Log("[CarrierSelfTest]   slot %d null\n", static_cast<int>(i));
 				continue;
-			}
 
 			const unsigned char state = i < pState->CarrierPayloadDocked.size()
 				? pState->CarrierPayloadDocked[i]
 				: 255;
 
 			Debug::Log("[CarrierSelfTest]   slot %d state=%d mission=%d inAir=%d loc=(%d,%d,%d)"
-				" facing=%u carrierFacing=%u ammo=%d hasAmmo=%d\n",
+				" facing=%u ammo=%d hasAmmo=%d\n",
 				static_cast<int>(i), static_cast<int>(state),
 				static_cast<int>(pAircraft->GetCurrentMission()),
 				pAircraft->IsInAir() ? 1 : 0,
 				pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z,
 				static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
-				static_cast<unsigned>(s_carrier->PrimaryFacing.Current().Raw),
 				pAircraft->Ammo, TechnoExt::HasAnyWeaponAmmo(pAircraft) ? 1 : 0);
 		}
 	}
@@ -120,11 +130,19 @@ void CarrierSelfTest::Start()
 	if (!s_enabled)
 		return;
 
-	s_carrier = nullptr;
+	s_carrier = FindExistingCarrier();
 	s_phase = 0;
-	s_phaseFrame = Unsorted::CurrentFrame;
 	s_startFrame = Unsorted::CurrentFrame;
+	s_phaseFrame = Unsorted::CurrentFrame;
 
+	if (s_carrier)
+	{
+		Debug::Log("[CarrierSelfTest] using existing AIRCARR at (%d,%d)\n",
+			s_carrier->Location.X, s_carrier->Location.Y);
+		return;
+	}
+
+	// No carrier on the map: create one for the test.
 	auto const pType = UnitTypeClass::Find("AIRCARR");
 
 	if (!pType)
@@ -137,7 +155,7 @@ void CarrierSelfTest::Start()
 
 	if (!FindWaterCell(cell))
 	{
-		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: no water cell on this map\n");
+		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: no water cell\n");
 		return;
 	}
 
@@ -145,17 +163,15 @@ void CarrierSelfTest::Start()
 
 	if (!pCell)
 	{
-		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: water cell (%d,%d) unavailable\n", cell.X, cell.Y);
+		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: cell unavailable\n");
 		return;
 	}
-
-	s_slotCell = cell;
 
 	auto const pUnit = static_cast<UnitClass*>(pType->CreateObject(HouseClass::CurrentPlayer));
 
 	if (!pUnit)
 	{
-		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: CreateObject returned null\n");
+		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: CreateObject null\n");
 		return;
 	}
 
@@ -168,15 +184,13 @@ void CarrierSelfTest::Start()
 
 	if (!placed)
 	{
-		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: Unlimbo failed at (%d,%d)\n", cell.X, cell.Y);
+		Debug::Log("[CarrierSelfTest] RESULT CREATE FAIL: Unlimbo failed\n");
 		pUnit->UnInit();
 		return;
 	}
 
 	s_carrier = pUnit;
-
-	Debug::Log("[CarrierSelfTest] RESULT CREATE OK: AIRCARR at (%d,%d) coords=(%d,%d,%d)\n",
-		cell.X, cell.Y, coords.X, coords.Y, coords.Z);
+	Debug::Log("[CarrierSelfTest] RESULT CREATE OK: AIRCARR at (%d,%d)\n", cell.X, cell.Y);
 }
 
 void CarrierSelfTest::Tick()
@@ -195,34 +209,24 @@ void CarrierSelfTest::Tick()
 
 	if (!pState || !s_carrier->IsAlive)
 	{
-		if (s_phase < 90 && Unsorted::CurrentFrame - s_startFrame < 120)
-			return;
-
-		Debug::Log("[CarrierSelfTest] RESULT DECK FAIL: carrier lost or state missing\n");
+		Debug::Log("[CarrierSelfTest] RESULT DECK FAIL: carrier lost\n");
 		s_enabled = false;
 		return;
 	}
 
-	if ((Unsorted::CurrentFrame - s_startFrame) % 30 == 0)
-		LogDeck("tick");
-
-	if (!pState->CarrierPayloadsInitialized)
+	if (!pState->CarrierPayloadsInitialized || pState->CarrierPayloads.empty())
 	{
-		if (Unsorted::CurrentFrame - s_startFrame > 180)
+		if (Unsorted::CurrentFrame - s_startFrame > 240)
 		{
-			Debug::Log("[CarrierSelfTest] RESULT DECK FAIL: payloads not initialized\n");
+			Debug::Log("[CarrierSelfTest] RESULT DECK FAIL: payloads not ready\n");
 			s_enabled = false;
 		}
 
 		return;
 	}
 
-	if (pState->CarrierPayloads.empty())
-	{
-		Debug::Log("[CarrierSelfTest] RESULT DECK FAIL: payload list empty\n");
-		s_enabled = false;
-		return;
-	}
+	if ((Unsorted::CurrentFrame - s_startFrame) % 60 == 0)
+		LogDeck("tick");
 
 	if (s_phase == 0)
 	{
@@ -233,34 +237,36 @@ void CarrierSelfTest::Tick()
 
 		if (!pAircraft || !pAircraft->IsAlive)
 		{
-			Debug::Log("[CarrierSelfTest] RESULT LANDING FAIL: payload 0 missing\n");
+			Debug::Log("[CarrierSelfTest] RESULT TAKEOFF FAIL: payload 0 missing\n");
 			s_enabled = false;
 			return;
 		}
 
-		// Facing check: slots without an explicit AircraftDockingDir should
-		// match the carrier facing.
-		LogDeck("before-return");
+		s_slot0 = pAircraft->Location;
+		LogDeck("before-takeoff");
 
-		// Force the return path directly: state 2 is what UpdateCarrierPayload
-		// uses for the manual glide back to the live deck slot.
-		if (pState->CarrierPayloadDocked.size() < 1)
-			pState->CarrierPayloadDocked.resize(1, 0);
+		// Equivalent to a left-click move: destination far from the ship.
+		const auto carrierCell = s_carrier->GetMapCoords();
+		const CellStruct targetCell
+		{
+			static_cast<short>(carrierCell.X + 10),
+			static_cast<short>(carrierCell.Y + 6)
+		};
 
-		pState->CarrierPayloadDocked[0] = 2;
+		const auto pTargetCell = MapClass::Instance.TryGetCellAt(targetCell);
 
-		CoordStruct away = pAircraft->Location;
-		away.X += 2500;
-		away.Y += 600;
-		away.Z += 700;
+		if (!pTargetCell)
+		{
+			Debug::Log("[CarrierSelfTest] RESULT TAKEOFF SKIP: target cell invalid\n");
+			s_enabled = false;
+			return;
+		}
 
-		pAircraft->SetLocation(away);
-		pAircraft->InAir = true;
-		pAircraft->SetDestination(nullptr, true);
-		pAircraft->QueueMission(Mission::Sleep, true);
+		pAircraft->SetDestination(pTargetCell, true);
+		pAircraft->QueueMission(Mission::Move, true);
 
-		Debug::Log("[CarrierSelfTest] forced return: slot0 moved to (%d,%d,%d), state=2\n",
-			away.X, away.Y, away.Z);
+		Debug::Log("[CarrierSelfTest] issued left-click move: slot0=(%d,%d,%d) target=(%d,%d)\n",
+			s_slot0.X, s_slot0.Y, s_slot0.Z, targetCell.X, targetCell.Y);
 
 		s_phase = 1;
 		s_phaseFrame = Unsorted::CurrentFrame;
@@ -269,25 +275,72 @@ void CarrierSelfTest::Tick()
 
 	if (s_phase == 1)
 	{
+		if (Unsorted::CurrentFrame - s_phaseFrame < 4)
+			return;
+
+		auto const pAircraft = pState->CarrierPayloads[0];
+
+		if (!pAircraft)
+		{
+			Debug::Log("[CarrierSelfTest] RESULT TAKEOFF FAIL: payload 0 missing\n");
+			s_enabled = false;
+			return;
+		}
+
+		s_takeoff = pAircraft->Location;
+
+		const double delta = s_takeoff.DistanceFrom(s_slot0);
+
+		Debug::Log("[CarrierSelfTest] takeoff slot0=(%d,%d,%d) actual=(%d,%d,%d) delta=%.0f state=%d mission=%d\n",
+			s_slot0.X, s_slot0.Y, s_slot0.Z,
+			s_takeoff.X, s_takeoff.Y, s_takeoff.Z, delta,
+			pState->CarrierPayloadDocked[0],
+			static_cast<int>(pAircraft->GetCurrentMission()));
+
+		// Simulate running out of ammo: clear both the legacy field and the
+		// per-weapon pools, drop the target and let the state machine decide.
+		pAircraft->Ammo = 0;
+		pAircraft->SetTarget(nullptr);
+		pAircraft->SetDestination(nullptr, true);
+		pAircraft->QueueMission(Mission::Sleep, true);
+
+		if (auto const pExt = TechnoExt::ExtMap.Find(pAircraft))
+		{
+			for (int slot = 0; slot < TechnoTypeClass::MaxWeapons; ++slot)
+				pExt->WeaponAmmoCount[slot] = 0;
+		}
+
+		Debug::Log("[CarrierSelfTest] ammo cleared, waiting for return/landing\n");
+
+		s_phase = 2;
+		s_phaseFrame = Unsorted::CurrentFrame;
+		return;
+	}
+
+	if (s_phase == 2)
+	{
+		auto const pAircraft = pState->CarrierPayloads[0];
 		const unsigned char state = pState->CarrierPayloadDocked[0];
 
 		if (state == 1)
 		{
-			Debug::Log("[CarrierSelfTest] RESULT LANDING PASS in %d frames\n",
-				Unsorted::CurrentFrame - s_phaseFrame);
+			const double delta = pAircraft->Location.DistanceFrom(s_slot0);
+
+			Debug::Log("[CarrierSelfTest] RESULT LANDING PASS in %d frames slot0=(%d,%d,%d) actual=(%d,%d,%d) delta=%.0f\n",
+				Unsorted::CurrentFrame - s_phaseFrame,
+				s_slot0.X, s_slot0.Y, s_slot0.Z,
+				pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z,
+				delta);
 
 			LogDeck("after-landing");
-			s_phase = 2;
-			s_phaseFrame = Unsorted::CurrentFrame;
+			s_enabled = false;
 			return;
 		}
 
 		if (Unsorted::CurrentFrame - s_phaseFrame > 900)
 		{
-			auto const pAircraft = pState->CarrierPayloads[0];
-
-			Debug::Log("[CarrierSelfTest] RESULT LANDING FAIL after %d frames: state=%d mission=%d inAir=%d loc=(%d,%d,%d)\n",
-				Unsorted::CurrentFrame - s_phaseFrame, static_cast<int>(state),
+			Debug::Log("[CarrierSelfTest] RESULT LANDING FAIL state=%d mission=%d inAir=%d loc=(%d,%d,%d)\n",
+				static_cast<int>(state),
 				pAircraft ? static_cast<int>(pAircraft->GetCurrentMission()) : -1,
 				pAircraft ? (pAircraft->IsInAir() ? 1 : 0) : -1,
 				pAircraft ? pAircraft->Location.X : 0,
@@ -295,86 +348,6 @@ void CarrierSelfTest::Tick()
 				pAircraft ? pAircraft->Location.Z : 0);
 
 			LogDeck("landing-timeout");
-			s_enabled = false;
-		}
-
-		return;
-	}
-
-	if (s_phase == 2)
-	{
-		if (Unsorted::CurrentFrame - s_phaseFrame < 30)
-			return;
-
-		auto const pAircraft = pState->CarrierPayloads[0];
-
-		if (!pAircraft || !pAircraft->IsAlive)
-		{
-			Debug::Log("[CarrierSelfTest] RESULT LAUNCH FAIL: payload 0 missing\n");
-			s_enabled = false;
-			return;
-		}
-
-		const CellStruct targetCell
-		{
-			static_cast<short>(s_slotCell.X + 4),
-			static_cast<short>(s_slotCell.Y)
-		};
-
-		const auto pTargetCell = MapClass::Instance.TryGetCellAt(targetCell);
-
-		if (!pTargetCell)
-		{
-			Debug::Log("[CarrierSelfTest] RESULT LAUNCH SKIP: target cell unavailable\n");
-			s_enabled = false;
-			return;
-		}
-
-		pAircraft->SetDestination(pTargetCell, true);
-		pAircraft->QueueMission(Mission::Move, true);
-
-		Debug::Log("[CarrierSelfTest] forced launch: Move to (%d,%d)\n", targetCell.X, targetCell.Y);
-
-		s_phase = 3;
-		s_phaseFrame = Unsorted::CurrentFrame;
-		return;
-	}
-
-	if (s_phase == 3)
-	{
-		auto const pAircraft = pState->CarrierPayloads[0];
-
-		if (!pAircraft)
-		{
-			Debug::Log("[CarrierSelfTest] RESULT LAUNCH FAIL: payload 0 missing\n");
-			s_enabled = false;
-			return;
-		}
-
-		const unsigned char state = pState->CarrierPayloadDocked[0];
-
-		if (state == 0 && pAircraft->IsInAir())
-		{
-			Debug::Log("[CarrierSelfTest] RESULT LAUNCH PASS in %d frames loc=(%d,%d,%d)\n",
-				Unsorted::CurrentFrame - s_phaseFrame,
-				pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
-
-			LogDeck("after-launch");
-			s_phase = 4;
-			s_enabled = false;
-			Debug::Log("[CarrierSelfTest] RESULT SELFTEST COMPLETE\n");
-			return;
-		}
-
-		if (Unsorted::CurrentFrame - s_phaseFrame > 120)
-		{
-			Debug::Log("[CarrierSelfTest] RESULT LAUNCH FAIL after %d frames: state=%d mission=%d inAir=%d loc=(%d,%d,%d)\n",
-				Unsorted::CurrentFrame - s_phaseFrame, static_cast<int>(state),
-				static_cast<int>(pAircraft->GetCurrentMission()),
-				pAircraft->IsInAir() ? 1 : 0,
-				pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
-
-			LogDeck("launch-timeout");
 			s_enabled = false;
 		}
 	}

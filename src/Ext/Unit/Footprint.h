@@ -95,6 +95,12 @@ struct FootprintState
 	std::vector<unsigned char> CarrierPayloadDocked;
 	std::vector<CoordStruct> CarrierPayloadLastCoords;
 	std::vector<int> CarrierPayloadReloadTimer;
+	// Destination the engine restored on the frame the aircraft landed; it must
+	// not be mistaken for a new player order.
+	std::vector<CellStruct> CarrierPayloadIgnoredDest;
+	// One-shot launch request captured from AircraftClass::AssignDestination.
+	std::vector<unsigned char> CarrierPayloadLaunchRequest;
+	std::vector<int> CarrierPayloadLandingTimer;
 	CoordStruct CarrierLastCoords {};
 	int CarrierLastBucket = -1;
 
@@ -126,6 +132,9 @@ struct FootprintState
 			.Process(this->CarrierPayloadDocked)
 			.Process(this->CarrierPayloadLastCoords)
 			.Process(this->CarrierPayloadReloadTimer)
+			.Process(this->CarrierPayloadIgnoredDest)
+			.Process(this->CarrierPayloadLaunchRequest)
+			.Process(this->CarrierPayloadLandingTimer)
 			.Process(this->CarrierLastCoords)
 			.Process(this->CarrierLastBucket);
 	}
@@ -170,8 +179,13 @@ public:
 	// Per-frame deck update for one payload aircraft: parked/rearm/launch and
 	// the custom return-to-deck landing that replaces native airport docking.
 	static void UpdateCarrierPayload(AircraftClass* pAircraft);
+	// Called from the AssignDestination hook: the player pointed a parked
+	// payload somewhere, so launch it even if the engine rejects the mission.
+	static void NotifyDestinationAssigned(TechnoClass* pThis, AbstractClass* pDest);
 	static UnitClass* GetCarrierPayloadOwner(TechnoClass* pPayload);
 	static bool IsCarrierPayloadParked(TechnoClass* pPayload);
+	// state 3: final manual descent, engine aircraft update is skipped.
+	static bool IsCarrierPayloadLanding(TechnoClass* pPayload);
 	static bool Mark(UnitClass* pThis, const CoordStruct& coords);
 	static bool Unmark(UnitClass* pThis, const CoordStruct* pCoords = nullptr);
 	static bool CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span, int bucket, bool alt, const CellStruct& anchor);

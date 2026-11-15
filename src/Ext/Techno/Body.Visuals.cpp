@@ -10,6 +10,7 @@
 #include <AircraftClass.h>
 #include <AircraftTypeClass.h>
 #include <Ext/SWType/Body.h>
+#include <Ext/Unit/Footprint.h>
 #include <Ext/WeaponType/Body.h>
 #include <Ext/House/Body.h>
 #include <Utilities/EnumFunctions.h>
@@ -370,19 +371,27 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 	// the position onto Z=0 gives the fallback drop.
 	Point2D shadowOffset { 0, 0 };
 
-	if (auto const pFoot = abstract_cast<FootClass*>(pThis))
+	// A payload parked on a carrier deck must cast its shadow on the deck, not
+	// on the water below the ship. Draw the pre-rendered shadow under the body
+	// (the aircraft already sits at deck height).
+	const bool deckShadow = Footprint::IsCarrierPayloadParked(pThis);
+
+	if (!deckShadow)
 	{
-		if (auto const pLoco = pFoot->Locomotor)
-			shadowOffset = pLoco->Shadow_Point();
+		if (auto const pFoot = abstract_cast<FootClass*>(pThis))
+		{
+			if (auto const pLoco = pFoot->Locomotor)
+				shadowOffset = pLoco->Shadow_Point();
+		}
+
+		if (shadowOffset.X == 0 && shadowOffset.Y == 0)
+		{
+			const Point2D groundPoint = TacticalClass::CoordsToScreen(CoordStruct { renderCoords.X, renderCoords.Y, 0 });
+			shadowOffset = groundPoint - screenPoint;
+		}
 	}
 
-	if (shadowOffset.X == 0 && shadowOffset.Y == 0)
-	{
-		const Point2D groundPoint = TacticalClass::CoordsToScreen(CoordStruct { renderCoords.X, renderCoords.Y, 0 });
-		shadowOffset = groundPoint - screenPoint;
-	}
-
-	if (shadowOffset.X != 0 || shadowOffset.Y != 0)
+	if (deckShadow || shadowOffset.X != 0 || shadowOffset.Y != 0)
 	{
 		// SHP aircraft art carries the pre-rendered ground shadow in the second half of the
 		// frame sequence (32 body + 32 shadow frames for the usual 64-frame art), the same

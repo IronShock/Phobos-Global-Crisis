@@ -1677,11 +1677,10 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 			char tempBuffer[64];
 			Nullable<int> dockDir;
 
-			if (i > 0)
-			{
-				_snprintf_s(tempBuffer, sizeof(tempBuffer), "AircraftDockingDir%d", i);
-				dockDir.Read(exINI, pSection, tempBuffer);
-			}
+			// Slot 0 must read AircraftDockingDir0 as well; the previous code
+			// only looked at the unsuffixed default for index 0.
+			_snprintf_s(tempBuffer, sizeof(tempBuffer), "AircraftDockingDir%d", i);
+			dockDir.Read(exINI, pSection, tempBuffer);
 
 			if (!dockDir.isset() && defaultDockDir.isset())
 				dockDir = defaultDockDir.Get();
