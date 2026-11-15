@@ -238,7 +238,7 @@ bool FootprintPathfinder::FindPath(
 
 	if (!found)
 	{
-		Debug::Log("[FootprintPath] no path from (%d,%d) bucket %d to (%d,%d), expansions=%d\n",
+		Debug::CarrierLog("[FootprintPath] no path from (%d,%d) bucket %d to (%d,%d), expansions=%d\n",
 			start.X, start.Y, startBucket, goal.X, goal.Y, expansions);
 		return false;
 	}
@@ -296,7 +296,7 @@ bool FootprintPathfinder::FindPath(
 			break;
 	}
 
-	Debug::Log("[FootprintPath] path %d steps, expansions=%d, goal bucket %d\n",
+	Debug::CarrierLog("[FootprintPath] path %d steps, expansions=%d, goal bucket %d\n",
 		static_cast<int>(outPath.size()), expansions, startBucket);
 
 	return !outPath.empty();

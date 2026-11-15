@@ -18,6 +18,9 @@
 #include <SpawnManagerClass.h>
 #include <Utilities/Constructs.h>
 
+#include <Phobos.h>
+#include <SessionClass.h>
+
 #include <Utilities/Debug.h>
 
 #include <algorithm>
@@ -227,7 +230,7 @@ namespace
 		const auto pBuilding = pCell ? pCell->GetBuilding() : nullptr;
 		const auto pTerrain = pCell ? pCell->GetTerrain(false) : nullptr;
 
-		Debug::Log("[FootprintBlock] %s cell=(%d,%d) reason=%s"
+		Debug::CarrierLog("[FootprintBlock] %s cell=(%d,%d) reason=%s"
 			" type(SpeedType=%d MoveZone=%d) anchorLevel=%d/%d"
 			" cell(level=%d bridge=%d land=%d pass=%d flags=%08X/%08X)"
 			" unit=%s building=%s terrain=%s\n",
@@ -543,9 +546,18 @@ void FootprintGeometry::Build(const FootprintConfig& config)
 	Built = true;
 }
 
+bool Footprint::MultiCellAllowed()
+{
+	if (Phobos::Config::MultiCellDisabled)
+		return false;
+
+	return !(Phobos::Config::MultiCellDisabledInMultiplayer
+		&& SessionClass::IsMultiplayer());
+}
+
 bool Footprint::IsMultiCell(TechnoTypeClass* pType)
 {
-	if (!pType)
+	if (!pType || !MultiCellAllowed())
 		return false;
 
 	const auto pExt = TechnoTypeExt::ExtMap.TryFind(pType);
@@ -703,7 +715,7 @@ bool Footprint::ReserveTurnStep(UnitClass* pThis, const CellStruct& anchor,
 	if (!ReserveSweep(pThis, reservation, alt))
 		return false;
 
-	Debug::Log("[FootprintReserve] %s cell=(%d,%d) %d -> %d (%s) next=%d reserved=%d\n",
+	Debug::CarrierLog("[FootprintReserve] %s cell=(%d,%d) %d -> %d (%s) next=%d reserved=%d\n",
 		pThis->GetTechnoType()->ID, anchor.X, anchor.Y, start, to & 7,
 		clockwise ? "cw" : "ccw", next, static_cast<int>(pState->ReservedSpan.size()));
 
@@ -1138,7 +1150,7 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 		pState->CarrierPayloadDocked.clear();
 		pState->CarrierPayloadLastCoords.clear();
 
-		Debug::Log("[AircraftCarrier] removed legacy SpawnManager for %s\n", pType->ID);
+		Debug::CarrierLog("[AircraftCarrier] removed legacy SpawnManager for %s\n", pType->ID);
 	}
 
 	// A dedicated hidden airport type is used so the global FAKEPAD and normal
@@ -1210,7 +1222,7 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 				pDock->SetLinkCount(1);
 
 				const auto dockCoords = pDock->GetDockCoords(nullptr);
-				Debug::Log("[AircraftCarrier] slot %d docks=%d links=%d dock=(%d,%d,%d)\n",
+				Debug::CarrierLog("[AircraftCarrier] slot %d docks=%d links=%d dock=(%d,%d,%d)\n",
 					i, pDock->Type->NumberOfDocks, pDock->RadioLinks.Capacity,
 					dockCoords.X, dockCoords.Y, dockCoords.Z);
 
@@ -1233,7 +1245,7 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 				if (!pState->CarrierDockBuilding)
 					pState->CarrierDockBuilding = pDock;
 
-				Debug::Log("[AircraftCarrier] created AIRCARRDOCK slot %d for %s at (%d,%d)\n",
+				Debug::CarrierLog("[AircraftCarrier] created AIRCARRDOCK slot %d for %s at (%d,%d)\n",
 					i, pType->ID, pDock->Location.X, pDock->Location.Y);
 			}
 		}
@@ -1418,7 +1430,7 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 	pState->CarrierLastCoords = pThis->Location;
 	pState->CarrierLastBucket = pState->Bucket;
 
-	Debug::Log("[AircraftCarrier] initialized %d normal payload aircraft for %s\n",
+	Debug::CarrierLog("[AircraftCarrier] initialized %d normal payload aircraft for %s\n",
 		static_cast<int>(pState->CarrierPayloads.size()), pType->ID);
 }
 
@@ -1538,7 +1550,7 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 			{
 				pThis->PrimaryFacing.SetCurrent(DirStruct(bucket * 0x2000));
 
-				Debug::Log("[Footprint] spawn reorient %s anchor=(%d,%d) bucket=%d\n",
+				Debug::CarrierLog("[Footprint] spawn reorient %s anchor=(%d,%d) bucket=%d\n",
 					pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket);
 			}
 			else
@@ -1566,7 +1578,7 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	// other's cells halfway through a Mark.
 	if (HasForeignOwner(pThis, span, alt) || HasForeignOwner(pThis, barriers, alt))
 	{
-		Debug::Log("[Footprint] mark blocked %s anchor=(%d,%d) bucket=%d by another hull/barrier\n",
+		Debug::CarrierLog("[Footprint] mark blocked %s anchor=(%d,%d) bucket=%d by another hull/barrier\n",
 			pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket);
 		return false;
 	}
@@ -1618,7 +1630,7 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	pState->Span = span;
 	pState->BarrierSpan = barriers;
 
-	Debug::Log("[Footprint] span %s anchor=(%d,%d) bucket=%d cells=%d barriers=%d alt=%d%s\n",
+	Debug::CarrierLog("[Footprint] span %s anchor=(%d,%d) bucket=%d cells=%d barriers=%d alt=%d%s\n",
 		pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
 		static_cast<int>(span.size()), static_cast<int>(barriers.size()), alt ? 1 : 0,
 		wasInitialized ? "" : " (initial)");
@@ -1732,7 +1744,7 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 	// interleaving their clears/sets and stealing each other's ownership.
 	if (HasForeignOwner(pThis, span, alt) || HasForeignOwner(pThis, newBarriers, alt))
 	{
-		Debug::Log("[Footprint] commit blocked %s anchor=(%d,%d) bucket=%d by another hull/barrier\n",
+		Debug::CarrierLog("[Footprint] commit blocked %s anchor=(%d,%d) bucket=%d by another hull/barrier\n",
 			pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket);
 		return false;
 	}
@@ -2092,7 +2104,7 @@ void Footprint::EnsureLocomotor(UnitClass* pThis)
 	pNewLoco->Link_To_Object(pThis);
 	pThis->Locomotor = pNewLoco;
 
-	Debug::Log("[Footprint] replaced locomotor for %s\n", pThis->GetTechnoType()->ID);
+	Debug::CarrierLog("[Footprint] replaced locomotor for %s\n", pThis->GetTechnoType()->ID);
 }
 
 int Footprint::GetYSort(TechnoClass* pThis)
@@ -2152,7 +2164,7 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 					pState->ReconcileTarget = -1;
 					pThis->PrimaryFacing.SetCurrent(DirStruct(currentBucket * 0x2000));
 
-					Debug::Log("[FootprintAim] %s blocked at bucket %d, aborted at (%d,%d)\n",
+					Debug::CarrierLog("[FootprintAim] %s blocked at bucket %d, aborted at (%d,%d)\n",
 						pThis->GetTechnoType()->ID, currentBucket,
 						pState->Anchor.X, pState->Anchor.Y);
 					return;
@@ -2169,7 +2181,7 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 			pState->ReconcileActive = false;
 			pState->ReconcileTarget = -1;
 
-			Debug::Log("[FootprintAim] %s finished bucket %d at (%d,%d)\n",
+			Debug::CarrierLog("[FootprintAim] %s finished bucket %d at (%d,%d)\n",
 				pThis->GetTechnoType()->ID, currentBucket,
 				pState->Anchor.X, pState->Anchor.Y);
 		}
@@ -2185,7 +2197,7 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 			pState->ReconcileActive = false;
 			pState->ReconcileTarget = -1;
 
-			Debug::Log("[FootprintAim] %s interrupted, committed bucket %d at (%d,%d)\n",
+			Debug::CarrierLog("[FootprintAim] %s interrupted, committed bucket %d at (%d,%d)\n",
 				pThis->GetTechnoType()->ID, currentBucket,
 				pState->Anchor.X, pState->Anchor.Y);
 		}
@@ -2220,7 +2232,7 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 		pState->ReconcileTarget = target;
 		pState->ReconcileClockwise = clockwise;
 
-		Debug::Log("[FootprintAim] %s bucket %d -> %d (%s) at (%d,%d), reserved=%d\n",
+		Debug::CarrierLog("[FootprintAim] %s bucket %d -> %d (%s) at (%d,%d), reserved=%d\n",
 			pThis->GetTechnoType()->ID, from, target,
 			clockwise ? "cw" : "ccw",
 			pState->Anchor.X, pState->Anchor.Y,
@@ -2245,8 +2257,93 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 	{
 		lastLogFrame = Unsorted::CurrentFrame;
 
-		Debug::Log("[FootprintAim] %s blocked %d -> %d at (%d,%d), snapped back\n",
+		Debug::CarrierLog("[FootprintAim] %s blocked %d -> %d at (%d,%d), snapped back\n",
 			pThis->GetTechnoType()->ID, from, target,
 			pState->Anchor.X, pState->Anchor.Y);
 	}
+}
+
+void Footprint::DumpCarrierState()
+{
+	Debug::Log("[CarrierDump] begin: units=%d payloadMap=%d\n",
+		static_cast<int>(UnitClass::Array.Count),
+		static_cast<int>(s_carrierPayloads.size()));
+
+	for (auto const pUnit : UnitClass::Array)
+	{
+		if (!pUnit || !pUnit->IsAlive || !IsMultiCell(pUnit))
+			continue;
+
+		const auto pType = pUnit->GetTechnoType();
+		const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+		const auto pState = GetState(pUnit);
+
+		if (!pState)
+			continue;
+
+		Debug::Log("[CarrierDump] unit=%s ptr=%p loc=(%d,%d,%d) cell=(%d,%d)"
+			" init=%d locked=%d translating=%d bucket=%d alt=%d"
+			" span=%d barrier=%d reserved=%d reconcile=%d/%d\n",
+			pType->ID, static_cast<void*>(pUnit),
+			pUnit->Location.X, pUnit->Location.Y, pUnit->Location.Z,
+			pUnit->GetMapCoords().X, pUnit->GetMapCoords().Y,
+			pState->Initialized ? 1 : 0, pState->Locked ? 1 : 0,
+			pState->Translating ? 1 : 0, pState->Bucket, pState->Alt ? 1 : 0,
+			static_cast<int>(pState->Span.size()),
+			static_cast<int>(pState->BarrierSpan.size()),
+			static_cast<int>(pState->ReservedSpan.size()),
+			pState->ReconcileActive ? 1 : 0, pState->ReconcileTarget);
+
+		if (!TechnoTypeExt::IsAircraftCarrier(pType) || !pTypeExt)
+			continue;
+
+		for (size_t i = 0; i < pState->CarrierDockBuildings.size(); ++i)
+		{
+			auto const pDock = pState->CarrierDockBuildings[i];
+
+			if (!pDock)
+			{
+				Debug::Log("[CarrierDump]   slot %d dock=<null>\n", static_cast<int>(i));
+				continue;
+			}
+
+			const auto dockCoords = pDock->GetDockCoords(nullptr);
+			Debug::Log("[CarrierDump]   slot %d dock=%p type=%s alive=%d limbo=%d loc=(%d,%d,%d)"
+				" linkCapacity=%d dockCoords=(%d,%d,%d)\n",
+				static_cast<int>(i), static_cast<void*>(pDock),
+				pDock->Type ? pDock->Type->ID : "?",
+				pDock->IsAlive ? 1 : 0, pDock->InLimbo ? 1 : 0,
+				pDock->Location.X, pDock->Location.Y, pDock->Location.Z,
+				static_cast<int>(pDock->RadioLinks.Capacity),
+				dockCoords.X, dockCoords.Y, dockCoords.Z);
+		}
+
+		for (size_t i = 0; i < pState->CarrierPayloads.size(); ++i)
+		{
+			auto const pAircraft = pState->CarrierPayloads[i];
+
+			if (!pAircraft)
+			{
+				Debug::Log("[CarrierDump]   payload %d = <null>\n", static_cast<int>(i));
+				continue;
+			}
+
+			const auto expected = GetCarrierDockSlotCoords(pUnit, pTypeExt, i);
+			Debug::Log("[CarrierDump]   payload %d ptr=%p type=%s alive=%d limbo=%d mission=%d"
+				" inAir=%d ammo=%d health=%d loc=(%d,%d,%d) expected=(%d,%d,%d)"
+				" pushed=%d parked=%d\n",
+				static_cast<int>(i), static_cast<void*>(pAircraft),
+				pAircraft->Type ? pAircraft->Type->ID : "?",
+				pAircraft->IsAlive ? 1 : 0, pAircraft->InLimbo ? 1 : 0,
+				static_cast<int>(pAircraft->GetCurrentMission()),
+				pAircraft->IsInAir() ? 1 : 0, pAircraft->Ammo,
+				pAircraft->Health,
+				pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z,
+				expected.X, expected.Y, expected.Z,
+				(pAircraft->Destination ? 1 : 0),
+				IsCarrierPayloadParked(pAircraft) ? 1 : 0);
+		}
+	}
+
+	Debug::Log("[CarrierDump] end\n");
 }

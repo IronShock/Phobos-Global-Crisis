@@ -318,7 +318,7 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	pLinked->WaypointCell = CellStruct { -1, -1 };
 	pLinked->WaypointNearbyAccessibleCellDelta = CellStruct { -1, -1 };
 
-	Debug::Log("[FootprintMove] %s Move_To (%d,%d) from cell (%d,%d)\n",
+	Debug::CarrierLog("[FootprintMove] %s Move_To (%d,%d) from cell (%d,%d)\n",
 		pLinked->GetTechnoType()->ID, to.X, to.Y, start.X, start.Y);
 
 	if (!MapClass::Instance.CellExists(goal))
@@ -537,7 +537,7 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 		this->TurnClockwise = clockwise;
 		this->TurnTargetCell = anchor;
 
-		Debug::Log("[FootprintTurn] %s cell=(%d,%d) bucket %d -> %d (%s), remainingReserved=%d\n",
+		Debug::CarrierLog("[FootprintTurn] %s cell=(%d,%d) bucket %d -> %d (%s), remainingReserved=%d\n",
 			pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, from, to,
 			clockwise ? "cw" : "ccw",
 			static_cast<int>(pState->ReservedSpan.size()));
@@ -580,7 +580,7 @@ void FootprintLocomotionClass::FinishTurn(const CellStruct& anchor)
 	++this->PathIndex;
 	pLinked->SetSpeedPercentage(0.0);
 
-	Debug::Log("[FootprintTurn] finished cell=(%d,%d) bucket %d\n",
+	Debug::CarrierLog("[FootprintTurn] finished cell=(%d,%d) bucket %d\n",
 		anchor.X, anchor.Y, this->TurnTargetBucket);
 }
 
@@ -610,7 +610,7 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 		return false;
 	}
 
-	Debug::Log("[FootprintStep] %s from=(%d,%d) bucket=%d next=(%d,%d) forward\n",
+	Debug::CarrierLog("[FootprintStep] %s from=(%d,%d) bucket=%d next=(%d,%d) forward\n",
 		pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
 		next.X, next.Y);
 
@@ -805,7 +805,7 @@ void FootprintLocomotionClass::LogBlocked(const char* reason, const CellStruct& 
 
 	this->LastLogFrame = Unsorted::CurrentFrame;
 
-	Debug::Log("[FootprintMove] blocked %s at cell=(%d,%d) unit=%s\n",
+	Debug::CarrierLog("[FootprintMove] blocked %s at cell=(%d,%d) unit=%s\n",
 		reason, cell.X, cell.Y,
 		this->LinkedTo ? this->LinkedTo->GetTechnoType()->ID : "?");
 }

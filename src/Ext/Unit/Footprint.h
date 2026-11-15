@@ -109,6 +109,11 @@ struct FootprintState
 class Footprint
 {
 public:
+	// Master switch. False when MultiCell.Disabled is set, or when
+	// MultiCell.DisabledInMultiplayer (default) is set and the current session
+	// is networked. Every entry point must consult this so a multiplayer match
+	// never runs the custom footprint code.
+	static bool MultiCellAllowed();
 	static bool IsMultiCell(TechnoClass* pThis);
 	static bool IsMultiCell(TechnoTypeClass* pType);
 	static const FootprintConfig& GetConfig(TechnoTypeClass* pType);
@@ -153,4 +158,7 @@ public:
 	static int GetYSort(TechnoClass* pThis);
 	static bool IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt);
 	static bool HasObstacleNear(TechnoClass* pThis, int radius);
+	// Writes a full deck/footprint snapshot of every live carrier to debug.log.
+	// Bound to the "Dump Carrier State" debug command.
+	static void DumpCarrierState();
 };

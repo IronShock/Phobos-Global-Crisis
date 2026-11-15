@@ -212,6 +212,13 @@ public:
 		static bool DebugPerfProbe;
 		static bool DebugPerfLog;
 
+		// [GC] Multi-cell footprint / aircraft carrier master switches.
+		// MultiCell.Disabled turns the whole subsystem off.
+		// MultiCell.DisabledInMultiplayer (default on) keeps networked games on
+		// the vanilla 1x1-unit path so the feature can never desync a match.
+		static bool MultiCellDisabled;
+		static bool MultiCellDisabledInMultiplayer;
+
 
 		// MO_ExperienceEnhancements port (src/MOEE/). Read from
 		// RA2MD.ini -> [Phobos] with the "MOEE." prefix.

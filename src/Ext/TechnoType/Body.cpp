@@ -35,7 +35,7 @@ namespace
 
 bool TechnoTypeExt::IsAircraftCarrier(TechnoTypeClass* pType)
 {
-	if (!pType)
+	if (!pType || !Footprint::MultiCellAllowed())
 		return false;
 
 	if (s_aircraftCarrierTypes.find(pType) != s_aircraftCarrierTypes.end())
@@ -1272,7 +1272,14 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 
 	// Multi-cell units. Restricted to VehicleTypes: buildings already use
 	// Foundation= for their own foundation and must not be reinterpreted.
-	if (this->OwnerObject()->WhatAmI() == AbstractType::UnitType)
+	// The master switch keeps networked sessions on the vanilla 1x1 path; when
+	// it turns the subsystem off the type is reset so no stale hull survives a
+	// rules reload between a singleplayer and a multiplayer session.
+	if (this->OwnerObject()->WhatAmI() == AbstractType::UnitType && !Footprint::MultiCellAllowed())
+	{
+		this->MultiCell = FootprintConfig {};
+	}
+	else if (this->OwnerObject()->WhatAmI() == AbstractType::UnitType)
 	{
 		if (exINI.ReadString(pSection, "Foundation"))
 		{
@@ -1373,7 +1380,7 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			this->OwnerObject()->Locomotor = __uuidof(FootprintLocomotionClass);
 			this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
 
-			Debug::Log("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f MaxClimb=%d PerCellDamage=%d HitAllCells=%d, forced FootprintLocomotionClass\n",
+			Debug::CarrierLog("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f MaxClimb=%d PerCellDamage=%d HitAllCells=%d, forced FootprintLocomotionClass\n",
 				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0,
 				static_cast<int>(this->OwnerObject()->SpeedType),
 				static_cast<int>(this->OwnerObject()->MovementZone),
@@ -1628,7 +1635,7 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 	this->TurretOffset.Read(exArtINI, pArtSection, "TurretOffset");
 	this->TurretShadow.Read(exArtINI, pArtSection, "TurretShadow");
 
-	if (this->AircraftCarrier)
+	if (this->AircraftCarrier && Footprint::MultiCellAllowed())
 	{
 		s_aircraftCarrierTypes.insert(pThis);
 
@@ -1712,7 +1719,7 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 		pThis->Spawns = nullptr;
 		pThis->SpawnsNumber = 0;
 
-		Debug::Log("[AircraftCarrier] parsed %s docks=%d payloads=%d queue=%d spawns=%p number=%d\n",
+		Debug::CarrierLog("[AircraftCarrier] parsed %s docks=%d payloads=%d queue=%d spawns=%p number=%d\n",
 			pThis->ID, docks, payloadTypes, static_cast<int>(this->Spawns_Queue.size()),
 			static_cast<void*>(pThis->Spawns), pThis->SpawnsNumber);
 	}

@@ -9,6 +9,7 @@ char Debug::StringBuffer[0x1000];
 char Debug::FinalStringBuffer[0x1000];
 char Debug::DeferredStringBuffer[0x1000];
 int Debug::CurrentBufferSize = 0;
+bool Debug::VerboseCarrier = false;
 
 void Debug::Log(const char* pFormat, ...)
 {
@@ -22,6 +23,18 @@ void Debug::Log(const char* pFormat, ...)
 void Debug::LogGame(const char* pFormat, ...)
 {
 	JMP_STD(0x4068E0);
+}
+
+void Debug::CarrierLog(const char* pFormat, ...)
+{
+	if (!VerboseCarrier)
+		return;
+
+	va_list args;
+	va_start(args, pFormat);
+	vsprintf_s(FinalStringBuffer, pFormat, args);
+	LogGame("%s %s", "[Phobos]", FinalStringBuffer);
+	va_end(args);
 }
 
 void Debug::LogDeferred(const char* pFormat, ...)

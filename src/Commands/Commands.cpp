@@ -17,6 +17,7 @@
 #include "TacticalPause.h"
 #include "ToggleTacticalMap.h"
 #include "ZoomCommands.h"
+#include "DumpCarrierState.h"
 #include <New/Entity/FilterButtonClass.h>
 #include <MOEE/MOEE.Commands.h>
 
@@ -85,6 +86,7 @@ DEFINE_HOOK(0x533066, CommandClassCallback_Register, 0x6)
 		MakeCommand<DamageDisplayCommandClass>();
 		MakeCommand<SaveVariablesToFileCommandClass>();
 		MakeCommand<ObjectInfoCommandClass>();
+		MakeCommand<DumpCarrierStateCommandClass>();
 		MakeCommand<FrameByFrameCommandClass>();
 		MakeCommand<FrameStepCommandClass<1>>(); // Single step in
 		MakeCommand<FrameStepCommandClass<5>>(); // Speed 1

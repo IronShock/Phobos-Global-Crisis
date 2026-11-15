@@ -17,7 +17,15 @@ public:
 	static char DeferredStringBuffer[0x1000];
 	static int CurrentBufferSize;
 
+	// [GC] Verbose logging for the multi-cell footprint / aircraft carrier work.
+	// Some of these logs sit on per-frame or per-hover paths, so they are off by
+	// default. Enable with Debug.AircraftCarrier=yes in RA2MD.ini [Phobos].
+	static bool VerboseCarrier;
+
 	static void Log(const char* pFormat, ...);
+	// Same as Log(), but only when Debug.VerboseCarrier is enabled. Use it for
+	// multi-cell/carrier diagnostics that sit on per-frame or per-hover paths.
+	static void CarrierLog(const char* pFormat, ...);
 	static void LogGame(const char* pFormat, ...);
 	static void LogDeferred(const char* pFormat, ...);
 	static void LogDeferredFinalize();

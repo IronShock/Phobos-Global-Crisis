@@ -2279,7 +2279,7 @@ namespace DamageAreaTemp
 
 		const int baseDamage = BaseDamage;
 
-		Debug::Log("[FullFootprint] owner=%s cells=%d baseDamage=%d wh=%s\n",
+		Debug::CarrierLog("[FullFootprint] owner=%s cells=%d baseDamage=%d wh=%s\n",
 			pUnit->Type->ID, static_cast<int>(pState->Span.size()),
 			baseDamage, pWH->ID);
 
@@ -2386,7 +2386,7 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 		DamageAreaTemp::CheckingCellAlt = false;
 		R->ESI(pObject);
 
-		Debug::Log("[FootprintDamage] cell=(%d,%d) owner=%s\n",
+		Debug::CarrierLog("[FootprintDamage] cell=(%d,%d) owner=%s\n",
 			pCell->MapCoords.X, pCell->MapCoords.Y,
 			pUnit->Type->ID);
 
@@ -2409,7 +2409,7 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 		DamageAreaTemp::CheckingCellAlt = true;
 		R->ESI(pObject);
 
-		Debug::Log("[FootprintDamage] cell=(%d,%d) owner=%s (alt)\n",
+		Debug::CarrierLog("[FootprintDamage] cell=(%d,%d) owner=%s (alt)\n",
 			pCell->MapCoords.X, pCell->MapCoords.Y,
 			pUnit->Type->ID);
 

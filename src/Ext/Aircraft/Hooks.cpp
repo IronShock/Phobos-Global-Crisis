@@ -994,7 +994,7 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 
 				if (Unsorted::CurrentFrame % 30 == 0)
 				{
-					Debug::Log("[AircraftCarrier] payload dock check mission=%d ammo=%d air=%d dest=%p dock=%p nearest=%p\n",
+					Debug::CarrierLog("[AircraftCarrier] payload dock check mission=%d ammo=%d air=%d dest=%p dock=%p nearest=%p\n",
 						static_cast<int>(mission), pThis->Ammo, pThis->IsInAir() ? 1 : 0,
 						static_cast<void*>(pThis->Destination),
 						static_cast<void*>(pThis->DockNowHeadingTo),
