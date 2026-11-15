@@ -938,7 +938,11 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 
 	const auto pType = pThis->GetTechnoType();
 	const auto& config = GetConfig(pType);
-	const auto pAnchorCell = MapClass::Instance.GetCellAt(anchor);
+	const auto pAnchorCell = MapClass::Instance.TryGetCellAt(anchor);
+
+	if (!pAnchorCell)
+		return false;
+
 	const int level = pAnchorCell->GetLevel();
 	const bool bridge = pAnchorCell->ContainsBridge();
 	const int maxClimb = std::max(0, config.MaxClimb);
@@ -1157,12 +1161,16 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 	// aircraft landing data are never modified. One 1-dock proxy is created per
 	// parking slot: NumberOfDocks==1 makes native GetDockCoords use the first
 	// offset unconditionally, without depending on a radio-link index.
-	if (pState->CarrierDockBuildings.empty())
+	if (auto const pDockType = BuildingTypeClass::Find("AIRCARRDOCK"))
 	{
-		if (auto const pDockType = BuildingTypeClass::Find("AIRCARRDOCK"))
-		{
-			const int docks = std::max(1, pTypeExt->AircraftCarrier_NumberOfDocks.Get());
+		const int docks = std::max(1, pTypeExt->AircraftCarrier_NumberOfDocks.Get());
 
+		// Type-level setup is process-wide and identical for every carrier, so
+		// run it once instead of on every AI tick.
+		static bool dockTypeConfigured = false;
+
+		if (!dockTypeConfigured)
+		{
 			pDockType->NumberOfDocks = 1;
 			pDockType->DockingOffsets.SetCapacity(1);
 			pDockType->DockingOffsets[0] = CoordStruct::Empty;
@@ -1181,73 +1189,79 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 			pDockTypeExt->AircraftDockingDirs.resize(1);
 			pDockTypeExt->AircraftDockingDirs[0] = std::nullopt;
 
-			if (pState->CarrierDockBuilding)
-				pState->CarrierDockBuildings.push_back(pState->CarrierDockBuilding);
+			dockTypeConfigured = true;
+		}
 
-			pState->CarrierDockBuildings.resize(docks, nullptr);
+		pState->CarrierDockBuildings.resize(docks, nullptr);
 
-			for (int i = 0; i < docks; ++i)
+		// Legacy saves kept a single dock pointer; fold it back into slot 0.
+		if (pState->CarrierDockBuilding && !pState->CarrierDockBuildings.empty()
+			&& !pState->CarrierDockBuildings[0])
+		{
+			pState->CarrierDockBuildings[0] = pState->CarrierDockBuilding;
+		}
+
+		for (int i = 0; i < docks; ++i)
+		{
+			if (pState->CarrierDockBuildings[i])
+				continue;
+
+			const auto coords = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+			auto const pDock = static_cast<BuildingClass*>(pDockType->CreateObject(pThis->Owner));
+
+			if (!pDock)
 			{
-				if (pState->CarrierDockBuildings[i])
-					continue;
-
-				const auto coords = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
-				auto const pDock = static_cast<BuildingClass*>(pDockType->CreateObject(pThis->Owner));
-
-				if (!pDock)
-				{
-					Debug::Log("[AircraftCarrier] failed to create AIRCARRDOCK slot %d for %s\n",
-						i, pType->ID);
-					continue;
-				}
-
-				pDock->SetLocation(coords);
-				pDock->PrimaryFacing.SetCurrent(pThis->PrimaryFacing.Current());
-
-				++Unsorted::ScenarioInit;
-				const bool placed = pDock->Unlimbo(coords, pThis->PrimaryFacing.Current().GetDir());
-				--Unsorted::ScenarioInit;
-
-				if (!placed)
-				{
-					Debug::Log("[AircraftCarrier] failed to place AIRCARRDOCK slot %d for %s at (%d,%d)\n",
-						i, pType->ID, coords.X, coords.Y);
-					continue;
-				}
-
-				// Keep the proxy at the exact deck coordinate used by the
-				// payload. Without this the building is snapped back to the
-				// cell floor/centre by Unlimbo.
-				pDock->SetLocation(coords);
-				pDock->SetLinkCount(1);
-
-				const auto dockCoords = pDock->GetDockCoords(nullptr);
-				Debug::CarrierLog("[AircraftCarrier] slot %d docks=%d links=%d dock=(%d,%d,%d)\n",
-					i, pDock->Type->NumberOfDocks, pDock->RadioLinks.Capacity,
-					dockCoords.X, dockCoords.Y, dockCoords.Z);
-
-				bool inArray = false;
-
-				for (auto const pItem : BuildingClass::Array)
-				{
-					if (pItem == pDock)
-					{
-						inArray = true;
-						break;
-					}
-				}
-
-				if (!inArray)
-					BuildingClass::Array.AddItem(pDock);
-
-				pState->CarrierDockBuildings[i] = pDock;
-
-				if (!pState->CarrierDockBuilding)
-					pState->CarrierDockBuilding = pDock;
-
-				Debug::CarrierLog("[AircraftCarrier] created AIRCARRDOCK slot %d for %s at (%d,%d)\n",
-					i, pType->ID, pDock->Location.X, pDock->Location.Y);
+				Debug::Log("[AircraftCarrier] failed to create AIRCARRDOCK slot %d for %s\n",
+					i, pType->ID);
+				continue;
 			}
+
+			pDock->SetLocation(coords);
+			pDock->PrimaryFacing.SetCurrent(pThis->PrimaryFacing.Current());
+
+			++Unsorted::ScenarioInit;
+			const bool placed = pDock->Unlimbo(coords, pThis->PrimaryFacing.Current().GetDir());
+			--Unsorted::ScenarioInit;
+
+			if (!placed)
+			{
+				Debug::Log("[AircraftCarrier] failed to place AIRCARRDOCK slot %d for %s at (%d,%d)\n",
+					i, pType->ID, coords.X, coords.Y);
+				continue;
+			}
+
+			// Keep the proxy at the exact deck coordinate used by the
+			// payload. Without this the building is snapped back to the
+			// cell floor/centre by Unlimbo.
+			pDock->SetLocation(coords);
+			pDock->SetLinkCount(1);
+
+			const auto dockCoords = pDock->GetDockCoords(nullptr);
+			Debug::CarrierLog("[AircraftCarrier] slot %d docks=%d links=%d dock=(%d,%d,%d)\n",
+				i, pDock->Type->NumberOfDocks, pDock->RadioLinks.Capacity,
+				dockCoords.X, dockCoords.Y, dockCoords.Z);
+
+			bool inArray = false;
+
+			for (auto const pItem : BuildingClass::Array)
+			{
+				if (pItem == pDock)
+				{
+					inArray = true;
+					break;
+				}
+			}
+
+			if (!inArray)
+				BuildingClass::Array.AddItem(pDock);
+
+			pState->CarrierDockBuildings[i] = pDock;
+
+			if (!pState->CarrierDockBuilding)
+				pState->CarrierDockBuilding = pDock;
+
+			Debug::CarrierLog("[AircraftCarrier] created AIRCARRDOCK slot %d for %s at (%d,%d)\n",
+				i, pType->ID, pDock->Location.X, pDock->Location.Y);
 		}
 	}
 
@@ -1274,6 +1288,14 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 
 	if (pState->CarrierPayloadsInitialized)
 	{
+		// Rebuild the payload lookup cache after a load (the map itself is not
+		// serialized). Dead entries were already nulled by InvalidatePointer.
+		for (auto const pAircraft : pState->CarrierPayloads)
+		{
+			if (pAircraft)
+				s_carrierPayloads[pAircraft] = pThis;
+		}
+
 		// Restore carrier-side movement handling only for parked payloads.
 		// Flight, landing and facing remain owned by the native airport code.
 		const bool moved = pState->CarrierLastCoords.X != pThis->Location.X
@@ -1515,7 +1537,11 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 		? pState->Bucket
 		: BucketFromFacing(pThis->PrimaryFacing.Current());
 	auto span = GetSpan(pThis, anchor, bucket);
-	const auto pAnchorCell = MapClass::Instance.GetCellAt(anchor);
+	const auto pAnchorCell = MapClass::Instance.TryGetCellAt(anchor);
+
+	if (!pAnchorCell)
+		return false;
+
 	const int height = MapClass::Instance.GetCellFloorHeight(coords) + CellClass::BridgeHeight;
 	const bool alt = (coords.Z >= height && pAnchorCell->ContainsBridge());
 
@@ -2069,6 +2095,26 @@ void Footprint::ClearAll()
 			Mark(pUnit, pUnit->Location);
 		}
 	}
+
+	// The payload lookup is a cache, not authoritative state: rebuild it from
+	// the live carrier states so it can never keep pointers from a previous
+	// scenario or a stale save.
+	s_carrierPayloads.clear();
+
+	for (auto const pUnit : UnitClass::Array)
+	{
+		if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo || !IsMultiCell(pUnit))
+			continue;
+
+		if (auto const pState = GetState(pUnit); pState && pState->CarrierPayloadsInitialized)
+		{
+			for (auto const pAircraft : pState->CarrierPayloads)
+			{
+				if (pAircraft)
+					s_carrierPayloads[pAircraft] = pUnit;
+			}
+		}
+	}
 }
 
 void Footprint::FixupAfterLoad()
@@ -2081,6 +2127,17 @@ void Footprint::FixupAfterLoad()
 			continue;
 
 		EnsureLocomotor(pUnit);
+
+		// Turn reservations are transient. A save made mid-turn restores the
+		// cells it blocked, so release them explicitly before rebuilding the
+		// hull; otherwise they would stay occupied until the unit moves again.
+		if (auto const pState = GetState(pUnit))
+		{
+			pState->Locked = false;
+			pState->Translating = false;
+			ReleaseReservation(pUnit);
+		}
+
 		Mark(pUnit, pUnit->Location);
 	}
 }
@@ -2346,4 +2403,64 @@ void Footprint::DumpCarrierState()
 	}
 
 	Debug::Log("[CarrierDump] end\n");
+}
+
+void Footprint::OnPointerInvalidated(void* ptr)
+{
+	if (!ptr || s_carrierPayloads.empty())
+		return;
+
+	for (auto it = s_carrierPayloads.begin(); it != s_carrierPayloads.end(); )
+	{
+		if (it->first == ptr || it->second == ptr)
+			it = s_carrierPayloads.erase(it);
+		else
+			++it;
+	}
+}
+
+void Footprint::OnUnitDestroyed(UnitClass* pThis)
+{
+	if (!pThis)
+		return;
+
+	auto const pState = GetState(pThis);
+
+	if (!pState)
+		return;
+
+	// Untrack every payload first so nothing can look at the carrier after this
+	// point. The aircraft themselves are intentionally left alive: whether they
+	// die with the carrier or fly off is a gameplay decision handled elsewhere.
+	for (auto const pAircraft : pState->CarrierPayloads)
+	{
+		if (pAircraft)
+			s_carrierPayloads.erase(pAircraft);
+	}
+
+	pState->CarrierPayloads.clear();
+	pState->CarrierPayloadDocked.clear();
+	pState->CarrierPayloadLastCoords.clear();
+	pState->CarrierPayloadsInitialized = false;
+	pState->CarrierDockBuilding = nullptr;
+
+	// Dock proxies are real BuildingClass objects created for native dock
+	// search. They must not outlive the carrier: they are immune to damage, so
+	// nothing else would ever remove them from the map.
+	for (auto const pDock : pState->CarrierDockBuildings)
+	{
+		if (!pDock)
+			continue;
+
+		if (!pDock->InLimbo)
+			pDock->Limbo();
+
+		BuildingClass::Array.Remove(pDock);
+		pDock->UnInit();
+	}
+
+	pState->CarrierDockBuildings.clear();
+
+	Debug::Log("[AircraftCarrier] released deck of destroyed %s\n",
+		pThis->GetTechnoType() ? pThis->GetTechnoType()->ID : "?");
 }

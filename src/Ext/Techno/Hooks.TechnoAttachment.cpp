@@ -38,6 +38,9 @@ DEFINE_HOOK(0x4DEBB4, FootClass_OnDestroyed_NotifyParent, 0x8)
 
 	TechnoExt::HandleDestructionAsChild(pThis);
 
+	if (pThis->WhatAmI() == AbstractType::Unit)
+		Footprint::OnUnitDestroyed(static_cast<UnitClass*>(pThis));
+
 	return 0;
 }
 

@@ -74,8 +74,7 @@ struct FootprintState
 	bool Translating = false;
 	int Bucket = 0;
 	CellStruct Anchor { 0, 0 };
-	bool Alt = false;
-	std::vector<CellStruct> Span;
+	bool Alt = false;	std::vector<CellStruct> Span;
 	std::vector<CellStruct> BarrierSpan;
 	// Transient no-pass cells for the next 45-degree turn stage: the actual
 	// hull area swept while rotating to the next bucket, excluding cells the
@@ -104,6 +103,30 @@ struct FootprintState
 	bool ReconcileActive = false;
 	int ReconcileTarget = -1;
 	bool ReconcileClockwise = true;
+
+	// Persisted through TechnoExt::ExtData. Transient flags above (Locked,
+	// Translating, Reconcile*) are deliberately not saved; the load path resets
+	// them and rebuilds the owner grid from Initialized/Span.
+	template <typename T>
+	void Serialize(T& Stm)
+	{
+		Stm
+			.Process(this->Initialized)
+			.Process(this->Bucket)
+			.Process(this->Anchor)
+			.Process(this->Alt)
+			.Process(this->Span)
+			.Process(this->BarrierSpan)
+			.Process(this->ReservedSpan)
+			.Process(this->CarrierPayloadsInitialized)
+			.Process(this->CarrierDockBuilding)
+			.Process(this->CarrierDockBuildings)
+			.Process(this->CarrierPayloads)
+			.Process(this->CarrierPayloadDocked)
+			.Process(this->CarrierPayloadLastCoords)
+			.Process(this->CarrierLastCoords)
+			.Process(this->CarrierLastBucket);
+	}
 };
 
 class Footprint
@@ -154,6 +177,12 @@ public:
 	static void FixupAfterLoad();
 	static void EnsureLocomotor(UnitClass* pThis);
 	static void ReconcileFacing(UnitClass* pThis);
+	// Called when a unit is removed/destroyed. Releases the deck of a carrier:
+	// untracks payloads and destroys the hidden dock proxies.
+	static void OnUnitDestroyed(UnitClass* pThis);
+	// Called from TechnoExt::InvalidatePointer; drops cached payload links that
+	// point at an object the engine is about to delete.
+	static void OnPointerInvalidated(void* ptr);
 
 	static int GetYSort(TechnoClass* pThis);
 	static bool IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt);

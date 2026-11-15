@@ -1823,6 +1823,10 @@ void TechnoExt::ExtData::Serialize(T& Stm)
 	Stm.Process(this->AccelStartFrame);
 	Stm.Process(this->AccelActive);
 	Stm.Process(this->AccelWasMoving);
+
+	// Multi-cell footprint and carrier deck state. Persisting this is what stops
+	// a loaded save from spawning a second set of dock proxies and payloads.
+	this->Footprint.Serialize(Stm);
 }
 
 void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)
@@ -1840,6 +1844,18 @@ void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)
 	for (auto& [key, vec] : DormantAttachments)
 		for (auto const& pAttachment : vec)
 			pAttachment->InvalidatePointer(ptr);
+
+	// The deck keeps raw pointers to payload aircraft and to the hidden dock
+	// proxies. They cannot dangle: a destroyed aircraft must leave its slot.
+	for (auto& pPayload : this->Footprint.CarrierPayloads)
+		AnnounceInvalidPointer(pPayload, ptr);
+
+	for (auto& pDock : this->Footprint.CarrierDockBuildings)
+		AnnounceInvalidPointer(pDock, ptr);
+
+	AnnounceInvalidPointer(this->Footprint.CarrierDockBuilding, ptr);
+
+	Footprint::OnPointerInvalidated(ptr);
 }
 
 void TechnoExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
