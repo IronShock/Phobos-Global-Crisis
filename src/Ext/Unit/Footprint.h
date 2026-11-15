@@ -6,6 +6,9 @@
 #include <CellClass.h>
 #include <Dir.h>
 
+class AircraftClass;
+class BuildingClass;
+
 #include <array>
 #include <vector>
 
@@ -65,20 +68,42 @@ struct FootprintState
 {
 	bool Initialized = false;
 	bool Locked = false;
+	// True while the locomotor is interpolating between two cell centres.
+	// Engine Mark/Unmark calls at intermediate positions must not retarget the
+	// footprint to the cell currently under the model.
+	bool Translating = false;
 	int Bucket = 0;
 	CellStruct Anchor { 0, 0 };
 	bool Alt = false;
 	std::vector<CellStruct> Span;
 	std::vector<CellStruct> BarrierSpan;
-	// Transient no-pass cells for a pivot/aim turn: the swept area minus the
-	// actual hull. They block other units but are never selectable/damageable.
+	// Transient no-pass cells for the next 45-degree turn stage: the actual
+	// hull area swept while rotating to the next bucket, excluding cells the
+	// current hull/barrier already covers. They block other units but are never
+	// selectable/damageable.
 	std::vector<CellStruct> ReservedSpan;
+
+	// Mobile carrier payload slots. These are ordinary AircraftClass objects,
+	// not SpawnManager nodes; they stay selectable and are positioned manually
+	// at the carrier's DockingOffset points.
+	bool CarrierPayloadsInitialized = false;
+	BuildingClass* CarrierDockBuilding = nullptr;
+	// One single-dock proxy per parking slot. Native GetDockCoords for a
+	// NumberOfDocks==1 building returns the building position directly and
+	// does not depend on an aircraft's radio-link index.
+	std::vector<BuildingClass*> CarrierDockBuildings;
+	std::vector<AircraftClass*> CarrierPayloads;
+	std::vector<unsigned char> CarrierPayloadDocked;
+	std::vector<CoordStruct> CarrierPayloadLastCoords;
+	CoordStruct CarrierLastCoords {};
+	int CarrierLastBucket = -1;
 
 	// Aim reconciliation: the visual hull rotated past a bucket boundary while
 	// the unit was stationary. The swept area is reserved until the rotation
 	// reaches ReconcileTarget.
 	bool ReconcileActive = false;
 	int ReconcileTarget = -1;
+	bool ReconcileClockwise = true;
 };
 
 class Footprint
@@ -107,9 +132,13 @@ public:
 	static void SetOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
 	static void ClearOwner(const CellStruct& cell, bool alt, UnitClass* pOwner);
 
+	static bool ReserveTurnStep(UnitClass* pThis, const CellStruct& anchor, int from, int to, bool clockwise, bool alt);
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, CellStruct* pBlocked = nullptr);
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, const CellStruct& anchor, CellStruct* pBlocked = nullptr);
 	static bool IsClimbAllowed(UnitClass* pThis, const CellStruct& from, const CellStruct& to);
+	static void EnsureAircraftCarrierSpawns(UnitClass* pThis);
+	static UnitClass* GetCarrierPayloadOwner(TechnoClass* pPayload);
+	static bool IsCarrierPayloadParked(TechnoClass* pPayload);
 	static bool Mark(UnitClass* pThis, const CoordStruct& coords);
 	static bool Unmark(UnitClass* pThis, const CoordStruct* pCoords = nullptr);
 	static bool CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span, int bucket, bool alt, const CellStruct& anchor);

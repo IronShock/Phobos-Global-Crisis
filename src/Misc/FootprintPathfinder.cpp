@@ -73,16 +73,6 @@ namespace
 		return static_cast<float>(straight) + diagonal * 1.41421356f;
 	}
 
-	int DirectionFromDelta(int dx, int dy)
-	{
-		for (int dir = 0; dir < 8; ++dir)
-		{
-			if (kDirX[dir] == dx && kDirY[dir] == dy)
-				return dir;
-		}
-
-		return -1;
-	}
 }
 
 bool FootprintPathfinder::FindPath(
@@ -209,14 +199,11 @@ bool FootprintPathfinder::FindPath(
 			}
 		}
 
-		// Move one cell. Forward is along the body facing; reverse is allowed so
-		// a hull can back out of a dead end without turning.
-		for (int reverse = 0; reverse < 2; ++reverse)
+		// Move one cell, always in the direction the hull is facing. Reverse
+		// movement is deliberately not generated: a hull that needs to go
+		// backwards must plan a turn first instead of backing up.
 		{
-			const int dir = reverse
-				? (bucket + 4) & 7
-				: bucket;
-
+			const int dir = bucket;
 			const int nx = cell.X + kDirX[dir];
 			const int ny = cell.Y + kDirY[dir];
 
@@ -234,7 +221,7 @@ bool FootprintPathfinder::FindPath(
 				continue;
 
 			const bool diagonal = (kDirX[dir] != 0 && kDirY[dir] != 0);
-			const float moveCost = framesPerCell * (diagonal ? 1.41421356f : 1.0f) * (reverse ? 1.25f : 1.0f);
+			const float moveCost = framesPerCell * (diagonal ? 1.41421356f : 1.0f);
 			const uint32_t newKey = MakeKey(next, bucket);
 			const float newCost = baseCost + moveCost;
 
@@ -297,12 +284,10 @@ bool FootprintPathfinder::FindPath(
 		}
 		else
 		{
-			const int dir = DirectionFromDelta(currentCell.X - previousCell.X, currentCell.Y - previousCell.Y);
-
 			step.Cell = currentCell;
 			step.Bucket = currentBucket;
 			step.TurnOnly = false;
-			step.Reverse = dir == ((currentBucket + 4) & 7);
+			step.Reverse = false;
 		}
 
 		outPath.push_back(step);

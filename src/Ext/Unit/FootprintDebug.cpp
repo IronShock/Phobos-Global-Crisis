@@ -1,9 +1,11 @@
 #include "FootprintDebug.h"
 
-#include <algorithm>
+#include <set>
+#include <utility>
 
 #include <CellClass.h>
 #include <CCINIClass.h>
+#include <Drawing.h>
 #include <HouseClass.h>
 #include <MapClass.h>
 #include <Surface.h>
@@ -59,17 +61,6 @@ namespace
 		return visible;
 	}
 
-	COLORREF GetColor(UnitClass* pUnit, const FootprintState* pState, bool own)
-	{
-		if (!own)
-			return RGB(255, 80, 80);
-
-		if (pState->Alt)
-			return RGB(0, 255, 255);
-
-		return RGB(0, 255, 0);
-	}
-
 	void DrawThickLine(Surface* pSurface, const Point2D& a, const Point2D& b, COLORREF color)
 	{
 		Point2D start = a;
@@ -84,103 +75,97 @@ namespace
 		pSurface->DrawLine(&start, &end, color);
 	}
 
-	void DrawCell(Surface* pSurface, const CellClass* pCell, COLORREF color, bool thick)
+	void DrawCellSetOutline(Surface* pSurface, const std::vector<CellStruct>& cells,
+		COLORREF color, bool thick);
+
+	void DrawStagedOutline(Surface* pSurface, const FootprintState* pState, COLORREF color)
 	{
-		const int x = pCell->MapCoords.X;
-		const int y = pCell->MapCoords.Y;
-
-		if (x < 0 || y < 0 || x >= kMapSide || y >= kMapSide)
+		if (!pSurface || !pState)
 			return;
 
-		const int z = pCell->GetCoordsWithBridge().Z;
+		std::vector<CellStruct> staged;
+		staged.reserve(pState->Span.size()
+			+ pState->BarrierSpan.size()
+			+ pState->ReservedSpan.size());
 
-		Point2D c00, c10, c11, c01;
-
-		if (!ProjectCorner(x, y, z, c00)
-			|| !ProjectCorner(x + 1, y, z, c10)
-			|| !ProjectCorner(x + 1, y + 1, z, c11)
-			|| !ProjectCorner(x, y + 1, z, c01))
+		auto addCells = [&staged](const std::vector<CellStruct>& cells)
 		{
-			return;
-		}
-
-		if (thick)
-		{
-			DrawThickLine(pSurface, c00, c10, color);
-			DrawThickLine(pSurface, c10, c11, color);
-			DrawThickLine(pSurface, c11, c01, color);
-			DrawThickLine(pSurface, c01, c00, color);
-		}
-		else
-		{
-			pSurface->DrawLine(&c00, &c10, color);
-			pSurface->DrawLine(&c10, &c11, color);
-			pSurface->DrawLine(&c11, &c01, color);
-			pSurface->DrawLine(&c01, &c00, color);
-		}
-	}
-
-	void DrawAnchor(Surface* pSurface, const FootprintState* pState)
-	{
-		const auto pCell = MapClass::Instance.TryGetCellAt(pState->Anchor);
-
-		if (!pCell)
-			return;
-
-		const auto world = pCell->GetCoordsWithBridge();
-		auto [center, visible] = TacticalClass::Instance->CoordsToClient(world);
-
-		if (!visible)
-			return;
-
-		RectangleStruct rect
-		{
-			center.X - 2,
-			center.Y - 2,
-			5,
-			5
+			staged.insert(staged.end(), cells.begin(), cells.end());
 		};
 
-		pSurface->FillRect(&rect, RGB(255, 255, 255));
+		addCells(pState->Span);
+		addCells(pState->BarrierSpan);
+		addCells(pState->ReservedSpan);
+
+		DrawCellSetOutline(pSurface, staged, color, true);
 	}
 
-	void DrawReservationOutline(Surface* pSurface, const FootprintState* pState)
+	void DrawCellSetOutline(Surface* pSurface, const std::vector<CellStruct>& cells,
+		COLORREF color, bool thick)
 	{
-		if (pState->ReservedSpan.empty())
+		if (!pSurface || cells.empty())
 			return;
 
-		short minX = pState->ReservedSpan.front().X;
-		short maxX = minX;
-		short minY = pState->ReservedSpan.front().Y;
-		short maxY = minY;
+		std::set<std::pair<int, int>> set;
 
-		for (const auto& cell : pState->ReservedSpan)
+		for (const auto& cell : cells)
+			set.emplace(cell.X, cell.Y);
+
+		auto hasCell = [&set](int x, int y)
 		{
-			minX = std::min(minX, cell.X);
-			maxX = std::max(maxX, cell.X);
-			minY = std::min(minY, cell.Y);
-			maxY = std::max(maxY, cell.Y);
-		}
+			return set.find({ x, y }) != set.end();
+		};
 
-		const auto pAnchorCell = MapClass::Instance.TryGetCellAt(pState->Anchor);
-		const int z = pAnchorCell ? pAnchorCell->GetCoordsWithBridge().Z : 0;
-
-		Point2D p0, p1, p2, p3;
-
-		if (!ProjectCorner(minX, minY, z, p0)
-			|| !ProjectCorner(maxX + 1, minY, z, p1)
-			|| !ProjectCorner(maxX + 1, maxY + 1, z, p2)
-			|| !ProjectCorner(minX, maxY + 1, z, p3))
+		auto drawLine = [&](const Point2D& a, const Point2D& b)
 		{
-			return;
-		}
+			if (thick)
+			{
+				DrawThickLine(pSurface, a, b, color);
+			}
+			else
+			{
+				Point2D start = a;
+				Point2D end = b;
+				pSurface->DrawLine(&start, &end, color);
+			}
+		};
 
-		const COLORREF color = RGB(255, 255, 0);
-		DrawThickLine(pSurface, p0, p1, color);
-		DrawThickLine(pSurface, p1, p2, color);
-		DrawThickLine(pSurface, p2, p3, color);
-		DrawThickLine(pSurface, p3, p0, color);
+		for (const auto& [x, y] : set)
+		{
+			if (x < 0 || y < 0 || x >= kMapSide || y >= kMapSide)
+				continue;
+
+			const auto pCell = MapClass::Instance.TryGetCellAt(
+				CellStruct { static_cast<short>(x), static_cast<short>(y) });
+
+			if (!pCell)
+				continue;
+
+			const int z = pCell->GetCoordsWithBridge().Z;
+			Point2D c00, c10, c11, c01;
+
+			if (!ProjectCorner(x, y, z, c00)
+				|| !ProjectCorner(x + 1, y, z, c10)
+				|| !ProjectCorner(x + 1, y + 1, z, c11)
+				|| !ProjectCorner(x, y + 1, z, c01))
+			{
+				continue;
+			}
+
+			if (!hasCell(x, y - 1))
+				drawLine(c00, c10);
+
+			if (!hasCell(x + 1, y))
+				drawLine(c10, c11);
+
+			if (!hasCell(x, y + 1))
+				drawLine(c11, c01);
+
+			if (!hasCell(x - 1, y))
+				drawLine(c01, c00);
+		}
 	}
+
 }
 
 void FootprintDebug::Draw()
@@ -203,51 +188,26 @@ void FootprintDebug::Draw()
 
 		const auto pState = Footprint::GetState(pUnit);
 
-		if (!pState || !pState->Initialized || pState->Span.empty())
+		if (!pState || !pState->Initialized)
 			continue;
 
-		const bool own = !pUnit->Owner || pUnit->Owner == HouseClass::CurrentPlayer;
-		const COLORREF color = GetColor(pUnit, pState, own);
-		const bool turning = pState->Locked || pState->ReconcileActive;
+		// Surface::DrawLine takes a game RGB565 colour, not a Windows RGB
+		// macro. Convert explicitly so yellow stays yellow and barrier blue
+		// stays blue instead of both rendering as white.
+		const COLORREF hullColor = Drawing::RGB_To_Int(ColorStruct(255, 255, 0));
+		const COLORREF barrierColor = Drawing::RGB_To_Int(ColorStruct(0, 174, 239));
+		const COLORREF reserveColor = Drawing::RGB_To_Int(ColorStruct(255, 255, 255));
 
-		if (turning)
-		{
-			// The reservation is a stable rectangle for the whole turn. Draw only
-			// its outline; drawing every reserved cell produces a dense, flickering
-			// grid together with the hull and the per-bucket barrier cells.
-			DrawReservationOutline(pSurface, pState);
-		}
-		else
-		{
-			for (const auto& cell : pState->BarrierSpan)
-			{
-				if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
-					DrawCell(pSurface, pCell, RGB(255, 140, 0), false);
-			}
-		}
+		// Hull and barrier are solid occupied sets; only their outer boundary
+		// should be visible. Drawing every cell produces a dense interior grid.
+		DrawCellSetOutline(pSurface, pState->BarrierSpan, barrierColor, false);
+		DrawCellSetOutline(pSurface, pState->Span, hullColor, true);
 
-		for (const auto& cell : pState->Span)
-		{
-			if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
-				DrawCell(pSurface, pCell, color, true);
-		}
-
-		if (!turning)
-		{
-			const int visualBucket = Footprint::BucketFromFacing(pUnit->PrimaryFacing.Current());
-
-			if (visualBucket != pState->Bucket)
-			{
-				const auto visualSpan = Footprint::GetSpan(pUnit, pState->Anchor, visualBucket);
-
-				for (const auto& cell : visualSpan)
-				{
-					if (const auto pCell = MapClass::Instance.TryGetCellAt(cell))
-						DrawCell(pSurface, pCell, RGB(255, 0, 255), false);
-				}
-			}
-		}
-
-		DrawAnchor(pSurface, pState);
+		// White outlines the whole occupied stage as one shape. Outlining only
+		// ReservedSpan produced separate hollow boxes around individual cells.
+		// Hull, barriers and reserved cells are all actually occupied, so the
+		// union has no empty interior to outline.
+		if (!pState->ReservedSpan.empty())
+			DrawStagedOutline(pSurface, pState, reserveColor);
 	}
 }

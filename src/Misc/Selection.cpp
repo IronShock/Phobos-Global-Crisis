@@ -4,12 +4,36 @@
 #include "Ext/TechnoType/Body.h"
 #include "Ext/Unit/Footprint.h"
 
+#include <BuildingClass.h>
+#include <BuildingTypeClass.h>
 #include <CellClass.h>
+#include <TacticalClass.h>
 #include <MapClass.h>
 #include <TacticalClass.h>
 #include <HouseClass.h>
 #include <UnitClass.h>
 #include <Unsorted.h>
+
+// The carrier's airport proxies are real buildings because the native dock
+// search needs them, but they must never enter the tactical selectable list.
+DEFINE_HOOK(0x6D9EF0, TacticalClass_AddSelectable_SkipCarrierDock, 0x6)
+{
+	GET(TacticalClass*, pThis, ECX);
+	GET_STACK(TechnoClass*, pTechno, 0x4);
+
+	if (pTechno && pTechno->WhatAmI() == AbstractType::Building)
+	{
+		if (static_cast<BuildingClass*>(pTechno)->Type == BuildingTypeClass::Find("AIRCARRDOCK"))
+		{
+			R->EAX(0);
+			return 0x6D9F78; // ret 0xc, return false without touching the stack args
+		}
+	}
+
+	// Re-execute the skipped first instruction.
+	R->EAX(pThis->SelectableCount);
+	return 0x6D9EF6;
+}
 
 class ExtSelection
 {

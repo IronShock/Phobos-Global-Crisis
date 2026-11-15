@@ -1,5 +1,6 @@
-#include "Footprint.h"
+﻿#include "Footprint.h"
 
+#include <AircraftClass.h>
 #include <BuildingClass.h>
 #include <InfantryClass.h>
 #include <MapClass.h>
@@ -7,19 +8,25 @@
 #include <TerrainClass.h>
 #include <Unsorted.h>
 
+#include <Ext/BuildingType/Body.h>
 #include <Ext/Cell/Body.h>
 #include <Ext/TerrainType/Body.h>
 #include <Ext/Techno/Body.h>
 #include <Ext/TechnoType/Body.h>
 #include <Locomotion/FootprintLocomotionClass.h>
 
+#include <SpawnManagerClass.h>
+#include <Utilities/Constructs.h>
+
 #include <Utilities/Debug.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
+#include <queue>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
@@ -35,6 +42,54 @@ namespace
 	bool s_gridReady = false;
 
 	std::unordered_map<TechnoTypeClass*, FootprintGeometry> s_geometries;
+	std::unordered_map<TechnoClass*, UnitClass*> s_carrierPayloads;
+
+	// Fallback deck coordinates if this mod's art file fails to provide the
+	// DockingOffset tags before the carrier is initialized.
+	constexpr CoordStruct kDefaultCarrierDockOffsets[8] =
+	{
+		{ 640, 768, 0 },
+		{ 256, 768, 0 },
+		{ -2176, 768, 0 },
+		{ -2560, 768, 0 },
+		{ -3328, 640, 0 },
+		{ -3328, -640, 0 },
+		{ -2944, -768, 0 },
+		{ -2560, -896, 0 }
+	};
+
+	CoordStruct GetCarrierDockOffset(TechnoTypeExt::ExtData* pTypeExt, size_t index)
+	{
+		if (pTypeExt && index < pTypeExt->AircraftCarrier_DockingOffsets.size())
+		{
+			const auto& offset = pTypeExt->AircraftCarrier_DockingOffsets[index];
+
+			if (offset.X != 0 || offset.Y != 0 || offset.Z != 0)
+				return offset;
+		}
+
+		return index < std::size(kDefaultCarrierDockOffsets)
+			? kDefaultCarrierDockOffsets[index]
+			: CoordStruct::Empty;
+	}
+
+	CoordStruct GetCarrierDockSlotCoords(UnitClass* pCarrier, TechnoTypeExt::ExtData* pTypeExt, size_t index)
+	{
+		auto offset = GetCarrierDockOffset(pTypeExt, index);
+		offset.Z += Unsorted::CellHeight;
+
+		// The deck offsets are authored directly relative to the hull centre.
+		// GetFLHAbsoluteCoords() is meant for FLH/voxel offsets and mirrors Y,
+		// which put every proxy on the wrong side of the ship. Rotate the raw
+		// offset with the carrier facing here instead.
+		auto mtx = Matrix3D::GetIdentity();
+		mtx.RotateZ(static_cast<float>(pCarrier->PrimaryFacing.Current().GetRadian<32>()));
+		mtx.Translate(static_cast<float>(offset.X), static_cast<float>(offset.Y), static_cast<float>(offset.Z));
+
+		const auto result = mtx.GetTranslation();
+		return pCarrier->GetRenderCoords()
+			+ CoordStruct { static_cast<int>(result.X), static_cast<int>(result.Y), static_cast<int>(result.Z) };
+	}
 
 	void EnsureGrid()
 	{
@@ -51,6 +106,23 @@ namespace
 	bool IsValidCell(const CellStruct& cell)
 	{
 		return cell.X >= 0 && cell.Y >= 0 && cell.X < kMapSide && cell.Y < kMapSide;
+	}
+
+	bool HasForeignOwner(UnitClass* pThis, const std::vector<CellStruct>& cells, bool alt)
+	{
+		if (!pThis)
+			return true;
+
+		for (const auto& cell : cells)
+		{
+			if (auto const pOwner = Footprint::OwnerAt(cell, alt); pOwner && pOwner != pThis)
+				return true;
+
+			if (auto const pBarrier = Footprint::BarrierOwnerAt(cell, alt); pBarrier && pBarrier != pThis)
+				return true;
+		}
+
+		return false;
 	}
 
 	int CellIndex(const CellStruct& cell)
@@ -72,26 +144,14 @@ namespace
 		const double lateralX = std::cos(angle);
 		const double lateralY = std::sin(angle);
 
-		// A cell-centre sample of a 5x1 hull at 45 degrees only finds three
-		// diagonal cells (±2.5 half-length vs ±2.828 cell centres). Add just
-		// enough length margin for diagonal buckets to preserve the cell count,
-		// while leaving cardinal spans exactly as long as the hull.
-		double normalizedAngle = std::fmod(angleDeg, 360.0);
-
-		if (normalizedAngle < 0.0)
-			normalizedAngle += 360.0;
-
-		const double diagonalPhase = std::fmod(normalizedAngle, 90.0);
-		double lengthMargin = 0.0;
-
-		if (std::abs(diagonalPhase - 45.0) < 1.0e-6)
-		{
-			lengthMargin = std::max(
-				0.0,
-				(config.Length - 1) / std::sqrt(2.0) - config.Length * 0.5);
-		}
-
-		const double halfLength = config.Length * 0.5 + lengthMargin;
+		// MakeDiscreteSpan puts an even-sized hull at offsets -L/2+1 .. L/2,
+		// so its geometric centre is +0.5 forward, not 0. Sampling around 0
+		// added an extra cell at one end and biased the sweep. The diagonal
+		// length margin used by the old 5x1 prototype must not be applied to a
+		// 36x9 hull: it expands the 45-degree endpoints by several cells.
+		const double centreForward = (config.Length % 2 == 0) ? 0.5 : 0.0;
+		const double centreLateral = (config.Width % 2 == 0) ? 0.5 : 0.0;
+		const double halfLength = config.Length * 0.5;
 		const double halfWidth = config.Width * 0.5;
 		const double radius = std::sqrt(halfLength * halfLength + halfWidth * halfWidth) + margin + 1.0;
 		const int range = static_cast<int>(std::ceil(radius));
@@ -100,8 +160,10 @@ namespace
 		{
 			for (int dx = -range; dx <= range; ++dx)
 			{
-				const double forward = dx * forwardX + dy * forwardY - config.PivotForward;
-				const double lateral = dx * lateralX + dy * lateralY - config.PivotLateral;
+				const double forward = dx * forwardX + dy * forwardY
+					- config.PivotForward - centreForward;
+				const double lateral = dx * lateralX + dy * lateralY
+					- config.PivotLateral - centreLateral;
 
 				if (std::abs(forward) <= halfLength + margin + 1.0e-9
 					&& std::abs(lateral) <= halfWidth + margin + 1.0e-9)
@@ -209,28 +271,222 @@ namespace
 		if (cells.empty())
 			return {};
 
-		// Reserve the bounding box of the discrete sweep. For a 6x1 hull this
-		// gives the full turning square for other units while the hull itself
-		// remains a 6x1 footprint.
+		// Return the actual swept hull cells, not the enclosing rectangle.
+		// The locomotor reserves this result one 45-degree step at a time.
+		std::vector<CellStruct> result;
+		result.reserve(cells.size());
+
+		for (const auto& cell : cells)
+		{
+			result.push_back(CellStruct
+			{
+				static_cast<short>(cell.first),
+				static_cast<short>(cell.second)
+			});
+		}
+
+		return result;
+	}
+
+	std::vector<CellStruct> MakeTurnStepSweep(const FootprintConfig& config,
+		const CellStruct& anchor, int from, bool clockwise)
+	{
+		std::set<std::pair<int, int>> cells;
+		const int step = clockwise ? 1 : -1;
+		const int startBucket = from & 7;
+		const int nextBucket = (startBucket + step + 8) & 7;
+		const double startAngle = startBucket * 45.0;
+		const double endAngle = startAngle + step * 45.0;
+
+		// Sample the continuous 45-degree arc. Sampling only the two discrete
+		// endpoint spans misses the end-cap cells swept while the hull rotates
+		// between them, which is exactly the hollow area visible in issue1.
+		constexpr int kSamples = 16;
+
+		for (int i = 0; i <= kSamples; ++i)
+		{
+			const double t = static_cast<double>(i) / static_cast<double>(kSamples);
+			const double angle = startAngle + (endAngle - startAngle) * t;
+
+			for (const auto& cell : MakeSpanAtAngle(config, angle, 0.0))
+				cells.emplace(cell.X + anchor.X, cell.Y + anchor.Y);
+		}
+
+		// Keep the exact discrete footprint at both ends. The point-sampled arc
+		// can under-fill a cell whose square is only clipped at the endpoint.
+		for (const auto& cell : MakeDiscreteSpan(config, startBucket))
+			cells.emplace(cell.X + anchor.X, cell.Y + anchor.Y);
+
+		for (const auto& cell : MakeDiscreteSpan(config, nextBucket))
+			cells.emplace(cell.X + anchor.X, cell.Y + anchor.Y);
+
+		std::vector<CellStruct> result;
+		result.reserve(cells.size());
+
+		for (const auto& [x, y] : cells)
+			result.push_back(CellStruct { static_cast<short>(x), static_cast<short>(y) });
+
+		return result;
+	}
+
+	void FillSingleCellGaps(std::set<std::pair<int, int>>& cells)
+	{
+		if (cells.empty())
+			return;
+
 		int minX = cells.begin()->first;
 		int maxX = minX;
 		int minY = cells.begin()->second;
 		int maxY = minY;
 
-		for (const auto& cell : cells)
+		for (const auto& [x, y] : cells)
 		{
-			minX = std::min(minX, cell.first);
-			maxX = std::max(maxX, cell.first);
-			minY = std::min(minY, cell.second);
-			maxY = std::max(maxY, cell.second);
+			minX = std::min(minX, x);
+			maxX = std::max(maxX, x);
+			minY = std::min(minY, y);
+			maxY = std::max(maxY, y);
 		}
 
-		std::vector<CellStruct> result;
-		result.reserve(static_cast<size_t>((maxX - minX + 1) * (maxY - minY + 1)));
+		bool changed = true;
 
-		for (int y = minY; y <= maxY; ++y)
+		while (changed)
 		{
-			for (int x = minX; x <= maxX; ++x)
+			changed = false;
+
+			for (int y = minY; y <= maxY; ++y)
+			{
+				for (int x = minX; x <= maxX; ++x)
+				{
+					const std::pair<int, int> cell { x, y };
+
+					if (cells.find(cell) != cells.end())
+						continue;
+
+					const bool horizontalGap = cells.find({ x - 1, y }) != cells.end()
+						&& cells.find({ x + 1, y }) != cells.end();
+					const bool verticalGap = cells.find({ x, y - 1 }) != cells.end()
+						&& cells.find({ x, y + 1 }) != cells.end();
+
+					if (horizontalGap || verticalGap)
+					{
+						cells.insert(cell);
+						changed = true;
+					}
+				}
+			}
+		}
+	}
+
+	void FillEnclosedHoles(std::set<std::pair<int, int>>& cells)
+	{
+		if (cells.empty())
+			return;
+
+		int minX = cells.begin()->first;
+		int maxX = minX;
+		int minY = cells.begin()->second;
+		int maxY = minY;
+
+		for (const auto& [x, y] : cells)
+		{
+			minX = std::min(minX, x);
+			maxX = std::max(maxX, x);
+			minY = std::min(minY, y);
+			maxY = std::max(maxY, y);
+		}
+
+		const int x0 = minX - 1;
+		const int y0 = minY - 1;
+		const int x1 = maxX + 1;
+		const int y1 = maxY + 1;
+		std::set<std::pair<int, int>> outside;
+		std::queue<std::pair<int, int>> queue;
+
+		auto pushOutside = [&](int x, int y)
+		{
+			if (x < x0 || y < y0 || x > x1 || y > y1)
+				return;
+
+			const std::pair<int, int> cell { x, y };
+
+			if (cells.find(cell) != cells.end() || outside.find(cell) != outside.end())
+				return;
+
+			outside.insert(cell);
+			queue.push(cell);
+		};
+
+		for (int x = x0; x <= x1; ++x)
+		{
+			pushOutside(x, y0);
+			pushOutside(x, y1);
+		}
+
+		for (int y = y0; y <= y1; ++y)
+		{
+			pushOutside(x0, y);
+			pushOutside(x1, y);
+		}
+
+		while (!queue.empty())
+		{
+			const auto [x, y] = queue.front();
+			queue.pop();
+
+			pushOutside(x - 1, y);
+			pushOutside(x + 1, y);
+			pushOutside(x, y - 1);
+			pushOutside(x, y + 1);
+		}
+
+		for (int y = y0; y <= y1; ++y)
+		{
+			for (int x = x0; x <= x1; ++x)
+			{
+				const std::pair<int, int> cell { x, y };
+
+				if (cells.find(cell) == cells.end() && outside.find(cell) == outside.end())
+					cells.insert(cell);
+			}
+		}
+	}
+
+	std::vector<CellStruct> MakeStepReservation(
+		const std::vector<CellStruct>& currentHull,
+		const std::vector<CellStruct>& currentBarriers,
+		const std::vector<CellStruct>& sweep)
+	{
+		std::set<std::pair<int, int>> current;
+		std::set<std::pair<int, int>> occupied;
+
+		for (const auto& cell : currentHull)
+		{
+			current.emplace(cell.X, cell.Y);
+			occupied.emplace(cell.X, cell.Y);
+		}
+
+		for (const auto& cell : currentBarriers)
+		{
+			current.emplace(cell.X, cell.Y);
+			occupied.emplace(cell.X, cell.Y);
+		}
+
+		for (const auto& cell : sweep)
+			occupied.emplace(cell.X, cell.Y);
+
+		// Close single-cell sampling jumps first (the two missing cells at the
+		// 45-degree tips), then close any larger enclosed holes. A hollow ring
+		// of swept cells would otherwise draw as an empty white box and let
+		// normal units sit inside the reservation.
+		FillSingleCellGaps(occupied);
+		FillEnclosedHoles(occupied);
+
+		std::vector<CellStruct> result;
+		result.reserve(occupied.size());
+
+		for (const auto& [x, y] : occupied)
+		{
+			if (current.find({ x, y }) == current.end())
 				result.push_back(CellStruct { static_cast<short>(x), static_cast<short>(y) });
 		}
 
@@ -408,6 +664,50 @@ std::vector<CellStruct> Footprint::GetSweepAt(TechnoClass* pThis, const CellStru
 		result.push_back(anchor + offset);
 
 	return result;
+}
+
+bool Footprint::ReserveTurnStep(UnitClass* pThis, const CellStruct& anchor,
+	int from, int to, bool clockwise, bool alt)
+{
+	if (!pThis)
+		return false;
+
+	const auto pState = GetState(pThis);
+
+	if (!pState)
+		return false;
+
+	const int start = from & 7;
+
+	if ((to & 7) == start)
+		return true;
+
+	const int step = clockwise ? 1 : -1;
+	const int next = (start + step + 8) & 7;
+	const auto& config = GetConfig(pThis->GetTechnoType());
+
+	// Reserve the actual hull area swept while rotating from the current
+	// 45-degree bucket to the next one. This includes temporary end-cap cells
+	// that are not part of either endpoint footprint and must stay occupied
+	// until the turn passes them. It is not an axis-aligned envelope, and the
+	// next bucket's barrier cells are committed separately when the turn ends.
+	const auto sweep = MakeTurnStepSweep(config, anchor, start, clockwise);
+	const auto reservation = MakeStepReservation(
+		pState->Span, pState->BarrierSpan, sweep);
+
+	if (reservation.empty() || !CanOccupy(pThis, reservation, alt, anchor))
+		return false;
+
+	ReleaseReservation(pThis);
+
+	if (!ReserveSweep(pThis, reservation, alt))
+		return false;
+
+	Debug::Log("[FootprintReserve] %s cell=(%d,%d) %d -> %d (%s) next=%d reserved=%d\n",
+		pThis->GetTechnoType()->ID, anchor.X, anchor.Y, start, to & 7,
+		clockwise ? "cw" : "ccw", next, static_cast<int>(pState->ReservedSpan.size()));
+
+	return true;
 }
 
 UnitClass* Footprint::OwnerAt(const CellStruct& cell, bool alt)
@@ -689,10 +989,22 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 			return false;
 		}
 
+		const auto pCellBuilding = pCell->GetBuilding();
+		const auto pState = GetState(pThis);
+
+		// The carrier's hidden AIRCARRDOCK proxies sit on its deck. They must
+		// not block the carrier that owns them, including the occupation flags
+		// checked by IsClearToMove(), otherwise the ship can never move.
+		const bool ownDock = pState && pCellBuilding
+			&& (pCellBuilding == pState->CarrierDockBuilding
+				|| std::find(pState->CarrierDockBuildings.begin(),
+					pState->CarrierDockBuildings.end(), pCellBuilding) != pState->CarrierDockBuildings.end());
+
 		// Ignore infantry and vehicles here; vehicles are checked below so that
 		// the unit's own footprint cells stay passable, and infantry is handled
 		// by the crush setting.
-		if (!pCell->IsClearToMove(pType->SpeedType, true, true, -1, movementZone, cellLevel, bridge))
+		if (!ownDock
+			&& !pCell->IsClearToMove(pType->SpeedType, true, true, -1, movementZone, cellLevel, bridge))
 		{
 			LogBlockedOccupy(pThis, pCell, cell, "clear-to-move", level, bridge, alt);
 
@@ -702,7 +1014,7 @@ bool Footprint::CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span,
 			return false;
 		}
 
-		if (pCell->GetBuilding())
+		if (pCellBuilding && !ownDock)
 		{
 			LogBlockedOccupy(pThis, pCell, cell, "building", level, bridge, alt);
 
@@ -797,6 +1109,373 @@ bool Footprint::IsClimbAllowed(UnitClass* pThis, const CellStruct& from, const C
 	return std::abs(pToCell->GetLevel() - pFromCell->GetLevel()) <= std::max(0, config.MaxClimb);
 }
 
+void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
+{
+	if (!pThis || !pThis->Owner)
+		return;
+
+	const auto pType = pThis->GetTechnoType();
+	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	if (!pTypeExt || !TechnoTypeExt::IsAircraftCarrier(pType))
+		return;
+
+	const auto pState = GetState(pThis);
+
+	if (!pState)
+		return;
+
+	// Old saves / pre-placed units may still carry a SpawnManager created by
+	// the earlier carrier implementation. It creates a second set of J35s
+	// behind the normal payload objects, so remove it completely.
+	if (pThis->SpawnManager)
+	{
+		pThis->SpawnManager->KillNodes();
+		GameDelete(pThis->SpawnManager);
+		pThis->SpawnManager = nullptr;
+		pState->CarrierPayloadsInitialized = false;
+		pState->CarrierPayloads.clear();
+		pState->CarrierPayloadDocked.clear();
+		pState->CarrierPayloadLastCoords.clear();
+
+		Debug::Log("[AircraftCarrier] removed legacy SpawnManager for %s\n", pType->ID);
+	}
+
+	// A dedicated hidden airport type is used so the global FAKEPAD and normal
+	// aircraft landing data are never modified. One 1-dock proxy is created per
+	// parking slot: NumberOfDocks==1 makes native GetDockCoords use the first
+	// offset unconditionally, without depending on a radio-link index.
+	if (pState->CarrierDockBuildings.empty())
+	{
+		if (auto const pDockType = BuildingTypeClass::Find("AIRCARRDOCK"))
+		{
+			const int docks = std::max(1, pTypeExt->AircraftCarrier_NumberOfDocks.Get());
+
+			pDockType->NumberOfDocks = 1;
+			pDockType->DockingOffsets.SetCapacity(1);
+			pDockType->DockingOffsets[0] = CoordStruct::Empty;
+
+			// Keep the proxy visible to native dock search. Click filtering is
+			// handled separately; InvisibleInGame made the airport unusable.
+			pDockType->InvisibleInGame = false;
+			pDockType->Selectable = false;
+			pDockType->LegalTarget = false;
+			pDockType->Insignificant = false;
+			pDockType->IsSelectableCombatant = false;
+			pDockType->ClickRepairable = false;
+			pDockType->Unsellable = true;
+
+			auto const pDockTypeExt = BuildingTypeExt::ExtMap.Find(pDockType);
+			pDockTypeExt->AircraftDockingDirs.resize(1);
+			pDockTypeExt->AircraftDockingDirs[0] = std::nullopt;
+
+			if (pState->CarrierDockBuilding)
+				pState->CarrierDockBuildings.push_back(pState->CarrierDockBuilding);
+
+			pState->CarrierDockBuildings.resize(docks, nullptr);
+
+			for (int i = 0; i < docks; ++i)
+			{
+				if (pState->CarrierDockBuildings[i])
+					continue;
+
+				const auto coords = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+				auto const pDock = static_cast<BuildingClass*>(pDockType->CreateObject(pThis->Owner));
+
+				if (!pDock)
+				{
+					Debug::Log("[AircraftCarrier] failed to create AIRCARRDOCK slot %d for %s\n",
+						i, pType->ID);
+					continue;
+				}
+
+				pDock->SetLocation(coords);
+				pDock->PrimaryFacing.SetCurrent(pThis->PrimaryFacing.Current());
+
+				++Unsorted::ScenarioInit;
+				const bool placed = pDock->Unlimbo(coords, pThis->PrimaryFacing.Current().GetDir());
+				--Unsorted::ScenarioInit;
+
+				if (!placed)
+				{
+					Debug::Log("[AircraftCarrier] failed to place AIRCARRDOCK slot %d for %s at (%d,%d)\n",
+						i, pType->ID, coords.X, coords.Y);
+					continue;
+				}
+
+				// Keep the proxy at the exact deck coordinate used by the
+				// payload. Without this the building is snapped back to the
+				// cell floor/centre by Unlimbo.
+				pDock->SetLocation(coords);
+				pDock->SetLinkCount(1);
+
+				const auto dockCoords = pDock->GetDockCoords(nullptr);
+				Debug::Log("[AircraftCarrier] slot %d docks=%d links=%d dock=(%d,%d,%d)\n",
+					i, pDock->Type->NumberOfDocks, pDock->RadioLinks.Capacity,
+					dockCoords.X, dockCoords.Y, dockCoords.Z);
+
+				bool inArray = false;
+
+				for (auto const pItem : BuildingClass::Array)
+				{
+					if (pItem == pDock)
+					{
+						inArray = true;
+						break;
+					}
+				}
+
+				if (!inArray)
+					BuildingClass::Array.AddItem(pDock);
+
+				pState->CarrierDockBuildings[i] = pDock;
+
+				if (!pState->CarrierDockBuilding)
+					pState->CarrierDockBuilding = pDock;
+
+				Debug::Log("[AircraftCarrier] created AIRCARRDOCK slot %d for %s at (%d,%d)\n",
+					i, pType->ID, pDock->Location.X, pDock->Location.Y);
+			}
+		}
+	}
+
+	// Register the dock on every carrier, including carriers restored from
+	// saves where the payload list was already initialized. This must happen
+	// before the early return below.
+	if (auto const pCarrierDockType = BuildingTypeClass::Find("AIRCARRDOCK"))
+	{
+		for (const auto pPayloadType : pTypeExt->AircraftCarrier_Payloads)
+		{
+			if (pPayloadType && pPayloadType->Dock.FindItemIndex(pCarrierDockType) < 0)
+				pPayloadType->Dock.AddItem(pCarrierDockType);
+		}
+	}
+
+	for (size_t i = 0; i < pState->CarrierDockBuildings.size(); ++i)
+	{
+		if (auto const pDock = pState->CarrierDockBuildings[i])
+		{
+			pDock->SetLocation(GetCarrierDockSlotCoords(pThis, pTypeExt, i));
+			pDock->PrimaryFacing.SetCurrent(pThis->PrimaryFacing.Current());
+		}
+	}
+
+	if (pState->CarrierPayloadsInitialized)
+	{
+		// Restore carrier-side movement handling only for parked payloads.
+		// Flight, landing and facing remain owned by the native airport code.
+		const bool moved = pState->CarrierLastCoords.X != pThis->Location.X
+			|| pState->CarrierLastCoords.Y != pThis->Location.Y
+			|| pState->CarrierLastCoords.Z != pThis->Location.Z
+			|| pState->CarrierLastBucket != pState->Bucket;
+
+		for (size_t i = 0; i < pState->CarrierPayloads.size(); ++i)
+		{
+			const auto pAircraft = pState->CarrierPayloads[i];
+
+			if (!pAircraft || !pAircraft->IsAlive || pAircraft->InLimbo)
+				continue;
+
+			auto const pDock = i < pState->CarrierDockBuildings.size()
+				? pState->CarrierDockBuildings[i]
+				: nullptr;
+
+			const auto expected = pDock
+				? pDock->GetCoords()
+				: GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+
+			const auto mission = pAircraft->GetCurrentMission();
+
+			// IsInAir() is based on altitude above the terrain, so a plane
+			// parked on a carrier deck also reports true. Detect the deck by
+			// comparing against the expected world altitude instead.
+			const bool atDeckHeight = std::abs(pAircraft->Location.Z - expected.Z) <= 256;
+			const bool dockedLink = pDock
+				&& (pDock->ContainsLink(pAircraft)
+					|| pAircraft->DockNowHeadingTo == pDock);
+
+			// Enter is the native approach/landing mission. Never touch an
+			// aircraft in that mission: it is still flying and must be allowed
+			// to complete the original airport landing.
+			const bool parked = mission != Mission::Enter
+				&& atDeckHeight
+				&& (mission == Mission::Sleep || dockedLink);
+
+			if (!moved)
+			{
+				// Refresh the reference position while the carrier is still,
+				// including after a native landing, so the next movement can
+				// distinguish a parked plane from one that is still flying.
+				if (parked && i < pState->CarrierPayloadLastCoords.size())
+					pState->CarrierPayloadLastCoords[i] = pAircraft->Location;
+
+				continue;
+			}
+
+			if (!parked)
+				continue;
+
+			const bool stationary = i < pState->CarrierPayloadLastCoords.size()
+				&& std::abs(pAircraft->Location.X - pState->CarrierPayloadLastCoords[i].X) <= 16
+				&& std::abs(pAircraft->Location.Y - pState->CarrierPayloadLastCoords[i].Y) <= 16
+				&& std::abs(pAircraft->Location.Z - pState->CarrierPayloadLastCoords[i].Z) <= 16;
+
+			// A just-landed plane can briefly differ from the cached position;
+			// only Mission::Sleep is trusted in that case.
+			if (!stationary && mission != Mission::Sleep)
+				continue;
+
+			pAircraft->SetLocation(expected);
+
+			if (i < pState->CarrierPayloadLastCoords.size())
+				pState->CarrierPayloadLastCoords[i] = expected;
+		}
+
+		pState->CarrierLastCoords = pThis->Location;
+		pState->CarrierLastBucket = pState->Bucket;
+		return;
+	}
+
+	const int docks = std::max(0, pTypeExt->AircraftCarrier_NumberOfDocks.Get());
+
+	if (!pTypeExt->AircraftCarrier_Payloads.empty() && docks > 0)
+	{
+		std::vector<AircraftTypeClass*> slotTypes;
+		slotTypes.reserve(docks);
+
+		for (size_t i = 0; i < pTypeExt->AircraftCarrier_Payloads.size() && static_cast<int>(slotTypes.size()) < docks; ++i)
+		{
+			const auto pPayload = pTypeExt->AircraftCarrier_Payloads[i];
+
+			if (!pPayload)
+				continue;
+
+			int count = 1;
+
+			if (i < pTypeExt->AircraftCarrier_PayloadsNum.size())
+				count = pTypeExt->AircraftCarrier_PayloadsNum[i];
+			else if (pTypeExt->AircraftCarrier_PayloadsNum.size() == 1)
+				count = pTypeExt->AircraftCarrier_PayloadsNum[0];
+
+			count = std::clamp(count, 0, docks - static_cast<int>(slotTypes.size()));
+
+			for (int j = 0; j < count; ++j)
+				slotTypes.push_back(pPayload);
+		}
+
+		for (size_t i = 0; i < slotTypes.size(); ++i)
+		{
+			auto const pAircraft = static_cast<AircraftClass*>(slotTypes[i]->CreateObject(pThis->Owner));
+
+			if (!pAircraft)
+				continue;
+
+			const auto pDock = i < pState->CarrierDockBuildings.size()
+				? pState->CarrierDockBuildings[i]
+				: nullptr;
+
+			const auto coords = pDock
+				? pDock->GetCoords()
+				: GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+
+			pAircraft->Spawned = false;
+			pAircraft->SpawnOwner = nullptr;
+			pAircraft->SetLocation(coords);
+
+			if (!pAircraft->Unlimbo(coords, pThis->PrimaryFacing.Current().GetDir()))
+			{
+				Debug::Log("[AircraftCarrier] failed to Unlimbo payload %s for %s\n",
+					slotTypes[i]->ID, pType->ID);
+				continue;
+			}
+
+			// Unlimbo does not reliably preserve the aircraft's parked facing.
+			// Explicitly use the per-slot docking direction when one is
+			// configured; slots without one inherit the carrier facing.
+			const int dockDir = i < pTypeExt->AircraftCarrier_DockingDirs.size()
+				? pTypeExt->AircraftCarrier_DockingDirs[i]
+				: 0;
+
+			pAircraft->PrimaryFacing.SetCurrent(dockDir != 0
+				? DirStruct(static_cast<DirType>(dockDir & 0xFF))
+				: pThis->PrimaryFacing.Current());
+
+			// The initial payload is already spawned on the deck. Sending it
+			// through Mission::Enter made every plane fly to the AIRCARRDOCK
+			// anchor cell again, even though it was already parked.
+			pAircraft->DockNowHeadingTo = nullptr;
+			pAircraft->SetDestination(nullptr, true);
+			pAircraft->QueueMission(Mission::Sleep, true);
+
+			pState->CarrierPayloads.push_back(pAircraft);
+			pState->CarrierPayloadDocked.push_back(1);
+			pState->CarrierPayloadLastCoords.push_back(pAircraft->Location);
+			s_carrierPayloads[pAircraft] = pThis;
+		}
+	}
+
+	pState->CarrierPayloadsInitialized = true;
+	pState->CarrierLastCoords = pThis->Location;
+	pState->CarrierLastBucket = pState->Bucket;
+
+	Debug::Log("[AircraftCarrier] initialized %d normal payload aircraft for %s\n",
+		static_cast<int>(pState->CarrierPayloads.size()), pType->ID);
+}
+
+UnitClass* Footprint::GetCarrierPayloadOwner(TechnoClass* pPayload)
+{
+	auto const it = s_carrierPayloads.find(pPayload);
+	return it == s_carrierPayloads.end() ? nullptr : it->second;
+}
+
+bool Footprint::IsCarrierPayloadParked(TechnoClass* pPayload)
+{
+	if (!pPayload || pPayload->WhatAmI() != AbstractType::Aircraft)
+		return false;
+
+	const auto pCarrier = GetCarrierPayloadOwner(pPayload);
+
+	if (!pCarrier)
+		return false;
+
+	const auto pState = GetState(pCarrier);
+
+	if (!pState || pState->CarrierDockBuildings.empty())
+		return false;
+
+	const auto pAircraft = static_cast<AircraftClass*>(pPayload);
+	const auto it = std::find(pState->CarrierPayloads.begin(), pState->CarrierPayloads.end(), pAircraft);
+
+	if (it == pState->CarrierPayloads.end())
+		return false;
+
+	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+	if (!pTypeExt)
+		return false;
+
+	// Enter means the aircraft is still approaching/landing and must keep its
+	// normal flight visuals until the native airport code completes the landing.
+	if (pAircraft->GetCurrentMission() == Mission::Enter)
+		return false;
+
+	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
+	auto const pDock = index < pState->CarrierDockBuildings.size()
+		? pState->CarrierDockBuildings[index]
+		: nullptr;
+
+	const auto expected = pDock
+		? pDock->GetCoords()
+		: GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+
+	if (std::abs(pAircraft->Location.Z - expected.Z) > 256)
+		return false;
+
+	return pAircraft->GetCurrentMission() == Mission::Sleep
+		|| (pDock && pDock->ContainsLink(pAircraft))
+		|| (pDock && pAircraft->DockNowHeadingTo == pDock);
+}
+
 bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 {
 	if (!pThis || !IsMultiCell(pThis))
@@ -807,9 +1486,15 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 	if (!pState)
 		return false;
 
-	// While the turn controller owns the hull, the reserved sweep must not be
-	// replaced by the engine's mid-rotation footprint updates.
-	if (pState->Locked)
+	// Pre-placed map units may never enter the normal Unlimbo/Process path.
+	// Mark() is guaranteed for every footprint unit, so initialize the
+	// SpawnManager and its payload nodes here as well.
+	EnsureAircraftCarrierSpawns(pThis);
+
+	// While the turn controller owns the hull, or the locomotor is between
+	// cell centres, the engine's mid-rotation/mid-move Mark calls must not
+	// retarget the footprint to the cell currently under the model.
+	if (pState->Locked || pState->Translating)
 		return true;
 
 	const bool wasInitialized = pState->Initialized;
@@ -876,6 +1561,16 @@ bool Footprint::Mark(UnitClass* pThis, const CoordStruct& coords)
 		return true;
 	}
 
+	// Check the complete new hull and barrier set before clearing the old
+	// footprint. Two hulls moving side by side must never overwrite each
+	// other's cells halfway through a Mark.
+	if (HasForeignOwner(pThis, span, alt) || HasForeignOwner(pThis, barriers, alt))
+	{
+		Debug::Log("[Footprint] mark blocked %s anchor=(%d,%d) bucket=%d by another hull/barrier\n",
+			pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket);
+		return false;
+	}
+
 	if (wasInitialized)
 		Unmark(pThis);
 
@@ -938,8 +1633,9 @@ bool Footprint::Unmark(UnitClass* pThis, const CoordStruct* pCoords)
 	if (!pThis || !pState || !pState->Initialized)
 		return false;
 
-	// A locked hull is mid-turn; the sweep is released by the turn controller.
-	if (pState->Locked)
+	// A locked/translating hull is mid-turn or between cell centres; the
+	// controller commits the final footprint when it reaches the cell centre.
+	if (pState->Locked || pState->Translating)
 		return true;
 
 	if (!pState->ReservedSpan.empty())
@@ -1012,6 +1708,7 @@ bool Footprint::Unmark(UnitClass* pThis, const CoordStruct* pCoords)
 	}
 
 	pState->Initialized = false;
+	pState->Translating = false;
 	pState->Span.clear();
 	pState->BarrierSpan.clear();
 	pState->ReconcileActive = false;
@@ -1030,6 +1727,15 @@ bool Footprint::CommitSpan(UnitClass* pThis, const std::vector<CellStruct>& span
 	const auto& oldSpan = pState->Span;
 	const auto& oldBarriers = pState->BarrierSpan;
 	const auto newBarriers = ComputeBarriers(span);
+
+	// Validate the whole target footprint first. This prevents two units from
+	// interleaving their clears/sets and stealing each other's ownership.
+	if (HasForeignOwner(pThis, span, alt) || HasForeignOwner(pThis, newBarriers, alt))
+	{
+		Debug::Log("[Footprint] commit blocked %s anchor=(%d,%d) bucket=%d by another hull/barrier\n",
+			pThis->GetTechnoType()->ID, anchor.X, anchor.Y, bucket);
+		return false;
+	}
 
 	for (const auto& cell : oldSpan)
 	{
@@ -1136,24 +1842,68 @@ bool Footprint::ReserveSweep(UnitClass* pThis, const std::vector<CellStruct>& sw
 	if (!pThis || !pState)
 		return false;
 
+	std::vector<CellStruct> added;
+	added.reserve(sweep.size());
+
+	auto rollback = [&]()
+	{
+		for (const auto& cell : added)
+		{
+			const auto pCell = MapClass::Instance.TryGetCellAt(cell);
+
+			if (!pCell)
+				continue;
+
+			if (BarrierOwnerAt(cell, alt) == pThis)
+			{
+				if (alt)
+					pCell->AltOccupationFlags &= ~0x20;
+				else
+					pCell->OccupationFlags &= ~0x20;
+
+				ClearBarrierOwner(cell, alt, pThis);
+			}
+		}
+
+		pState->ReservedSpan.erase(
+			std::remove_if(pState->ReservedSpan.begin(), pState->ReservedSpan.end(),
+				[&added](const CellStruct& cell)
+				{
+					return std::find(added.begin(), added.end(), cell) != added.end();
+				}),
+			pState->ReservedSpan.end());
+	};
+
 	for (const auto& cell : sweep)
 	{
 		if (std::find(pState->Span.begin(), pState->Span.end(), cell) != pState->Span.end())
+			continue;
+
+		if (std::find(pState->BarrierSpan.begin(), pState->BarrierSpan.end(), cell) != pState->BarrierSpan.end())
 			continue;
 
 		if (std::find(pState->ReservedSpan.begin(), pState->ReservedSpan.end(), cell) != pState->ReservedSpan.end())
 			continue;
 
 		if (const auto pOwner = OwnerAt(cell, alt); pOwner && pOwner != pThis)
+		{
+			rollback();
 			return false;
+		}
 
 		if (const auto pBarrier = BarrierOwnerAt(cell, alt); pBarrier && pBarrier != pThis)
+		{
+			rollback();
 			return false;
+		}
 
 		const auto pCell = MapClass::Instance.TryGetCellAt(cell);
 
 		if (!pCell)
-			continue;
+		{
+			rollback();
+			return false;
+		}
 
 		if (alt)
 			pCell->AltOccupationFlags |= 0x20;
@@ -1162,6 +1912,7 @@ bool Footprint::ReserveSweep(UnitClass* pThis, const std::vector<CellStruct>& sw
 
 		SetBarrierOwner(cell, alt, pThis);
 		pState->ReservedSpan.push_back(cell);
+		added.push_back(cell);
 	}
 
 	return true;
@@ -1240,6 +1991,7 @@ void Footprint::ClearAll()
 		if (pState && pState->Initialized && !pState->Span.empty())
 		{
 			pState->Locked = false;
+			pState->Translating = false;
 			pState->ReconcileActive = false;
 			pState->ReconcileTarget = -1;
 
@@ -1388,6 +2140,24 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 		{
 			const auto currentHull = GetSpan(pThis, pState->Anchor, currentBucket);
 			CommitSpan(pThis, currentHull, currentBucket, pState->Alt, pState->Anchor);
+
+			if (currentBucket != pState->ReconcileTarget)
+			{
+				if (!ReserveTurnStep(pThis, pState->Anchor, currentBucket,
+					pState->ReconcileTarget, pState->ReconcileClockwise, pState->Alt))
+				{
+					ReleaseReservation(pThis);
+					pState->Locked = false;
+					pState->ReconcileActive = false;
+					pState->ReconcileTarget = -1;
+					pThis->PrimaryFacing.SetCurrent(DirStruct(currentBucket * 0x2000));
+
+					Debug::Log("[FootprintAim] %s blocked at bucket %d, aborted at (%d,%d)\n",
+						pThis->GetTechnoType()->ID, currentBucket,
+						pState->Anchor.X, pState->Anchor.Y);
+					return;
+				}
+			}
 		}
 
 		if (currentBucket == pState->ReconcileTarget)
@@ -1439,28 +2209,21 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 
 	auto tryDirection = [&](bool clockwise) -> bool
 	{
-		const auto sweep = GetSweepAt(pThis, pState->Anchor, from, target, clockwise);
-
-		if (sweep.empty()
-			|| !CanOccupy(pThis, sweep, pState->Alt, pState->Anchor))
+		if (!ReserveTurnStep(pThis, pState->Anchor, from, target,
+			clockwise, pState->Alt))
 		{
 			return false;
 		}
 
-		ReleaseReservation(pThis);
-
-		if (!ReserveSweep(pThis, sweep, pState->Alt))
-			return false;
-
 		pState->Locked = true;
 		pState->ReconcileActive = true;
 		pState->ReconcileTarget = target;
+		pState->ReconcileClockwise = clockwise;
 
-		Debug::Log("[FootprintAim] %s bucket %d -> %d (%s) at (%d,%d), sweep=%d reserved=%d\n",
+		Debug::Log("[FootprintAim] %s bucket %d -> %d (%s) at (%d,%d), reserved=%d\n",
 			pThis->GetTechnoType()->ID, from, target,
 			clockwise ? "cw" : "ccw",
 			pState->Anchor.X, pState->Anchor.Y,
-			static_cast<int>(sweep.size()),
 			static_cast<int>(pState->ReservedSpan.size()));
 
 		return true;

@@ -76,6 +76,10 @@ private:
 	CellStruct MoveTargetCell { 0, 0 };
 	CellStruct TurnTargetCell { 0, 0 };
 	CoordStruct TargetCoord = CoordStruct::Empty;
+	// A new order received while a cell-to-cell interpolation is in flight.
+	// Applying it immediately would snap the model to the next cell centre and
+	// make rapid clicks look like teleporting; consume it when the step ends.
+	CoordStruct PendingTarget = CoordStruct::Empty;
 	CoordStruct HeadToCoord = CoordStruct::Empty;
 
 	bool Moving = false;
@@ -85,6 +89,7 @@ private:
 
 	int TurnFromBucket = 0;
 	int TurnTargetBucket = 0;
+	bool TurnClockwise = true;
 	int LastLogFrame = -1000;
 
 	// A failed path/move must not be retried every frame. Large multi-cell

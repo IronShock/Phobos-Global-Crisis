@@ -48,6 +48,7 @@ namespace
 
 		return -1;
 	}
+
 }
 
 HRESULT FootprintLocomotionClass::Load(IStream* pStm)
@@ -62,6 +63,7 @@ HRESULT FootprintLocomotionClass::Load(IStream* pStm)
 	this->Turning = false;
 	this->HeadToCoord = CoordStruct::Empty;
 	this->TargetCoord = CoordStruct::Empty;
+	this->PendingTarget = CoordStruct::Empty;
 	this->Powered = true;
 	this->UnLocked = true;
 	this->ResetRetry();
@@ -155,6 +157,32 @@ bool FootprintLocomotionClass::Process()
 			{
 				const auto hull = Footprint::GetSpan(pUnit, pState->Anchor, currentBucket);
 				Footprint::CommitSpan(pUnit, hull, currentBucket, pState->Alt, pState->Anchor);
+
+				if (currentBucket != this->TurnTargetBucket)
+				{
+					if (!Footprint::ReserveTurnStep(pUnit, pState->Anchor,
+						currentBucket, this->TurnTargetBucket, this->TurnClockwise, pState->Alt))
+					{
+						// A normal unit reached the next 45-degree slice first.
+						// Abort this turn rather than overlapping it; keep the
+						// destination so the normal retry path can replan.
+						const CellStruct failureGoal = this->TargetCoord == CoordStruct::Empty
+							? pState->Anchor
+							: CellClass::Coord2Cell(this->TargetCoord);
+
+						this->RecordFailure(failureGoal);
+						Footprint::ReleaseReservation(pUnit);
+						pState->Locked = false;
+						pLinked->PrimaryFacing.SetCurrent(DirStruct(currentBucket * 0x2000));
+						pLinked->PrimaryFacing.SetDesired(DirStruct(currentBucket * 0x2000));
+						this->Turning = false;
+						this->ClearPath();
+						this->Moving = false;
+						pLinked->SetSpeedPercentage(0.0);
+						this->LogBlocked("turn-step", pState->Anchor);
+						return false;
+					}
+				}
 			}
 		}
 
@@ -166,7 +194,23 @@ bool FootprintLocomotionClass::Process()
 	}
 
 	if (this->HeadToCoord != CoordStruct::Empty)
-		return this->TranslateOneFrame();
+	{
+		const bool result = this->TranslateOneFrame();
+
+		// Consume an order that arrived during the interpolation only after
+		// the hull has reached the current cell centre. This keeps continuous
+		// clicks continuous instead of teleporting to the next anchor.
+		if (this->HeadToCoord == CoordStruct::Empty
+			&& this->PendingTarget != CoordStruct::Empty)
+		{
+			const CoordStruct pending = this->PendingTarget;
+			this->PendingTarget = CoordStruct::Empty;
+			this->TargetCoord = CoordStruct::Empty;
+			this->Move_To(pending);
+		}
+
+		return result;
+	}
 
 	if (this->PathIndex >= this->PathLength)
 	{
@@ -235,6 +279,25 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	}
 
 	auto const pState = Footprint::GetState(pUnit);
+
+	if (this->HeadToCoord != CoordStruct::Empty)
+	{
+		// Let the current cell-to-cell interpolation finish first. Replacing
+		// the path immediately would snap the model to the next cell centre
+		// on every click, which is the rapid-click teleport.
+		if (newTarget)
+		{
+			this->PendingTarget = to;
+			this->TargetCoord = to;
+			this->ResetRetry();
+		}
+
+		return;
+	}
+
+	// A normal order replaces any stale deferred order.
+	this->PendingTarget = CoordStruct::Empty;
+
 	const CellStruct start = pState && pState->Initialized
 		? pState->Anchor
 		: pLinked->GetMapCoords();
@@ -327,12 +390,21 @@ void FootprintLocomotionClass::Stop_Moving()
 	this->Turning = false;
 	this->HeadToCoord = CoordStruct::Empty;
 	this->TargetCoord = CoordStruct::Empty;
+	this->PendingTarget = CoordStruct::Empty;
 	this->ResetRetry();
 
 	auto const pLinked = this->LinkedTo;
 
 	if (!pLinked)
 		return;
+
+	// Clearing only our own TargetCoord is not enough: the engine's action-line
+	// renderer reads FootClass::Destination directly. If the custom locomotor
+	// reaches its path end without clearing these fields, the old destination
+	// line remains visible forever even though the unit has stopped.
+	pLinked->Destination = nullptr;
+	pLinked->LastDestination = nullptr;
+	pLinked->MegaDestination = nullptr;
 
 	pLinked->SetSpeedPercentage(0.0);
 
@@ -341,6 +413,7 @@ void FootprintLocomotionClass::Stop_Moving()
 		if (auto const pState = Footprint::GetState(pUnit))
 		{
 			pState->Locked = false;
+			pState->Translating = false;
 			pState->ReconcileActive = false;
 			pState->ReconcileTarget = -1;
 		}
@@ -364,7 +437,9 @@ void FootprintLocomotionClass::Unlimbo()
 		return;
 
 	if (auto const pUnit = abstract_cast<UnitClass*>(pLinked))
+	{
 		Footprint::Mark(pUnit, pLinked->Location);
+	}
 }
 
 int FootprintLocomotionClass::Apparent_Speed()
@@ -446,18 +521,11 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 
 	auto tryDirection = [&](bool clockwise) -> bool
 	{
-		const auto sweep = Footprint::GetSweepAt(pUnit, anchor, from, to, clockwise);
-
-		if (sweep.empty()
-			|| !Footprint::CanOccupy(pUnit, sweep, pState->Alt, anchor))
+		if (!Footprint::ReserveTurnStep(pUnit, anchor, from, to,
+			clockwise, pState->Alt))
 		{
 			return false;
 		}
-
-		Footprint::ReleaseReservation(pUnit);
-
-		if (!Footprint::ReserveSweep(pUnit, sweep, pState->Alt))
-			return false;
 
 		pState->Locked = true;
 		pLinked->PrimaryFacing.SetDesired(DirStruct(to * 0x2000));
@@ -466,11 +534,13 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 		this->Turning = true;
 		this->TurnFromBucket = from;
 		this->TurnTargetBucket = to;
+		this->TurnClockwise = clockwise;
 		this->TurnTargetCell = anchor;
 
-		Debug::Log("[FootprintTurn] %s cell=(%d,%d) bucket %d -> %d (%s), sweep=%d cells\n",
+		Debug::Log("[FootprintTurn] %s cell=(%d,%d) bucket %d -> %d (%s), remainingReserved=%d\n",
 			pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, from, to,
-			clockwise ? "cw" : "ccw", static_cast<int>(sweep.size()));
+			clockwise ? "cw" : "ccw",
+			static_cast<int>(pState->ReservedSpan.size()));
 
 		return true;
 	};
@@ -533,24 +603,16 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 	const int dy = next.Y - anchor.Y;
 	const int direction = DirectionFromDelta(dx, dy);
 	const bool forward = direction == bucket;
-	const bool reverse = direction == ((bucket + 4) & 7);
 
-	if (step.Bucket != bucket || direction < 0 || (!forward && !reverse))
+	if (step.Bucket != bucket || direction < 0 || !forward || step.Reverse)
 	{
 		this->LogBlocked("invalid-step", next);
 		return false;
 	}
 
-	if (step.Reverse != reverse)
-	{
-		Debug::Log("[FootprintStep] %s reverse flag mismatch from=(%d,%d) bucket=%d next=(%d,%d) flag=%d actual=%d\n",
-			pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
-			next.X, next.Y, step.Reverse ? 1 : 0, reverse ? 1 : 0);
-	}
-
-	Debug::Log("[FootprintStep] %s from=(%d,%d) bucket=%d next=(%d,%d) %s\n",
+	Debug::Log("[FootprintStep] %s from=(%d,%d) bucket=%d next=(%d,%d) forward\n",
 		pLinked->GetTechnoType()->ID, anchor.X, anchor.Y, bucket,
-		next.X, next.Y, forward ? "forward" : "reverse");
+		next.X, next.Y);
 
 	if (pState->ReconcileActive)
 	{
@@ -582,7 +644,13 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 	}
 
 	const auto currentSpan = Footprint::GetSpan(pUnit, anchor, bucket);
-	Footprint::CommitSpan(pUnit, UnionSpans(currentSpan, nextSpan), bucket, pState->Alt, anchor);
+
+	if (!Footprint::CommitSpan(pUnit, UnionSpans(currentSpan, nextSpan),
+		bucket, pState->Alt, anchor))
+	{
+		this->LogBlocked("commit", next);
+		return false;
+	}
 
 	const auto pNextCell = MapClass::Instance.TryGetCellAt(next);
 	const int nextZ = pNextCell
@@ -609,6 +677,9 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 	if (!pUnit || !pState)
 		return false;
 
+	const CellStruct oldAnchor = pState->Anchor;
+	pState->Translating = true;
+
 	const int speed = std::max(1, pLinked->GetTechnoType()->Speed);
 	const CoordStruct current = pLinked->Location;
 	CoordStruct delta
@@ -627,6 +698,7 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 	{
 		this->HeadToCoord = CoordStruct::Empty;
 		this->PathIndex++;
+		pState->Translating = false;
 		return true;
 	}
 
@@ -642,9 +714,9 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 	{
 		CoordStruct nextPos
 		{
-			current.X + static_cast<int>(delta.X * step / distance),
-			current.Y + static_cast<int>(delta.Y * step / distance),
-			current.Z + static_cast<int>(delta.Z * step / distance)
+			current.X + static_cast<int>(std::lround(delta.X * static_cast<double>(step) / distance)),
+			current.Y + static_cast<int>(std::lround(delta.Y * static_cast<double>(step) / distance)),
+			current.Z + static_cast<int>(std::lround(delta.Z * static_cast<double>(step) / distance))
 		};
 
 		pLinked->SetLocation(nextPos);
@@ -654,7 +726,11 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 
 	if (distance <= speed)
 	{
-		pLinked->LastMapCoords = pState->Anchor;
+		// Use the anchor captured before the engine's Mark/UpdatePosition
+		// hooks ran. pState->Anchor may otherwise already point at the target
+		// cell, and UpdatePosition would remove the wrong old cell / apply a
+		// lateral correction.
+		pLinked->LastMapCoords = oldAnchor;
 		pLinked->CurrentMapCoords = this->MoveTargetCell;
 		pLinked->PathDirections[0] = -1;
 		pLinked->WaypointCell = CellStruct { -1, -1 };
@@ -662,10 +738,21 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 		pLinked->UpdatePosition(PCPType::End);
 
 		const auto nextSpan = Footprint::GetSpan(pUnit, this->MoveTargetCell, pState->Bucket);
-		Footprint::CommitSpan(pUnit, nextSpan, pState->Bucket, pState->Alt, this->MoveTargetCell);
+
+		if (!Footprint::CommitSpan(pUnit, nextSpan, pState->Bucket,
+			pState->Alt, this->MoveTargetCell))
+		{
+			// Another hull won the race for this cell. Put the model back at
+			// the last committed centre instead of leaving it standing in a
+			// cell we do not own.
+			pLinked->SetLocation(CellClass::Cell2Coord(oldAnchor, pLinked->Location.Z));
+			this->Stop_Moving();
+			return false;
+		}
 
 		this->HeadToCoord = CoordStruct::Empty;
 		this->PathIndex++;
+		pState->Translating = false;
 	}
 
 	return true;
