@@ -229,6 +229,16 @@ DEFINE_HOOK(0x6B77B4, SpawnManagerClass_Update_RecycleSpawned, 0x7)
 	auto const pCarrierTypeExt = TechnoExt::ExtMap.Find(pCarrier)->TypeExtData;
 	auto const spawnerCrd = pSpawner->GetCoords();
 
+	// A mobile carrier may only recover aircraft while it is stationary.
+	if (pCarrierTypeExt->AircraftCarrier)
+	{
+		if (auto const pFoot = abstract_cast<FootClass*>(pCarrier);
+			pFoot && pFoot->Locomotor && pFoot->Locomotor->Is_Moving_Now())
+		{
+			return NoRecycle;
+		}
+	}
+
 	auto shouldRecycleSpawned = [&]()
 	{
 		auto const& FLH = pCarrierTypeExt->Spawner_RecycleCoord;

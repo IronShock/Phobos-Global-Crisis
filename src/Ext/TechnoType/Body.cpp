@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <unordered_set>
 
 #include <Ext/Anim/Body.h>
 #include <Ext/BuildingType/Body.h>
@@ -26,6 +27,23 @@
 
 TechnoTypeExt::ExtContainer TechnoTypeExt::ExtMap;
 bool TechnoTypeExt::SelectWeaponMutex = false;
+
+namespace
+{
+	std::unordered_set<TechnoTypeClass*> s_aircraftCarrierTypes;
+}
+
+bool TechnoTypeExt::IsAircraftCarrier(TechnoTypeClass* pType)
+{
+	if (!pType)
+		return false;
+
+	if (s_aircraftCarrierTypes.find(pType) != s_aircraftCarrierTypes.end())
+		return true;
+
+	const auto pExt = TechnoTypeExt::ExtMap.TryFind(pType);
+	return pExt && pExt->AircraftCarrier;
+}
 
 void TechnoTypeExt::ExtData::ApplyTurretOffset(Matrix3D* mtx, double factor)
 {
@@ -1227,6 +1245,11 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->InitialSpawnsNumber.Read(exINI, pSection, "InitialSpawnsNumber");
 	this->Spawns_Queue.Read(exINI, pSection, "Spawns.Queue");
 
+	this->AircraftCarrier.Read(exINI, pSection, "AircraftCarrier");
+	this->AircraftCarrier_NumberOfDocks.Read(exINI, pSection, "NumberOfDocks");
+	this->AircraftCarrier_Payloads.Read(exINI, pSection, "AircraftCarrier.Payloads");
+	this->AircraftCarrier_PayloadsNum.Read(exINI, pSection, "AircraftCarrier.PayloadsNum");
+
 	this->Spawner_RecycleRange.Read(exINI, pSection, "Spawner.RecycleRange");
 	this->Spawner_RecycleAnim.Read(exINI, pSection, "Spawner.RecycleAnim");
 	this->Spawner_RecycleCoord.Read(exINI, pSection, "Spawner.RecycleCoord");
@@ -1604,6 +1627,95 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 
 	this->TurretOffset.Read(exArtINI, pArtSection, "TurretOffset");
 	this->TurretShadow.Read(exArtINI, pArtSection, "TurretShadow");
+
+	if (this->AircraftCarrier)
+	{
+		s_aircraftCarrierTypes.insert(pThis);
+
+		int docks = std::max(0, this->AircraftCarrier_NumberOfDocks.Get());
+		const int payloadTypes = static_cast<int>(this->AircraftCarrier_Payloads.size());
+
+		if (docks <= 0)
+		{
+			for (int i = 0; i < payloadTypes; ++i)
+			{
+				int count = 1;
+
+				if (i < static_cast<int>(this->AircraftCarrier_PayloadsNum.size()))
+					count = this->AircraftCarrier_PayloadsNum[i];
+				else if (this->AircraftCarrier_PayloadsNum.size() == 1)
+					count = this->AircraftCarrier_PayloadsNum[0];
+
+				docks += std::max(0, count);
+			}
+		}
+
+		this->AircraftCarrier_DockingOffsets.clear();
+
+		for (int i = 0; i < docks; ++i)
+		{
+			char tempBuffer[64];
+			_snprintf_s(tempBuffer, sizeof(tempBuffer), "DockingOffset%d", i);
+			Valueable<CoordStruct> offset;
+			offset.Read(exArtINI, pArtSection, tempBuffer);
+			this->AircraftCarrier_DockingOffsets.push_back(offset.Get());
+		}
+
+		this->AircraftCarrier_DockingDirs.clear();
+		Nullable<int> defaultDockDir;
+		defaultDockDir.Read(exINI, pSection, "AircraftDockingDir");
+
+		for (int i = 0; i < docks; ++i)
+		{
+			char tempBuffer[64];
+			Nullable<int> dockDir;
+
+			if (i > 0)
+			{
+				_snprintf_s(tempBuffer, sizeof(tempBuffer), "AircraftDockingDir%d", i);
+				dockDir.Read(exINI, pSection, tempBuffer);
+			}
+
+			if (!dockDir.isset() && defaultDockDir.isset())
+				dockDir = defaultDockDir.Get();
+
+			this->AircraftCarrier_DockingDirs.push_back(dockDir.Get(0));
+		}
+
+		this->Spawns_Queue.clear();
+		int total = 0;
+
+		for (int i = 0; i < payloadTypes && total < docks; ++i)
+		{
+			auto const pPayload = this->AircraftCarrier_Payloads[i];
+
+			if (!pPayload)
+				continue;
+
+			int count = 1;
+
+			if (i < static_cast<int>(this->AircraftCarrier_PayloadsNum.size()))
+				count = this->AircraftCarrier_PayloadsNum[i];
+			else if (this->AircraftCarrier_PayloadsNum.size() == 1)
+				count = this->AircraftCarrier_PayloadsNum[0];
+
+			count = std::clamp(count, 0, docks - total);
+
+			for (int j = 0; j < count; ++j)
+				this->Spawns_Queue.push_back(pPayload);
+
+			total += count;
+		}
+
+		// AircraftCarrier payloads are ordinary UnitClass-managed aircraft,
+		// not SpawnManager spawns. Do not let the engine create a spawner.
+		pThis->Spawns = nullptr;
+		pThis->SpawnsNumber = 0;
+
+		Debug::Log("[AircraftCarrier] parsed %s docks=%d payloads=%d queue=%d spawns=%p number=%d\n",
+			pThis->ID, docks, payloadTypes, static_cast<int>(this->Spawns_Queue.size()),
+			static_cast<void*>(pThis->Spawns), pThis->SpawnsNumber);
+	}
 	ValueableVector<int> shadow_indices;
 	shadow_indices.Read(exArtINI, pArtSection, "ShadowIndices");
 	ValueableVector<int> shadow_indices_frame;
@@ -2086,6 +2198,13 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 
 		.Process(this->InitialSpawnsNumber)
 		.Process(this->Spawns_Queue)
+
+		.Process(this->AircraftCarrier)
+		.Process(this->AircraftCarrier_NumberOfDocks)
+		.Process(this->AircraftCarrier_Payloads)
+		.Process(this->AircraftCarrier_PayloadsNum)
+		.Process(this->AircraftCarrier_DockingOffsets)
+		.Process(this->AircraftCarrier_DockingDirs)
 
 		.Process(this->Spawner_RecycleRange)
 		.Process(this->Spawner_RecycleAnim)

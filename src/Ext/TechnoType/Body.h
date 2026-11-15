@@ -424,6 +424,13 @@ public:
 		Nullable<int> InitialSpawnsNumber;
 		ValueableVector<AircraftTypeClass*> Spawns_Queue;
 
+		Valueable<bool> AircraftCarrier;
+		Valueable<int> AircraftCarrier_NumberOfDocks;
+		ValueableVector<AircraftTypeClass*> AircraftCarrier_Payloads;
+		ValueableVector<int> AircraftCarrier_PayloadsNum;
+		ValueableVector<CoordStruct> AircraftCarrier_DockingOffsets;
+		ValueableVector<int> AircraftCarrier_DockingDirs;
+
 		Valueable<Leptons> Spawner_RecycleRange;
 		ValueableVector<AnimTypeClass*> Spawner_RecycleAnim;
 		Valueable<CoordStruct> Spawner_RecycleCoord;
@@ -938,6 +945,13 @@ public:
 			, InitialSpawnsNumber { }
 			, Spawns_Queue { }
 
+			, AircraftCarrier { false }
+			, AircraftCarrier_NumberOfDocks { 0 }
+			, AircraftCarrier_Payloads { }
+			, AircraftCarrier_PayloadsNum { }
+			, AircraftCarrier_DockingOffsets { }
+			, AircraftCarrier_DockingDirs { }
+
 			, Spawner_RecycleRange { Leptons(-1) }
 			, Spawner_RecycleAnim { }
 			, Spawner_RecycleCoord { {0,0,0} }
@@ -1099,6 +1113,9 @@ public:
 
 	static ExtContainer ExtMap;
 	static bool SelectWeaponMutex;
+
+	// Type-level configuration survives savegame type-extension reloads.
+	static bool IsAircraftCarrier(TechnoTypeClass* pType);
 
 	static void ApplyTurretOffset(TechnoTypeClass* pType, Matrix3D* mtx, double factor = 1.0);
 	static TechnoTypeClass* GetTechnoType(ObjectTypeClass* pType);
