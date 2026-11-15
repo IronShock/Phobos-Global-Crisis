@@ -251,6 +251,12 @@ and is also drawn along boundaries between green and red/yellow cells. Edges
 around empty enclosed holes are omitted. All fills are client-side and do not
 affect multiplayer synchronisation.
 
+The range footprint is cached when the building type, owner, foundation, map or
+nearby base set changes. After that, a refresh compares the cheap per-cell state
+and revalidates only cells whose state changed, plus the candidate foundations
+that cover them. The same path is used for land and naval buildings, and naval
+buildings also receive the colour fill.
+
 `BuildRange.DisableYellow=yes` merges all yellow cells into red. Green remains
 green. `BuildRange.DisableRed=yes` makes the entire actual range green and
 overrides `DisableYellow`.
@@ -264,7 +270,7 @@ BuildRange.Color.Legal=0,255,0     ; green
 BuildRange.Color.Blocked=255,255,0 ; yellow - actual range not green/red
 BuildRange.Color.Occupied=255,0,0  ; red - cell build check failed
 BuildRange.FillOpacity=5           ; 0-100
-BuildRange.RefreshFrames=15        ; occupancy refresh interval, 1-60
+BuildRange.RefreshFrames=15        ; dynamic cell refresh interval, 1-60
 ```
 
 ### Target filter buttons

@@ -12,8 +12,6 @@
 #include <Drawing.h>
 #include <Unsorted.h>
 #include <Ext/Rules/Body.h>
-#include <Ext/OverlayType/Body.h>
-#include <Ext/TerrainType/Body.h>
 #include <Misc/Fog/Fog.h>
 #include <Misc/ZoomManager.h>
 
@@ -108,6 +106,12 @@ namespace
 		int Z = 0;
 	};
 
+	struct BuildRangeCellEdges
+	{
+		BuildRangeEdge Edges[4] {};
+		BYTE Count = 0;
+	};
+
 	struct BuildRangeData
 	{
 		int MinX = 0;
@@ -119,6 +123,95 @@ namespace
 		bool HasFogged = false;
 		std::vector<int> Heights;
 		std::vector<BuildRangeEdge> Edges;
+		std::vector<BuildRangeCellEdges> CellEdges;
+		std::vector<BYTE> HoleMask;
+		std::vector<int> ChangedCells;
+	};
+
+	struct BuildRangeCandidate
+	{
+		CellStruct Anchor;
+		bool Valid = false;
+	};
+
+	struct BuildRangeCellSnapshot
+	{
+		bool Exists = false;
+		int IsoTileTypeIndex = -1;
+		int OverlayTypeIndex = -1;
+		int SmudgeTypeIndex = -1;
+		int WallOwnerIndex = -1;
+		int InfantryOwnerIndex = -1;
+		int AltInfantryOwnerIndex = -1;
+		int LandType = 0;
+		int Level = 0;
+		BYTE SlopeIndex = 0;
+		BYTE OverlayData = 0;
+		BYTE SmudgeData = 0;
+		BYTE Height = 0;
+		BYTE BlockedNeighbours = 0;
+		DWORD Passability = 0;
+		DWORD OccupationFlags = 0;
+		DWORD AltOccupationFlags = 0;
+		DWORD Flags = 0;
+		DWORD AltFlags = 0;
+		DWORD BaseSpacerOfHouses = 0;
+		DWORD GapsCoveringThisCell = 0;
+		ObjectClass* FirstObject = nullptr;
+		ObjectClass* AltObject = nullptr;
+		FootClass* Jumpjet = nullptr;
+		BuildingTypeClass* Rubble = nullptr;
+		CellClass* BridgeOwnerCell = nullptr;
+
+		bool operator==(const BuildRangeCellSnapshot& other) const
+		{
+			return Exists == other.Exists
+				&& IsoTileTypeIndex == other.IsoTileTypeIndex
+				&& OverlayTypeIndex == other.OverlayTypeIndex
+				&& SmudgeTypeIndex == other.SmudgeTypeIndex
+				&& WallOwnerIndex == other.WallOwnerIndex
+				&& InfantryOwnerIndex == other.InfantryOwnerIndex
+				&& AltInfantryOwnerIndex == other.AltInfantryOwnerIndex
+				&& LandType == other.LandType
+				&& Level == other.Level
+				&& SlopeIndex == other.SlopeIndex
+				&& OverlayData == other.OverlayData
+				&& SmudgeData == other.SmudgeData
+				&& Height == other.Height
+				&& BlockedNeighbours == other.BlockedNeighbours
+				&& Passability == other.Passability
+				&& OccupationFlags == other.OccupationFlags
+				&& AltOccupationFlags == other.AltOccupationFlags
+				&& Flags == other.Flags
+				&& AltFlags == other.AltFlags
+				&& BaseSpacerOfHouses == other.BaseSpacerOfHouses
+				&& GapsCoveringThisCell == other.GapsCoveringThisCell
+				&& FirstObject == other.FirstObject
+				&& AltObject == other.AltObject
+				&& Jumpjet == other.Jumpjet
+				&& Rubble == other.Rubble
+				&& BridgeOwnerCell == other.BridgeOwnerCell;
+		}
+
+		bool operator!=(const BuildRangeCellSnapshot& other) const
+		{
+			return !(*this == other);
+		}
+	};
+
+	struct BuildRangeStatic
+	{
+		int MinX = 0;
+		int MinY = 0;
+		int Width = 0;
+		int Height = 0;
+		std::vector<BYTE> Range;
+		std::vector<BYTE> Red;
+		std::vector<std::uint32_t> LegalCount;
+		std::vector<CellStruct> Foundation;
+		std::vector<BuildRangeCandidate> Candidates;
+		std::vector<std::vector<std::uint32_t>> CellCandidates;
+		std::vector<BuildRangeCellSnapshot> Snapshots;
 	};
 
 	struct BuildRangeSpan
@@ -141,6 +234,9 @@ namespace
 	struct BuildRangeFillCache
 	{
 		std::vector<BuildRangeFillRect> Rects;
+		std::vector<BYTE> Mask;
+		int MaskWidth = 0;
+		int MaskHeight = 0;
 		unsigned int Revision = 0;
 		Point2D TacticalPos {};
 		double Zoom = 0.0;
@@ -173,11 +269,16 @@ namespace
 	};
 
 	BuildRangeData CachedBuildRangeData;
+	BuildRangeStatic CachedBuildRangeStatic;
 	BuildingTypeClass* CachedBuildRangeType = nullptr;
 	HouseClass* CachedBuildRangeOwner = nullptr;
 	unsigned int CachedBuildRangeFrame = 0;
-	std::uint64_t CachedBuildRangeDataHash = 0;
+	std::uint64_t CachedBuildRangeBaseSignature = 0;
+	std::uint64_t CachedBuildRangeFoundationHash = 0;
+	int CachedBuildRangeBaseBuildingCount = -1;
+	unsigned int CachedBuildRangeBaseCheckFrame = 0;
 	unsigned int CachedBuildRangeRevision = 0;
+	unsigned int CachedBuildRangeEdgeRevision = 0;
 	BuildRangeFillCache CachedBuildRangeFill;
 	BuildRangeOutlineCache CachedBuildRangeOutline;
 	BuildRangeLutCache CachedBuildRangeLut;
@@ -295,47 +396,17 @@ namespace
 		}
 	}
 
-	std::uint64_t HashBuildRangeData(const BuildRangeData& data)
-	{
-		std::uint64_t hash = 1469598103934665603ull;
-		auto mix = [&hash](std::uint64_t value)
-		{
-			hash ^= value;
-			hash *= 1099511628211ull;
-		};
-
-		mix(static_cast<std::uint64_t>(data.MinX));
-		mix(static_cast<std::uint64_t>(data.MinY));
-		mix(static_cast<std::uint64_t>(data.Width));
-		mix(static_cast<std::uint64_t>(data.Height));
-
-		for (auto const cell : data.Cells)
-			mix(static_cast<std::uint64_t>(cell));
-
-		for (auto const fogged : data.Fogged)
-			mix(static_cast<std::uint64_t>(fogged));
-
-		mix(data.HasFogged ? 1ull : 0ull);
-
-		for (auto const height : data.Heights)
-			mix(static_cast<std::uint64_t>(static_cast<uint32_t>(height)));
-
-		for (auto const& edge : data.Edges)
-		{
-			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.A.X)));
-			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.A.Y)));
-			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.B.X)));
-			mix(static_cast<std::uint64_t>(static_cast<uint16_t>(edge.B.Y)));
-			mix(static_cast<std::uint64_t>(static_cast<uint32_t>(edge.Z)));
-		}
-
-		return hash;
-	}
-
 	static int BuildRangeIndex(const BuildRangeData& data, int x, int y)
 	{
 		return (y - data.MinY) * data.Width + (x - data.MinX);
 	}
+
+	static int BuildRangeIndex(const BuildRangeStatic& data, int x, int y)
+	{
+		return (y - data.MinY) * data.Width + (x - data.MinX);
+	}
+
+	void RebuildBuildRangeEdges(BuildRangeData& result);
 
 	static bool IsBuildRangeCellBlocked(
 		CellClass* pCell,
@@ -345,49 +416,168 @@ namespace
 		if (!pCell)
 			return true;
 
-		// Naval buildings have a very large Adjacent range and the engine's
-		// full cell check is considerably more expensive over water. Use the
-		// same relevant cell rules directly instead.
-		if (pType->Naval)
-		{
-			if (!pCell->Tile_Is_Water())
-				return true;
-
-			if (pCell->GetBuilding())
-				return true;
-
-			const DWORD occupation = pCell->OccupationFlags | pCell->AltOccupationFlags;
-
-			// Ground units and buildings block; airborne aircraft do not.
-			if (occupation & (0x20u | 0x80u))
-				return true;
-
-			if (pCell->SlopeIndex != 0)
-				return true;
-
-			if (const auto pTerrain = pCell->GetTerrain(false);
-				pTerrain && !TerrainTypeExt::ExtMap.Find(pTerrain->Type)->CanBeBuiltOn)
-			{
-				return true;
-			}
-
-			if (pCell->OverlayTypeIndex >= 0
-				&& !OverlayTypeExt::CanPlaceBuildingOnOverlay(
-					pCell->OverlayTypeIndex, pType, false))
-			{
-				return true;
-			}
-
-			return false;
-		}
-
+		// Use the engine's cell-level rule for every building type. The old
+		// hand-written naval shortcut omitted constraints such as WaterBound,
+		// foundation placement, bridges and shoreline rules, which made some
+		// actually invalid cells appear as legal range.
 		const SpeedType buildSpeed = pType->SpeedType;
 		return !pCell->CanThisExistHere(buildSpeed, pType, pOwner);
 	}
 
-	BuildRangeData BuildBuildRangeData(BuildingClass* pBuilding)
+	static BuildRangeCellSnapshot CaptureBuildRangeCellSnapshot(CellClass* pCell)
+	{
+		BuildRangeCellSnapshot snapshot;
+
+		if (!pCell)
+			return snapshot;
+
+		snapshot.Exists = true;
+		snapshot.IsoTileTypeIndex = pCell->IsoTileTypeIndex;
+		snapshot.OverlayTypeIndex = pCell->OverlayTypeIndex;
+		snapshot.SmudgeTypeIndex = pCell->SmudgeTypeIndex;
+		snapshot.WallOwnerIndex = pCell->WallOwnerIndex;
+		snapshot.InfantryOwnerIndex = pCell->InfantryOwnerIndex;
+		snapshot.AltInfantryOwnerIndex = pCell->AltInfantryOwnerIndex;
+		snapshot.LandType = static_cast<int>(pCell->LandType);
+		snapshot.Level = static_cast<int>(pCell->Level);
+		snapshot.SlopeIndex = pCell->SlopeIndex;
+		snapshot.OverlayData = pCell->OverlayData;
+		snapshot.SmudgeData = pCell->SmudgeData;
+		snapshot.Height = static_cast<BYTE>(pCell->Height);
+		snapshot.BlockedNeighbours = pCell->BlockedNeighbours;
+		snapshot.Passability = static_cast<DWORD>(pCell->Passability);
+		snapshot.OccupationFlags = pCell->OccupationFlags;
+		snapshot.AltOccupationFlags = pCell->AltOccupationFlags;
+		snapshot.Flags = static_cast<DWORD>(pCell->Flags);
+		snapshot.AltFlags = static_cast<DWORD>(pCell->AltFlags);
+		snapshot.BaseSpacerOfHouses = pCell->BaseSpacerOfHouses;
+		snapshot.GapsCoveringThisCell = pCell->GapsCoveringThisCell;
+		snapshot.FirstObject = pCell->FirstObject;
+		snapshot.AltObject = pCell->AltObject;
+		snapshot.Jumpjet = pCell->Jumpjet;
+		snapshot.Rubble = pCell->Rubble;
+		snapshot.BridgeOwnerCell = pCell->BridgeOwnerCell;
+
+		return snapshot;
+	}
+
+	static BuildRangeCellType GetBuildRangeDisplayType(
+		bool range,
+		bool red,
+		std::uint32_t legalCount,
+		bool disableRed,
+		bool disableYellow)
+	{
+		if (disableRed)
+			return range ? BuildRangeCellType::Legal : BuildRangeCellType::None;
+
+		if (red)
+			return BuildRangeCellType::Occupied;
+
+		if (legalCount > 0)
+			return BuildRangeCellType::Legal;
+
+		if (!range)
+			return BuildRangeCellType::None;
+
+		return disableYellow
+			? BuildRangeCellType::Occupied
+			: BuildRangeCellType::Blocked;
+	}
+
+	static bool ValidateBuildRangeCandidate(
+		BuildingTypeClass* pType,
+		HouseClass* pOwner,
+		const CellStruct& anchor,
+		const std::vector<CellStruct>& foundation)
+	{
+		// Reject candidates with a blocked foundation cell before paying for
+		// the full engine placement check. This is the common case when a unit
+		// or building moves into one cell of the foundation.
+		for (auto const& offset : foundation)
+		{
+			const CellStruct cell {
+				static_cast<short>(anchor.X + offset.X),
+				static_cast<short>(anchor.Y + offset.Y)
+			};
+
+			if (!MapClass::Instance.CellExists(cell)
+				|| IsBuildRangeCellBlocked(
+					MapClass::Instance.TryGetCellAt(cell), pType, pOwner))
+			{
+				return false;
+			}
+		}
+
+		CellStruct candidate = anchor;
+		return pType->CanPlaceHere(&candidate, pOwner);
+	}
+
+	static std::uint64_t HashBuildRangeFoundation(const CellStruct* pData)
+	{
+		std::uint64_t hash = 1469598103934665603ull;
+		auto mix = [&hash](std::uint64_t value)
+		{
+			hash ^= value;
+			hash *= 1099511628211ull;
+		};
+
+		if (pData)
+		{
+			for (; !IsFoundationSentinel(*pData); ++pData)
+			{
+				mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(pData->X)));
+				mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(pData->Y)));
+			}
+		}
+
+		mix(0x7FFFull);
+		mix(0x7FFFull);
+
+		return hash;
+	}
+
+	static std::uint64_t HashBuildRangeBaseSignature(HouseClass* pOwner)
+	{
+		std::uint64_t hash = 1469598103934665603ull;
+		auto mix = [&hash](std::uint64_t value)
+		{
+			hash ^= value;
+			hash *= 1099511628211ull;
+		};
+
+		const auto& mapRect = MapClass::Instance.MapRect;
+		mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(mapRect.X)));
+		mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(mapRect.Y)));
+		mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(mapRect.Width)));
+		mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(mapRect.Height)));
+
+		if (!pOwner)
+			return hash;
+
+		for (auto const pAnchor : BuildingClass::Array)
+		{
+			if (!pAnchor || !pAnchor->IsAlive || pAnchor->InLimbo
+				|| !pAnchor->Type || !pAnchor->Owner || !pAnchor->Type->BaseNormal
+				|| !pOwner->IsAlliedWith(pAnchor->Owner))
+			{
+				continue;
+			}
+
+			const CellStruct anchor = pAnchor->GetMapCoords();
+			mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(anchor.X)));
+			mix(static_cast<std::uint64_t>(static_cast<std::uint16_t>(anchor.Y)));
+			mix(reinterpret_cast<std::uintptr_t>(pAnchor->Type));
+			mix(static_cast<std::uint64_t>(pAnchor->Owner->ArrayIndex));
+		}
+
+		return hash;
+	}
+
+	BuildRangeData BuildBuildRangeData(BuildingClass* pBuilding, BuildRangeStatic& staticOut)
 	{
 		BuildRangeData result;
+		staticOut = BuildRangeStatic {};
 
 		if (!pBuilding || !pBuilding->Type || !DisplayClass::Instance.CurrentFoundation_Data)
 			return result;
@@ -414,6 +604,8 @@ namespace
 
 		std::vector<CellStruct> foundation(
 			foundationData.begin(), foundationData.end() - 1);
+
+		staticOut.Foundation = foundation;
 
 		const int adjacent = std::clamp(static_cast<int>(pType->Adjacent), 0, 30);
 		const int foundationWidth = std::max(1, static_cast<int>(pType->GetFoundationWidth()));
@@ -448,11 +640,14 @@ namespace
 		if (minX > maxX || minY > maxY)
 			return result;
 
-		const auto& mapBounds = MapClass::Instance.MapCoordBounds;
-		minX = std::clamp(minX, mapBounds.Left, mapBounds.Right);
-		minY = std::clamp(minY, mapBounds.Top, mapBounds.Bottom);
-		maxX = std::clamp(maxX, mapBounds.Left, mapBounds.Right);
-		maxY = std::clamp(maxY, mapBounds.Top, mapBounds.Bottom);
+		const auto& mapRect = MapClass::Instance.MapRect;
+		const int mapMaxX = mapRect.X + mapRect.Width - 1;
+		const int mapMaxY = mapRect.Y + mapRect.Height - 1;
+
+		minX = std::clamp(minX, static_cast<int>(mapRect.X), mapMaxX);
+		minY = std::clamp(minY, static_cast<int>(mapRect.Y), mapMaxY);
+		maxX = std::clamp(maxX, static_cast<int>(mapRect.X), mapMaxX);
+		maxY = std::clamp(maxY, static_cast<int>(mapRect.Y), mapMaxY);
 
 		result.MinX = minX;
 		result.MinY = minY;
@@ -471,6 +666,7 @@ namespace
 			* static_cast<size_t>(result.Height);
 
 		std::vector<BYTE> flags(cellCount, 0);
+		std::vector<BuildRangeCandidate> candidates;
 
 		auto markFlag = [&](int x, int y, BYTE flag)
 		{
@@ -548,29 +744,15 @@ namespace
 				for (auto const& cell : cells)
 					markFlag(cell.X, cell.Y, FlagRange);
 
-				bool canPlace = false;
+				// Always use the engine's actual placement check. Naval
+				// buildings are no longer validated with a reduced custom
+				// check, so green range now matches what the engine accepts.
+				const bool canPlace = pType->CanPlaceHere(&candidate, pOwner);
 
-				if (pType->Naval)
-				{
-					// Avoid the full engine placement check for the very large
-					// naval Adjacent range. The same water/occupancy/terrain
-					// rules are already checked per cell.
-					canPlace = true;
-
-					for (auto const& cell : cells)
-					{
-						if (IsBuildRangeCellBlocked(
-							MapClass::Instance.TryGetCellAt(cell), pType, pOwner))
-						{
-							canPlace = false;
-							break;
-						}
-					}
-				}
-				else
-				{
-					canPlace = pType->CanPlaceHere(&candidate, pOwner);
-				}
+				BuildRangeCandidate candidateEntry;
+				candidateEntry.Anchor = candidate;
+				candidateEntry.Valid = canPlace;
+				candidates.push_back(candidateEntry);
 
 				if (canPlace)
 				{
@@ -617,6 +799,73 @@ namespace
 			}
 		}
 
+		staticOut.MinX = result.MinX;
+		staticOut.MinY = result.MinY;
+		staticOut.Width = result.Width;
+		staticOut.Height = result.Height;
+		staticOut.Range.assign(cellCount, 0);
+		staticOut.Red.assign(cellCount, 0);
+		staticOut.LegalCount.assign(cellCount, 0);
+		staticOut.Candidates = std::move(candidates);
+		staticOut.CellCandidates.assign(cellCount, {});
+		staticOut.Snapshots.resize(cellCount);
+
+		for (std::uint32_t candidateIndex = 0;
+			candidateIndex < staticOut.Candidates.size(); ++candidateIndex)
+		{
+			const auto& candidate = staticOut.Candidates[candidateIndex];
+
+			for (auto const& offset : staticOut.Foundation)
+			{
+				const CellStruct cell {
+					static_cast<short>(candidate.Anchor.X + offset.X),
+					static_cast<short>(candidate.Anchor.Y + offset.Y)
+				};
+
+				const int index = BuildRangeIndex(result, cell.X, cell.Y);
+
+				if (candidate.Valid)
+					++staticOut.LegalCount[index];
+
+				// A changed cell can affect placement of a nearby foundation
+				// through bibs, shore rules or adjacent occupancy. Map the
+				// candidate into its 3x3 neighbourhood so those candidates are
+				// revalidated as well.
+				for (int dy = -1; dy <= 1; ++dy)
+				{
+					for (int dx = -1; dx <= 1; ++dx)
+					{
+						const int nx = cell.X + dx;
+						const int ny = cell.Y + dy;
+
+						if (nx < result.MinX || nx >= result.MinX + result.Width
+							|| ny < result.MinY || ny >= result.MinY + result.Height)
+						{
+							continue;
+						}
+
+						staticOut.CellCandidates[
+							BuildRangeIndex(result, nx, ny)].push_back(candidateIndex);
+					}
+				}
+			}
+		}
+
+		for (size_t i = 0; i < cellCount; ++i)
+		{
+			if ((flags[i] & FlagRange) == 0)
+				continue;
+
+			staticOut.Range[i] = 1;
+			staticOut.Red[i] = (flags[i] & FlagOccupied) != 0;
+
+			const int x = result.MinX + static_cast<int>(i % result.Width);
+			const int y = result.MinY + static_cast<int>(i / result.Width);
+			staticOut.Snapshots[i] = CaptureBuildRangeCellSnapshot(
+				MapClass::Instance.TryGetCellAt(
+					CellStruct { static_cast<short>(x), static_cast<short>(y) }));
+		}
+
 		const auto pRules = RulesExt::Global();
 		const bool disableRed = pRules->BuildRange_DisableRed;
 		const bool disableYellow = pRules->BuildRange_DisableYellow;
@@ -644,6 +893,20 @@ namespace
 			else
 				result.Cells[i] = BuildRangeCellType::None;
 		}
+
+		RebuildBuildRangeEdges(result);
+
+		return result;
+	}
+
+	void RebuildBuildRangeEdges(BuildRangeData& result)
+	{
+		result.Edges.clear();
+
+		const size_t cellCount = static_cast<size_t>(result.Width)
+			* static_cast<size_t>(result.Height);
+		result.CellEdges.assign(cellCount, {});
+		result.HoleMask.assign(cellCount, 0);
 
 		// The white outline follows the green legal set. Non-green cells that
 		// are enclosed by the green set are holes: their inner edges are not
@@ -740,8 +1003,27 @@ namespace
 				|| value == BuildRangeCellType::Occupied;
 		};
 
+		for (int y = result.MinY; y < result.MinY + result.Height; ++y)
+		{
+			for (int x = result.MinX; x < result.MinX + result.Width; ++x)
+			{
+				if (isHole(x, y))
+					result.HoleMask[BuildRangeIndex(result, x, y)] = 1;
+			}
+		}
+
 		static constexpr CellStruct neighbours[] = {
 			{ 0, -1 }, { 1, 0 }, { 0, 1 }, { -1, 0 }
+		};
+
+		auto addEdge = [&](int x, int y, const BuildRangeEdge& edge)
+		{
+			result.Edges.push_back(edge);
+
+			auto& cellEdges = result.CellEdges[BuildRangeIndex(result, x, y)];
+
+			if (cellEdges.Count < 4)
+				cellEdges.Edges[cellEdges.Count++] = edge;
 		};
 
 		for (int y = result.MinY; y < result.MinY + result.Height; ++y)
@@ -791,14 +1073,456 @@ namespace
 					}
 
 					edge.Z = cellZ;
-					result.Edges.push_back(edge);
+					addEdge(x, y, edge);
 				}
 			}
 		}
 
 		MergeBuildRangeEdges(result.Edges);
+	}
 
-		return result;
+	static void RebuildBuildRangeCellEdges(BuildRangeData& result, int x, int y)
+	{
+		if (x < result.MinX || x >= result.MinX + result.Width
+			|| y < result.MinY || y >= result.MinY + result.Height)
+		{
+			return;
+		}
+
+		const int index = BuildRangeIndex(result, x, y);
+		auto& cellEdges = result.CellEdges[index];
+		cellEdges.Count = 0;
+
+		if (result.Cells[index] != BuildRangeCellType::Legal)
+			return;
+
+		auto isGreen = [&](int nx, int ny)
+		{
+			if (nx < result.MinX || nx >= result.MinX + result.Width
+				|| ny < result.MinY || ny >= result.MinY + result.Height)
+			{
+				return false;
+			}
+
+			return result.Cells[BuildRangeIndex(result, nx, ny)]
+				== BuildRangeCellType::Legal;
+		};
+
+		auto isColoredNonGreen = [&](int nx, int ny)
+		{
+			if (nx < result.MinX || nx >= result.MinX + result.Width
+				|| ny < result.MinY || ny >= result.MinY + result.Height)
+			{
+				return false;
+			}
+
+			const auto value = result.Cells[BuildRangeIndex(result, nx, ny)];
+			return value == BuildRangeCellType::Blocked
+				|| value == BuildRangeCellType::Occupied;
+		};
+
+		auto isHole = [&](int nx, int ny)
+		{
+			if (nx < result.MinX || nx >= result.MinX + result.Width
+				|| ny < result.MinY || ny >= result.MinY + result.Height)
+			{
+				return false;
+			}
+
+			return result.HoleMask[BuildRangeIndex(result, nx, ny)] != 0;
+		};
+
+		static constexpr CellStruct neighbours[] = {
+			{ 0, -1 }, { 1, 0 }, { 0, 1 }, { -1, 0 }
+		};
+
+		const int cellZ = result.Heights[index];
+
+		for (auto const& offset : neighbours)
+		{
+			const int nx = x + offset.X;
+			const int ny = y + offset.Y;
+
+			if (isGreen(nx, ny))
+				continue;
+
+			if (!isColoredNonGreen(nx, ny) && isHole(nx, ny))
+				continue;
+
+			BuildRangeEdge edge {};
+
+			if (offset.Y < 0)
+			{
+				edge.A = { static_cast<short>(x), static_cast<short>(y) };
+				edge.B = { static_cast<short>(x + 1), static_cast<short>(y) };
+			}
+			else if (offset.X > 0)
+			{
+				edge.A = { static_cast<short>(x + 1), static_cast<short>(y) };
+				edge.B = { static_cast<short>(x + 1), static_cast<short>(y + 1) };
+			}
+			else if (offset.Y > 0)
+			{
+				edge.A = { static_cast<short>(x), static_cast<short>(y + 1) };
+				edge.B = { static_cast<short>(x + 1), static_cast<short>(y + 1) };
+			}
+			else
+			{
+				edge.A = { static_cast<short>(x), static_cast<short>(y) };
+				edge.B = { static_cast<short>(x), static_cast<short>(y + 1) };
+			}
+
+			edge.Z = cellZ;
+
+			if (cellEdges.Count < 4)
+				cellEdges.Edges[cellEdges.Count++] = edge;
+		}
+	}
+
+	static void RebuildBuildRangeEdgesLocal(
+		BuildRangeData& result,
+		const std::vector<int>& dirtyCells)
+	{
+		const size_t cellCount = static_cast<size_t>(result.Width)
+			* static_cast<size_t>(result.Height);
+
+		if (result.CellEdges.size() != cellCount
+			|| result.HoleMask.size() != cellCount
+			|| dirtyCells.empty())
+		{
+			RebuildBuildRangeEdges(result);
+			return;
+		}
+
+		std::vector<BYTE> dirty(cellCount, 0);
+
+		for (auto const index : dirtyCells)
+		{
+			if (index < 0 || static_cast<size_t>(index) >= cellCount)
+				continue;
+
+			const int x = result.MinX + index % result.Width;
+			const int y = result.MinY + index / result.Width;
+
+			for (int dy = -1; dy <= 1; ++dy)
+			{
+				for (int dx = -1; dx <= 1; ++dx)
+				{
+					const int nx = x + dx;
+					const int ny = y + dy;
+
+					if (nx < result.MinX || nx >= result.MinX + result.Width
+						|| ny < result.MinY || ny >= result.MinY + result.Height)
+					{
+						continue;
+					}
+
+					dirty[BuildRangeIndex(result, nx, ny)] = 1;
+				}
+			}
+		}
+
+		for (int y = result.MinY; y < result.MinY + result.Height; ++y)
+		{
+			for (int x = result.MinX; x < result.MinX + result.Width; ++x)
+			{
+				if (dirty[BuildRangeIndex(result, x, y)])
+					RebuildBuildRangeCellEdges(result, x, y);
+			}
+		}
+
+		result.Edges.clear();
+
+		for (auto const& cellEdges : result.CellEdges)
+		{
+			for (BYTE i = 0; i < cellEdges.Count; ++i)
+				result.Edges.push_back(cellEdges.Edges[i]);
+		}
+
+		MergeBuildRangeEdges(result.Edges);
+	}
+
+	bool RefreshBuildRangeData(
+		BuildingClass* pBuilding,
+		BuildRangeStatic& rangeStatic,
+		BuildRangeData& rangeData)
+	{
+		if (!pBuilding || !pBuilding->Type || !pBuilding->Owner
+			|| rangeStatic.Width <= 0 || rangeStatic.Height <= 0)
+		{
+			return false;
+		}
+
+		auto const pType = pBuilding->Type;
+		auto const pOwner = pBuilding->Owner;
+		const size_t cellCount = static_cast<size_t>(rangeStatic.Width)
+			* static_cast<size_t>(rangeStatic.Height);
+
+		if (rangeStatic.Range.size() != cellCount
+			|| rangeStatic.Red.size() != cellCount
+			|| rangeStatic.LegalCount.size() != cellCount
+			|| rangeStatic.Snapshots.size() != cellCount
+			|| rangeData.Cells.size() != cellCount
+			|| rangeData.Heights.size() != cellCount)
+		{
+			return false;
+		}
+
+		std::vector<BYTE> cellChanged(cellCount, 0);
+		std::vector<BYTE> candidateDirty(rangeStatic.Candidates.size(), 0);
+		std::vector<std::uint32_t> dirtyCandidates;
+		dirtyCandidates.reserve(64);
+		rangeData.ChangedCells.clear();
+
+		bool visualChanged = false;
+		bool greenChanged = false;
+		std::vector<int> edgeDirtyCells;
+		auto touchesGreen = [&](int index)
+		{
+			if (rangeData.Cells[index] == BuildRangeCellType::Legal)
+				return true;
+
+			const int x = rangeStatic.MinX + index % rangeStatic.Width;
+			const int y = rangeStatic.MinY + index / rangeStatic.Width;
+
+			if (x > rangeStatic.MinX
+				&& rangeData.Cells[BuildRangeIndex(rangeStatic, x - 1, y)]
+					== BuildRangeCellType::Legal)
+			{
+				return true;
+			}
+
+			if (x + 1 < rangeStatic.MinX + rangeStatic.Width
+				&& rangeData.Cells[BuildRangeIndex(rangeStatic, x + 1, y)]
+					== BuildRangeCellType::Legal)
+			{
+				return true;
+			}
+
+			if (y > rangeStatic.MinY
+				&& rangeData.Cells[BuildRangeIndex(rangeStatic, x, y - 1)]
+					== BuildRangeCellType::Legal)
+			{
+				return true;
+			}
+
+			if (y + 1 < rangeStatic.MinY + rangeStatic.Height
+				&& rangeData.Cells[BuildRangeIndex(rangeStatic, x, y + 1)]
+					== BuildRangeCellType::Legal)
+			{
+				return true;
+			}
+
+			return false;
+		};
+
+		for (int y = rangeStatic.MinY; y < rangeStatic.MinY + rangeStatic.Height; ++y)
+		{
+			for (int x = rangeStatic.MinX; x < rangeStatic.MinX + rangeStatic.Width; ++x)
+			{
+				const int index = BuildRangeIndex(rangeStatic, x, y);
+
+				if (!rangeStatic.Range[index])
+					continue;
+
+				const auto pCell = MapClass::Instance.TryGetCellAt(
+					CellStruct { static_cast<short>(x), static_cast<short>(y) });
+				auto snapshot = CaptureBuildRangeCellSnapshot(pCell);
+				const auto previousSnapshot = rangeStatic.Snapshots[index];
+
+				if (snapshot == previousSnapshot)
+					continue;
+
+				rangeStatic.Snapshots[index] = snapshot;
+				cellChanged[index] = 1;
+
+				// Height is only queried when the cell's height fields changed.
+				// The old code called GetCellCoords() for every cell on every
+				// refresh, which was one of the largest remaining costs.
+				if (snapshot.Level != previousSnapshot.Level
+					|| snapshot.Height != previousSnapshot.Height
+					|| snapshot.IsoTileTypeIndex != previousSnapshot.IsoTileTypeIndex
+					|| snapshot.OverlayTypeIndex != previousSnapshot.OverlayTypeIndex
+					|| snapshot.LandType != previousSnapshot.LandType
+					|| snapshot.SlopeIndex != previousSnapshot.SlopeIndex)
+				{
+					const int newZ = pCell ? pCell->GetCellCoords().Z : 0;
+
+					if (rangeData.Heights[index] != newZ)
+					{
+						rangeData.Heights[index] = newZ;
+						visualChanged = true;
+
+						if (touchesGreen(index))
+							edgeDirtyCells.push_back(index);
+					}
+				}
+
+				const bool red = IsBuildRangeCellBlocked(pCell, pType, pOwner);
+
+				if (rangeStatic.Red[index] != static_cast<BYTE>(red ? 1 : 0))
+					rangeStatic.Red[index] = red ? 1 : 0;
+
+				for (auto const candidateIndex : rangeStatic.CellCandidates[index])
+				{
+					if (candidateDirty[candidateIndex])
+						continue;
+
+					candidateDirty[candidateIndex] = 1;
+					dirtyCandidates.push_back(candidateIndex);
+				}
+			}
+		}
+
+		for (auto const candidateIndex : dirtyCandidates)
+		{
+			auto& candidate = rangeStatic.Candidates[candidateIndex];
+			const bool valid = ValidateBuildRangeCandidate(
+				pType, pOwner, candidate.Anchor, rangeStatic.Foundation);
+
+			if (valid == candidate.Valid)
+				continue;
+
+			candidate.Valid = valid;
+
+			for (auto const& offset : rangeStatic.Foundation)
+			{
+				const CellStruct cell {
+					static_cast<short>(candidate.Anchor.X + offset.X),
+					static_cast<short>(candidate.Anchor.Y + offset.Y)
+				};
+
+				const int index = BuildRangeIndex(rangeStatic, cell.X, cell.Y);
+				cellChanged[index] = 1;
+
+				if (valid)
+				{
+					++rangeStatic.LegalCount[index];
+				}
+				else if (rangeStatic.LegalCount[index] > 0)
+				{
+					--rangeStatic.LegalCount[index];
+				}
+			}
+		}
+
+		const auto pRules = RulesExt::Global();
+		const bool disableRed = pRules->BuildRange_DisableRed;
+		const bool disableYellow = pRules->BuildRange_DisableYellow;
+
+		for (size_t i = 0; i < cellCount; ++i)
+		{
+			if (!cellChanged[i])
+				continue;
+
+			const auto newType = GetBuildRangeDisplayType(
+				rangeStatic.Range[i] != 0,
+				rangeStatic.Red[i] != 0,
+				rangeStatic.LegalCount[i],
+				disableRed,
+				disableYellow);
+
+			if (rangeData.Cells[i] != newType)
+			{
+				const auto oldType = rangeData.Cells[i];
+
+				if (oldType == BuildRangeCellType::Legal
+					|| newType == BuildRangeCellType::Legal)
+				{
+					greenChanged = true;
+				}
+				else if (touchesGreen(static_cast<int>(i)))
+				{
+					edgeDirtyCells.push_back(static_cast<int>(i));
+				}
+
+				rangeData.Cells[i] = newType;
+				rangeData.ChangedCells.push_back(static_cast<int>(i));
+				visualChanged = true;
+			}
+		}
+
+		if (!visualChanged)
+			return false;
+
+		if (greenChanged)
+		{
+			RebuildBuildRangeEdges(rangeData);
+			++CachedBuildRangeEdgeRevision;
+		}
+		else if (!edgeDirtyCells.empty())
+		{
+			RebuildBuildRangeEdgesLocal(rangeData, edgeDirtyCells);
+			++CachedBuildRangeEdgeRevision;
+		}
+
+		return true;
+	}
+
+	struct BuildRangeMapClip
+	{
+		int MinX;
+		int MinY;
+		int MaxX;
+		int MaxY;
+	};
+
+	static BuildRangeMapClip GetBuildRangeMapClip()
+	{
+		const auto& map = MapClass::Instance.MapRect;
+		return {
+			static_cast<int>(map.X),
+			static_cast<int>(map.Y),
+			static_cast<int>(map.X) + static_cast<int>(map.Width),
+			static_cast<int>(map.Y) + static_cast<int>(map.Height)
+		};
+	}
+
+	static bool ClipBuildRangeEdgeToMap(BuildRangeEdge& edge)
+	{
+		const auto clip = GetBuildRangeMapClip();
+
+		if (edge.A.Y == edge.B.Y)
+		{
+			if (edge.A.Y < clip.MinY || edge.A.Y > clip.MaxY)
+				return false;
+
+			const int x0 = std::clamp(
+				std::min(static_cast<int>(edge.A.X), static_cast<int>(edge.B.X)),
+				clip.MinX, clip.MaxX);
+			const int x1 = std::clamp(
+				std::max(static_cast<int>(edge.A.X), static_cast<int>(edge.B.X)),
+				clip.MinX, clip.MaxX);
+
+			if (x0 == x1)
+				return false;
+
+			edge.A.X = static_cast<short>(x0);
+			edge.B.X = static_cast<short>(x1);
+			return true;
+		}
+
+		if (edge.A.X == edge.B.X)
+		{
+			if (edge.A.X < clip.MinX || edge.A.X > clip.MaxX)
+				return false;
+
+			const int y0 = std::clamp(
+				std::min(static_cast<int>(edge.A.Y), static_cast<int>(edge.B.Y)),
+				clip.MinY, clip.MaxY);
+			const int y1 = std::clamp(
+				std::max(static_cast<int>(edge.A.Y), static_cast<int>(edge.B.Y)),
+				clip.MinY, clip.MaxY);
+
+			if (y0 == y1)
+				return false;
+
+			edge.A.Y = static_cast<short>(y0);
+			edge.B.Y = static_cast<short>(y1);
+			return true;
+		}
+
+		return false;
 	}
 
 	CoordStruct CellCornerToWorld(const CellStruct& corner, int z)
@@ -902,11 +1626,20 @@ namespace
 
 	static bool ProjectBuildRangeCell(int x, int y, Point2D (&points)[4])
 	{
+		const auto clip = GetBuildRangeMapClip();
+		const int x0 = std::max(x, clip.MinX);
+		const int x1 = std::min(x + 1, clip.MaxX);
+		const int y0 = std::max(y, clip.MinY);
+		const int y1 = std::min(y + 1, clip.MaxY);
+
+		if (x0 >= x1 || y0 >= y1)
+			return false;
+
 		const CellStruct corners[4] = {
-			{ static_cast<short>(x), static_cast<short>(y) },
-			{ static_cast<short>(x + 1), static_cast<short>(y) },
-			{ static_cast<short>(x + 1), static_cast<short>(y + 1) },
-			{ static_cast<short>(x), static_cast<short>(y + 1) }
+			{ static_cast<short>(x0), static_cast<short>(y0) },
+			{ static_cast<short>(x1), static_cast<short>(y0) },
+			{ static_cast<short>(x1), static_cast<short>(y1) },
+			{ static_cast<short>(x0), static_cast<short>(y1) }
 		};
 
 		for (int i = 0; i < 4; ++i)
@@ -961,18 +1694,24 @@ namespace
 
 		const bool sameView =
 			CachedBuildRangeFill.Valid
-			&& CachedBuildRangeFill.Revision == CachedBuildRangeRevision
 			&& CachedBuildRangeFill.TacticalPos.X == tacticalPos.X
 			&& CachedBuildRangeFill.TacticalPos.Y == tacticalPos.Y
 			&& CachedBuildRangeFill.Zoom == zoom
 			&& CachedBuildRangeFill.View.X == view.X
 			&& CachedBuildRangeFill.View.Y == view.Y
 			&& CachedBuildRangeFill.View.Width == view.Width
-			&& CachedBuildRangeFill.View.Height == view.Height;
+			&& CachedBuildRangeFill.View.Height == view.Height
+			&& CachedBuildRangeFill.MaskWidth == clip.Width
+			&& CachedBuildRangeFill.MaskHeight == clip.Height;
+
+		bool rebuildRects = false;
 
 		if (!sameView)
 		{
-			std::vector<BYTE> mask(static_cast<size_t>(clip.Width) * clip.Height, 0);
+			CachedBuildRangeFill.Mask.assign(
+				static_cast<size_t>(clip.Width) * clip.Height, 0);
+			CachedBuildRangeFill.MaskWidth = clip.Width;
+			CachedBuildRangeFill.MaskHeight = clip.Height;
 
 			for (int y = data.MinY; y < data.MinY + data.Height; ++y)
 			{
@@ -984,11 +1723,93 @@ namespace
 						continue;
 
 					Point2D points[4];
-					ProjectBuildRangeCell(x, y, points);
-					RasterizeBuildRangeCell(mask, clip, points, value);
+
+					if (ProjectBuildRangeCell(x, y, points))
+						RasterizeBuildRangeCell(CachedBuildRangeFill.Mask, clip, points, value);
 				}
 			}
 
+			rebuildRects = true;
+		}
+		else if (CachedBuildRangeFill.Revision != CachedBuildRangeRevision
+			&& !data.ChangedCells.empty())
+		{
+			auto& mask = CachedBuildRangeFill.Mask;
+
+			for (auto const index : data.ChangedCells)
+			{
+				const int x = data.MinX + index % data.Width;
+				const int y = data.MinY + index / data.Width;
+				Point2D points[4];
+
+				if (!ProjectBuildRangeCell(x, y, points))
+					continue;
+
+				int minX = static_cast<int>(points[0].X);
+				int maxX = minX;
+				int minY = static_cast<int>(points[0].Y);
+				int maxY = minY;
+
+				for (int i = 1; i < 4; ++i)
+				{
+					minX = std::min(minX, static_cast<int>(points[i].X));
+					maxX = std::max(maxX, static_cast<int>(points[i].X));
+					minY = std::min(minY, static_cast<int>(points[i].Y));
+					maxY = std::max(maxY, static_cast<int>(points[i].Y));
+				}
+
+				const int clearX0 = std::max(clip.X, minX - 2);
+				const int clearX1 = std::min(clip.X + clip.Width - 1, maxX + 2);
+				const int clearY0 = std::max(clip.Y, minY - 2);
+				const int clearY1 = std::min(clip.Y + clip.Height - 1, maxY + 2);
+
+				for (int cy = clearY0; cy <= clearY1; ++cy)
+				{
+					BYTE* const row = mask.data()
+						+ static_cast<size_t>(cy - clip.Y) * clip.Width;
+
+					for (int cx = clearX0; cx <= clearX1; ++cx)
+						row[cx - clip.X] = 0;
+				}
+
+				// Re-rasterize the changed cell and its neighbours because
+				// projected cell quads can overlap by one pixel.
+				for (int dy = -1; dy <= 1; ++dy)
+				{
+					for (int dx = -1; dx <= 1; ++dx)
+					{
+						const int nx = x + dx;
+						const int ny = y + dy;
+
+						if (nx < data.MinX || nx >= data.MinX + data.Width
+							|| ny < data.MinY || ny >= data.MinY + data.Height)
+						{
+							continue;
+						}
+
+						const BYTE value = static_cast<BYTE>(
+							data.Cells[BuildRangeIndex(data, nx, ny)]);
+
+						if (value == 0)
+							continue;
+
+						Point2D neighbourPoints[4];
+
+						if (ProjectBuildRangeCell(nx, ny, neighbourPoints))
+						{
+							RasterizeBuildRangeCell(
+								CachedBuildRangeFill.Mask, clip, neighbourPoints, value);
+						}
+					}
+				}
+			}
+
+			rebuildRects = true;
+		}
+
+		if (rebuildRects)
+		{
+			auto const& mask = CachedBuildRangeFill.Mask;
 			std::vector<BuildRangeSpan> spans;
 			spans.reserve(static_cast<size_t>(clip.Height) * 4);
 
@@ -1068,10 +1889,10 @@ namespace
 				}
 			}
 
-			for (auto const& [key, rect] : open)
+			for (auto const& [key, fillRect] : open)
 			{
 				(void)key;
-				CachedBuildRangeFill.Rects.push_back(rect);
+				CachedBuildRangeFill.Rects.push_back(fillRect);
 			}
 
 			CachedBuildRangeFill.Revision = CachedBuildRangeRevision;
@@ -1080,6 +1901,8 @@ namespace
 			CachedBuildRangeFill.View = view;
 			CachedBuildRangeFill.Valid = true;
 		}
+
+		CachedBuildRangeFill.Revision = CachedBuildRangeRevision;
 
 		if (CachedBuildRangeFill.Rects.empty())
 			return;
@@ -1142,20 +1965,20 @@ namespace
 			CachedBuildRangeLut.Valid = true;
 		}
 
-		for (auto const& rect : CachedBuildRangeFill.Rects)
+		for (auto const& fillRect : CachedBuildRangeFill.Rects)
 		{
-			for (int y = rect.Y; y < rect.Y + rect.Height; ++y)
+			for (int y = fillRect.Y; y < fillRect.Y + fillRect.Height; ++y)
 			{
 				BYTE* const row = base + static_cast<size_t>(y) * pitch;
 
-				for (int x = rect.X; x < rect.X + rect.Width; ++x)
+				for (int x = fillRect.X; x < fillRect.X + fillRect.Width; ++x)
 				{
 					BYTE* const pixel = row + static_cast<size_t>(x) * bpp;
 
 					if (bpp == 2)
 					{
 						WORD& destination = *reinterpret_cast<WORD*>(pixel);
-						destination = CachedBuildRangeLut.Lut[rect.Type][destination];
+						destination = CachedBuildRangeLut.Lut[fillRect.Type][destination];
 					}
 					else
 					{
@@ -1163,7 +1986,7 @@ namespace
 						const int dr = static_cast<int>((destination >> 16) & 0xFF);
 						const int dg = static_cast<int>((destination >> 8) & 0xFF);
 						const int db = static_cast<int>(destination & 0xFF);
-						const auto& color = colors[rect.Type];
+						const auto& color = colors[fillRect.Type];
 
 						const int r = (static_cast<int>(color.R) * opacity + dr * inverseOpacity) / 100;
 						const int g = (static_cast<int>(color.G) * opacity + dg * inverseOpacity) / 100;
@@ -1194,7 +2017,7 @@ namespace
 
 		const bool sameView =
 			CachedBuildRangeOutline.Valid
-			&& CachedBuildRangeOutline.Revision == CachedBuildRangeRevision
+			&& CachedBuildRangeOutline.Revision == CachedBuildRangeEdgeRevision
 			&& CachedBuildRangeOutline.TacticalPos.X == tacticalPos.X
 			&& CachedBuildRangeOutline.TacticalPos.Y == tacticalPos.Y
 			&& CachedBuildRangeOutline.Zoom == zoom
@@ -1210,8 +2033,13 @@ namespace
 
 			for (auto const& edge : data.Edges)
 			{
-				const CoordStruct worldA = CellCornerToWorld(edge.A, edge.Z);
-				const CoordStruct worldB = CellCornerToWorld(edge.B, edge.Z);
+				BuildRangeEdge clipped = edge;
+
+				if (!ClipBuildRangeEdgeToMap(clipped))
+					continue;
+
+				const CoordStruct worldA = CellCornerToWorld(clipped.A, clipped.Z);
+				const CoordStruct worldB = CellCornerToWorld(clipped.B, clipped.Z);
 				auto const [screenA, visibleA] = TacticalClass::Instance->CoordsToClient(worldA);
 				auto const [screenB, visibleB] = TacticalClass::Instance->CoordsToClient(worldB);
 
@@ -1227,7 +2055,7 @@ namespace
 				CachedBuildRangeOutline.Edges.push_back({ start, end });
 			}
 
-			CachedBuildRangeOutline.Revision = CachedBuildRangeRevision;
+			CachedBuildRangeOutline.Revision = CachedBuildRangeEdgeRevision;
 			CachedBuildRangeOutline.TacticalPos = tacticalPos;
 			CachedBuildRangeOutline.Zoom = zoom;
 			CachedBuildRangeOutline.View = view;
@@ -1260,37 +2088,60 @@ namespace
 		const auto pRules = RulesExt::Global();
 		const unsigned int refreshFrames = static_cast<unsigned int>(
 			std::clamp(static_cast<int>(pRules->BuildRange_RefreshFrames), 1, 60));
-		const bool navalStatic = pType->Naval;
+		const std::uint64_t foundationHash = HashBuildRangeFoundation(
+			DisplayClass::Instance.CurrentFoundation_Data);
 
-		// Naval buildings keep a static range for the whole placement UI session.
-		// Their Adjacent=15 range is very expensive to classify, and the user
-		// explicitly requested no dynamic refresh for shipyards.
-		if (!CachedBuildRangeType
+		bool rebuildStatic = !CachedBuildRangeType
 			|| CachedBuildRangeType != pType
 			|| CachedBuildRangeOwner != pOwner
-			|| (!navalStatic && frame - CachedBuildRangeFrame >= refreshFrames))
-		{
-			BuildRangeData newData = BuildBuildRangeData(pBuilding);
-			const std::uint64_t dataHash = HashBuildRangeData(newData);
+			|| CachedBuildRangeFoundationHash != foundationHash
+			|| CachedBuildRangeData.Cells.empty();
 
-			if (dataHash != CachedBuildRangeDataHash || CachedBuildRangeData.Cells.empty())
+		if (!rebuildStatic && frame - CachedBuildRangeFrame >= refreshFrames)
+		{
+			const int buildingCount = BuildingClass::Array.Count;
+			const bool checkBase = CachedBuildRangeBaseBuildingCount != buildingCount
+				|| frame - CachedBuildRangeBaseCheckFrame >= refreshFrames * 4;
+
+			if (checkBase)
 			{
-				CachedBuildRangeData = std::move(newData);
-				CachedBuildRangeDataHash = dataHash;
+				const std::uint64_t baseSignature = HashBuildRangeBaseSignature(pOwner);
+				CachedBuildRangeBaseBuildingCount = buildingCount;
+				CachedBuildRangeBaseCheckFrame = frame;
+
+				if (baseSignature != CachedBuildRangeBaseSignature)
+					rebuildStatic = true;
+			}
+
+			if (!rebuildStatic
+				&& RefreshBuildRangeData(
+					pBuilding, CachedBuildRangeStatic, CachedBuildRangeData))
+			{
 				++CachedBuildRangeRevision;
 			}
 
-			CachedBuildRangeType = pType;
-			CachedBuildRangeOwner = pOwner;
 			CachedBuildRangeFrame = frame;
 		}
 
-		// Naval/water buildings keep only the dashed outline. Their Adjacent
-		// range is much larger than land buildings, and the colour fill is not
-		// useful over water; skipping it also avoids the large-area fill cost.
-		if (!pType->Naval)
-			DrawBuildRangeFill(CachedBuildRangeData);
+		if (rebuildStatic)
+		{
+			BuildRangeData newData = BuildBuildRangeData(
+				pBuilding, CachedBuildRangeStatic);
+			CachedBuildRangeData = std::move(newData);
+			CachedBuildRangeType = pType;
+			CachedBuildRangeOwner = pOwner;
+			CachedBuildRangeFoundationHash = foundationHash;
+			CachedBuildRangeBaseSignature = HashBuildRangeBaseSignature(pOwner);
+			CachedBuildRangeBaseBuildingCount = BuildingClass::Array.Count;
+			CachedBuildRangeBaseCheckFrame = frame;
+			CachedBuildRangeFrame = frame;
+			CachedBuildRangeFill.Valid = false;
+			CachedBuildRangeOutline.Valid = false;
+			++CachedBuildRangeRevision;
+			++CachedBuildRangeEdgeRevision;
+		}
 
+		DrawBuildRangeFill(CachedBuildRangeData);
 		DrawBuildRangeOutline(CachedBuildRangeData);
 	}
 }

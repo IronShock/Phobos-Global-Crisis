@@ -533,6 +533,8 @@ The colour priority is **red > green > yellow**; a cell that is both a valid gre
 
 The original **white dashed outline** of the green legal area is kept. It is also drawn along boundaries between green and red/yellow cells. Edges around empty enclosed holes are not drawn; red/yellow areas that do not border green have no white outline. The overlay is drawn under units and buildings, is client-side only and does not affect multiplayer synchronisation.
 
+The range footprint is cached when the building type, owner, foundation, map or nearby base set changes. After that, a refresh compares the cheap per-cell state and revalidates only cells whose state changed, plus the candidate foundations that cover them. The same path is used for land and naval buildings, and naval buildings also receive the colour fill.
+
 `BuildRange.DisableYellow=yes` merges all yellow cells into red; green remains green. `BuildRange.DisableRed=yes` makes the entire actual range green and overrides `DisableYellow`.
 
 In `rulesmd.ini`:
@@ -546,7 +548,7 @@ BuildRange.Color.Legal=0,255,0   ; R,G,B - complete foundation can be placed
 BuildRange.Color.Blocked=255,255,0 ; R,G,B - actual range not green/red
 BuildRange.Color.Occupied=255,0,0 ; R,G,B - cell build check failed
 BuildRange.FillOpacity=5         ; integer 0-100 - fill opacity
-BuildRange.RefreshFrames=15      ; integer 1-60 - occupancy refresh interval
+BuildRange.RefreshFrames=15      ; integer 1-60 - dynamic cell refresh interval
 ```
 
 ### Real time timers
