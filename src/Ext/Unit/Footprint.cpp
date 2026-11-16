@@ -3927,8 +3927,17 @@ bool Footprint::IsMouseOverCarrierHull(TechnoClass* pCarrier)
 
 	// SHP bodies are drawn with Centered blitting, so the frame centre is the
 	// object's screen anchor. A rectangle is a safe superset of the hull.
-	return mouse.X >= screen.X - halfW && mouse.X <= screen.X + halfW
-		&& mouse.Y >= screen.Y - halfH && mouse.Y <= screen.Y + halfH;
+	// WWMouse may expose screen or tactical-client coordinates depending on
+	// the renderer; test both bases.
+	const Point2D client = screen - TacticalClass::Instance->TacticalPos;
+
+	auto inRect = [&](const Point2D& base)
+	{
+		return mouse.X >= base.X - halfW && mouse.X <= base.X + halfW
+			&& mouse.Y >= base.Y - halfH && mouse.Y <= base.Y + halfH;
+	};
+
+	return inRect(screen) || inRect(client);
 }
 
 void Footprint::CaptureCarrierHullClick()
@@ -7147,6 +7156,12 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 					return false;
 				}
 			}
+
+			// The engine writes the aircraft's own cell as a destination during
+			// selection/idle bookkeeping. That is not a move order; ignoring it
+			// stops the final approach from being cancelled every frame.
+			if (HorizontalDistance(destCoords, pAircraft->Location) <= 512.0)
+				return false;
 
 			// The auto-return standoff cell is a few cells behind the ship and
 			// can be farther than the stored CarrierPayloadReturnCell. A target

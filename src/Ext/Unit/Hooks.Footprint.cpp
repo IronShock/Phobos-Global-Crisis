@@ -53,6 +53,7 @@ static bool IsCommandCaller(DWORD retAddr)
 {
 	switch (retAddr)
 	{
+	case 0x4AACD9: // command click path
 	case 0x693175: // LeftMouseButtonDown/Up path -> DecideAction
 	case 0x693263: // same
 	case 0x693306: // same
@@ -79,7 +80,14 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 	GET_STACK(CellStruct*, pResolvedCell, 0x2c);
 	GET_STACK(DWORD, retAddr, 0x28);
 
-	const bool commandClick = IsCommandCaller(retAddr);
+	// Only act while the left button is down, or on the release frame. This is
+	// the same gate that worked before; the command caller alone also fires on
+	// pure hover.
+	static bool s_wasDown = false;
+	const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+	const bool held = down || s_wasDown;
+	s_wasDown = down;
+	const bool commandClick = IsCommandCaller(retAddr) && held;
 
 	if (pResolvedCell
 		&& pResolvedCell->X >= 0 && pResolvedCell->Y >= 0
@@ -123,8 +131,9 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 		// object under a peripheral hull cell.
 		Footprint::CaptureCarrierHullClick();
 
-		if (!pTarget && pResolvedCell)
-			Footprint::CaptureClickDestination(*pResolvedCell);
+		// The resolved-cell stack value is not reliable in this build; do not
+		// use it for command capture. Takeoff/cancel are driven by the engine's
+		// AssignDestination; hull return uses CaptureCarrierHullClick.
 	}
 
 	if (pTarget)

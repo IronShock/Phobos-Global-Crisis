@@ -49,7 +49,16 @@ DEFINE_HOOK(0x6F9E50, TechnoClass_AI, 0x5)
 {
 	GET(TechnoClass*, pThis, ECX);
 
-	TechnoExt::ExtMap.Find(pThis)->OnEarlyUpdate();
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	pExt->OnEarlyUpdate();
+
+	// The LaserTrail update routine lives in TechnoClass::AI. It was missing
+	// for aircraft, which is why the J35 had no trail at the takeoff roll.
+	// The carrier gate inside UpdateLaserTrails keeps parked aircraft hidden
+	// and enables the trail only while the runway roll wants it.
+	if (pThis->WhatAmI() == AbstractType::Aircraft)
+		pExt->UpdateLaserTrails();
+
 	Footprint::LockParkedCarrierPayload(pThis);
 
 	return 0;
