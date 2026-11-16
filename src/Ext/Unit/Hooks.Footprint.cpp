@@ -116,8 +116,16 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 		Footprint::CaptureCarrierReturnClick(pTechnoTarget);
 	}
 
-	if (commandClick && !pTarget && pResolvedCell)
-		Footprint::CaptureClickDestination(*pResolvedCell);
+	if (commandClick)
+	{
+		// A click anywhere on the carrier's drawn hull is a return order,
+		// independent of the resolved cell or whether the engine found an
+		// object under a peripheral hull cell.
+		Footprint::CaptureCarrierHullClick();
+
+		if (!pTarget && pResolvedCell)
+			Footprint::CaptureClickDestination(*pResolvedCell);
+	}
 
 	if (pTarget)
 	{

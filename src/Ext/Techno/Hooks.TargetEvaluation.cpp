@@ -1047,21 +1047,12 @@ Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* 
 		if (pObj == pCarrier)
 			return Action::Enter;
 
-		// The carrier is a multi-cell hull; hovering a peripheral deck cell
-		// has no object under the cursor, so the anchor-only check above showed
-		// a plain Move cursor. Use the cell DisplayClass::ProcessClickCoords
-		// resolved this frame (never recompute it from mouse screen coords).
-		if (!pObj)
-		{
-			const CellStruct cell = Footprint::GetLastMouseCell();
-
-			if (cell.X >= 0 && cell.Y >= 0
-				&& cell.X < MapClass::MaxCells && cell.Y < MapClass::MaxCells)
-			{
-				if (Footprint::IsCarrierHullCell(pCarrier, cell))
-					return Action::Enter;
-			}
-		}
+		// The carrier is a multi-cell SHP; hovering a peripheral deck cell has
+		// no object under the cursor and cell resolution is unreliable. Use the
+		// drawn hull's screen rectangle instead: any hull-area hover shows the
+		// return cursor.
+		if (!pObj && Footprint::IsMouseOverCarrierHull(pCarrier))
+			return Action::Enter;
 
 		if (!pObj && result == Action::Move && Footprint::IsCarrierPayloadParked(pThis))
 			pThis->InAir = true;

@@ -622,6 +622,12 @@ public:
 	// WWMouse screen coordinates (that conversion was off by TacticalPos).
 	static void SetLastMouseCell(const CellStruct& cell);
 	static CellStruct GetLastMouseCell();
+	// Screen-space hull hover test. The carrier is a large SHP; using the
+	// drawn frame avoids relying on cell resolution for peripheral hull cells.
+	static bool IsMouseOverCarrierHull(TechnoClass* pCarrier);
+	// Click on any hull cell: treat as "return to the carrier" for every
+	// selected carrier payload. Call from the real command-click path.
+	static void CaptureCarrierHullClick();
 	static void CaptureAttackClick(TechnoClass* pTarget);
 	// Deferred landing/takeoff entry points. Hooks and click handling must only
 	// queue these; the actual aircraft state change happens once per frame in

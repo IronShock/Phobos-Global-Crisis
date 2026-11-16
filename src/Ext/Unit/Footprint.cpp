@@ -3230,22 +3230,42 @@ void Footprint::NotifyDestinationAssigned(TechnoClass* pThis, AbstractClass* pDe
 
 	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
 
-	if (index >= pState->CarrierPayloadDocked.size() || pState->CarrierPayloadDocked[index] != 1)
+	if (index >= pState->CarrierPayloadDocked.size())
 		return;
 
-	// Do NOT turn this into a launch request. AssignDestination is also used
-	// by the engine for selection/return/landing bookkeeping; doing so made a
-	// parked aircraft take off just because it was selected. Launch requests
-	// are captured only from real player clicks (CaptureClickDestination /
-	// CaptureAttackClick).
+	const unsigned char payloadState = pState->CarrierPayloadDocked[index];
 	const auto destCoords = pDest->GetCoords();
+	const double carrierDistance = destCoords.DistanceFrom(pCarrier->GetCoords());
 
-	Debug::CarrierLog("[CarrierCmd] AssignDest slot=%d selected=%d state=%d mission=%d destCell=(%d,%d,%d) plane=(%d,%d,%d)\n",
+	// The engine always calls this with the real clicked destination. Use it
+	// directly instead of depending on our own mouse-cell conversion:
+	//  - parked + selected + destination far from the ship => takeoff;
+	//  - airborne + selected + destination on/at the ship => return/landing.
+	if (pAircraft->IsSelected && payloadState == 1 && carrierDistance > 512.0)
+	{
+		if (index < pState->CarrierPayloadLaunchRequest.size())
+			pState->CarrierPayloadLaunchRequest[index] = 1;
+
+		if (index < pState->CarrierPayloadRequestedDest.size())
+			pState->CarrierPayloadRequestedDest[index] = CellClass::Coord2Cell(destCoords);
+
+		QueueCarrierTakeoffIntent(pAircraft, pCarrier);
+	}
+	else if (pAircraft->IsSelected && payloadState == 0 && carrierDistance <= 4096.0)
+	{
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+		if (pTypeExt && HasRunwayMode(pTypeExt, true))
+			QueueCarrierLandingIntent(pAircraft, pCarrier, -1, false, false);
+	}
+
+	Debug::CarrierLog("[CarrierCmd] AssignDest slot=%d selected=%d state=%d mission=%d destCell=(%d,%d,%d) plane=(%d,%d,%d) dist=%.0f\n",
 		static_cast<int>(index), pAircraft->IsSelected ? 1 : 0,
-		static_cast<int>(pState->CarrierPayloadDocked[index]),
+		static_cast<int>(payloadState),
 		static_cast<int>(pAircraft->GetCurrentMission()),
 		destCoords.X, destCoords.Y, destCoords.Z,
-		pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
+		pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z,
+		carrierDistance);
 }
 
 void Footprint::LogPayloadCommand(const char* tag, TechnoClass* pThis, AbstractClass* pTarget)
@@ -3878,6 +3898,83 @@ bool Footprint::CaptureCarrierReturnClick(TechnoClass* pTarget)
 	}
 
 	return handled;
+}
+
+bool Footprint::IsMouseOverCarrierHull(TechnoClass* pCarrier)
+{
+	if (!pCarrier || !pCarrier->GetTechnoType() || !WWMouseClass::Instance
+		|| !TacticalClass::Instance)
+	{
+		return false;
+	}
+
+	auto const pImage = pCarrier->GetTechnoType()->Image;
+
+	if (!pImage || pImage->Frames <= 0)
+		return false;
+
+	Point2D mouse { 0, 0 };
+	WWMouseClass::Instance->GetCoords(&mouse);
+
+	const auto screen = TacticalClass::CoordsToScreen(pCarrier->GetRenderCoords());
+	const int frame = std::clamp(
+		static_cast<int>(pCarrier->PrimaryFacing.Current().GetFacing<64>()),
+		0, static_cast<int>(pImage->Frames) - 1);
+	const auto bounds = pImage->GetFrameBounds(frame);
+
+	const int halfW = std::max(1, (bounds.Width > 0 ? bounds.Width : pImage->Width) / 2);
+	const int halfH = std::max(1, (bounds.Height > 0 ? bounds.Height : pImage->Height) / 2);
+
+	// SHP bodies are drawn with Centered blitting, so the frame centre is the
+	// object's screen anchor. A rectangle is a safe superset of the hull.
+	return mouse.X >= screen.X - halfW && mouse.X <= screen.X + halfW
+		&& mouse.Y >= screen.Y - halfH && mouse.Y <= screen.Y + halfH;
+}
+
+void Footprint::CaptureCarrierHullClick()
+{
+	for (int i = 0; i < ObjectClass::CurrentObjects.Count; ++i)
+	{
+		auto const pTechno = abstract_cast<TechnoClass*>(ObjectClass::CurrentObjects.GetItem(i));
+
+		if (!pTechno || !pTechno->IsSelected || pTechno->WhatAmI() != AbstractType::Aircraft)
+			continue;
+
+		auto const pAircraft = static_cast<AircraftClass*>(pTechno);
+		auto const pCarrier = GetCarrierPayloadOwner(pAircraft);
+
+		if (!pCarrier || !pCarrier->IsAlive || !IsMouseOverCarrierHull(pCarrier))
+			continue;
+
+		auto const pState = GetState(pCarrier);
+
+		if (!pState)
+			continue;
+
+		auto const it = std::find(pState->CarrierPayloads.begin(),
+			pState->CarrierPayloads.end(), pAircraft);
+
+		if (it == pState->CarrierPayloads.end())
+			continue;
+
+		const size_t index = static_cast<size_t>(
+			std::distance(pState->CarrierPayloads.begin(), it));
+
+		if (index >= pState->CarrierPayloadDocked.size())
+			continue;
+
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+		if (!pTypeExt || !HasRunwayMode(pTypeExt, true))
+			continue;
+
+		if (pState->CarrierPayloadDocked[index] == 0)
+		{
+			QueueCarrierLandingIntent(pAircraft, pCarrier, -1, false, false);
+			Debug::CarrierLog("[CarrierHullClick] %s return via hull\n",
+				pAircraft->Type ? pAircraft->Type->ID : "?");
+		}
+	}
 }
 
 void Footprint::QueueCarrierLandingIntent(AircraftClass* pAircraft, UnitClass* pCarrier,
