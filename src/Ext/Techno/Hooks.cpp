@@ -73,6 +73,14 @@ DEFINE_HOOK(0x4DA54E, FootClass_AI, 0x6)
 	pExt->UpdateWarpInDelay();
 	pExt->UpdateTiberiumEater();
 
+	// The deck controller owns every payload state except normal airborne
+	// flight. Letting the rest of FootClass::AI run applies the flying
+	// locomotor's per-tick position/facing after the deck pin, which is the
+	// source of the parked/landing convulsions. Skip straight to the
+	// function epilogue; AircraftClass::Update still runs the controller.
+	if (Footprint::IsCarrierPayloadDeckControlled(pThis))
+		return 0x4DAF00;
+
 	return 0;
 }
 

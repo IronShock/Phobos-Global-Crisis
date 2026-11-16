@@ -3089,6 +3089,38 @@ bool Footprint::IsCarrierPayloadParked(TechnoClass* pPayload)
 		&& pState->CarrierPayloadDocked[index] == 1;
 }
 
+bool Footprint::IsCarrierPayloadDeckControlled(TechnoClass* pPayload)
+{
+	if (!pPayload || pPayload->WhatAmI() != AbstractType::Aircraft)
+		return false;
+
+	const auto pCarrier = GetCarrierPayloadOwner(pPayload);
+
+	if (!pCarrier || !pCarrier->IsAlive)
+		return false;
+
+	const auto pState = GetState(pCarrier);
+
+	if (!pState)
+		return false;
+
+	const auto pAircraft = static_cast<AircraftClass*>(pPayload);
+	const auto it = std::find(pState->CarrierPayloads.begin(), pState->CarrierPayloads.end(), pAircraft);
+
+	if (it == pState->CarrierPayloads.end())
+		return false;
+
+	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
+
+	if (index >= pState->CarrierPayloadDocked.size())
+		return false;
+
+	const unsigned char state = pState->CarrierPayloadDocked[index];
+
+	// State 0 is normal airborne flight and must keep the engine's AI.
+	return state >= 1 && state <= 8;
+}
+
 void Footprint::NotifyDestinationAssigned(TechnoClass* pThis, AbstractClass* pDest)
 {
 	if (!pThis || !pDest || pThis->WhatAmI() != AbstractType::Aircraft)

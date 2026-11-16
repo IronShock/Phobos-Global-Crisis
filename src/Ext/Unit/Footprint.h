@@ -641,6 +641,10 @@ public:
 	static void ProcessPendingKills();
 	static UnitClass* GetCarrierPayloadOwner(TechnoClass* pPayload);
 	static bool IsCarrierPayloadParked(TechnoClass* pPayload);
+	// True for every payload state whose movement is owned by the deck
+	// controller (parked, returning, landing, takeoff/runway). State 0
+	// (normal airborne flight) is the only one the engine may drive.
+	static bool IsCarrierPayloadDeckControlled(TechnoClass* pPayload);
 	// state 3/4/5: final approach or vertical descent. The engine aircraft
 	// update is skipped so the autopilot fully owns movement.
 	static bool IsCarrierPayloadLanding(TechnoClass* pPayload);
