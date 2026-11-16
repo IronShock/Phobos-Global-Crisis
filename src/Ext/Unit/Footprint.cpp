@@ -3633,10 +3633,32 @@ bool Footprint::ShouldSuppressCarrierMission(TechnoClass* pPayload, Mission miss
 	if (payloadState == 6 || payloadState == 7 || payloadState == 8)
 		return mission != Mission::Sleep;
 
+	// A parked payload is owned by the deck pin. The engine's idle mission AI
+	// otherwise re-queues Guard/Area_Guard every tick and re-assigns the
+	// aircraft's own slot cell as a destination, which makes the whole deck
+	// drift and rotate. Move/Attack/Stop stay allowed so player/AI launch
+	// orders can still be detected by the state-1 handler.
+	if (payloadState == 1)
+	{
+		switch (mission)
+		{
+		case Mission::Enter:
+		case Mission::Return:
+		case Mission::Guard:
+		case Mission::Area_Guard:
+		case Mission::Hunt:
+		case Mission::Ambush:
+		case Mission::Sticky:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	// Enter/Return is the vanilla "go home" mission. A carrier has no native
-	// dock, so this path retries/re-enters forever. For a parked or already
-	// returning payload it must never reach MissionClass. For an airborne
-	// payload it is converted into our deferred landing intent.
+	// dock, so this path retries/re-enters forever. For an already returning
+	// payload it must never reach MissionClass. For an airborne payload it is
+	// converted into our deferred landing intent.
 	if (mission == Mission::Enter || mission == Mission::Return)
 	{
 		if (payloadState != 0)
@@ -4442,6 +4464,22 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		runway.TrailEnabled = false;
 		state = 6;
 
+		// The engine may already have lifted the aircraft (a Move order was
+		// processed before this deferred takeoff intent). Snap it back to its
+		// deck slot before the taxi path starts; otherwise the controller
+		// turns in place at altitude and never reaches the runway.
+		const auto slotCoords = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+		pAircraft->SetLocation(slotCoords);
+		pAircraft->InAir = false;
+
+		if (auto const pFly = locomotion_cast<FlyLocomotionClass*>(pAircraft->Locomotor))
+		{
+			pFly->IsLanding = false;
+			pFly->IsTakingOff = false;
+			pFly->IsElevating = false;
+			pFly->FlightLevel = 0;
+		}
+
 		// Keep the command captured from the parked order (or queued pending
 		// command). Further commands issued during taxi/roll/departure update
 		// the same memory and are executed after departure completes.
@@ -4920,9 +4958,12 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				const double distance = HorizontalDistance(current, target);
 
 				// Vehicle-like turn at every waypoint: stop, rotate in place,
-				// then start the next segment.
+				// then start the next segment. Keep the aircraft on the deck
+				// during the turn; if the engine lifted it before the deferred
+				// takeoff started, the old code turned forever at altitude.
 				if (runway.Timer > 0)
 				{
+					current.Z = target.Z;
 					const auto desired = GetRunwayDirection(current, target);
 					TurnAircraftToward(pAircraft, desired, GetRunwayTurnRate(pTypeExt));
 					pAircraft->SetLocation(current);
@@ -4930,8 +4971,12 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 					const int diff = std::abs(static_cast<short>(
 						desired.Raw - pAircraft->PrimaryFacing.Current().Raw));
+					++runway.Timer;
 
-					if (diff <= 256)
+					// The engine's facing can be restored every tick by its
+					// own locomotor. Break the deadlock after a short grace
+					// period and snap to the path direction.
+					if (diff <= 256 || runway.Timer > 180)
 					{
 						pAircraft->PrimaryFacing.SetCurrent(desired);
 						pAircraft->PrimaryFacing.SetDesired(desired);

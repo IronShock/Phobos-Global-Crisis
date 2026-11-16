@@ -51,18 +51,51 @@ DEFINE_HOOK(0x736BE2, UnitClass_UpdateRotation_FootprintAim, 0x6)
 // engine's button-up handler still sees the command frame).
 static bool IsTacticalCommandClick()
 {
-	static int s_tailCalls = 0;
+	static bool s_wasDown = false;
+	static bool s_dragged = false;
+	static Point2D s_press { 0, 0 };
+	static int s_window = 0;
 
-	const SHORT state = GetAsyncKeyState(VK_LBUTTON);
-	const bool down = (state & 0x8000) != 0;
-	const bool fresh = (state & 0x0001) != 0;
+	const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 
-	if (down || fresh)
-		s_tailCalls = 3;
-	else if (s_tailCalls > 0)
-		--s_tailCalls;
+	Point2D current { 0, 0 };
 
-	return down || fresh || s_tailCalls > 0;
+	if (WWMouseClass::Instance)
+		WWMouseClass::Instance->GetCoords(&current);
+
+	if (down && !s_wasDown)
+	{
+		// Do not issue anything on press: a press may still become a drag
+		// (selection box / map scroll). The command is captured on release.
+		s_press = current;
+		s_dragged = false;
+		s_window = 0;
+	}
+	else if (down)
+	{
+		const int dx = current.X > s_press.X ? current.X - s_press.X : s_press.X - current.X;
+		const int dy = current.Y > s_press.Y ? current.Y - s_press.Y : s_press.Y - current.Y;
+
+		if (dx > 4 || dy > 4)
+		{
+			s_dragged = true;
+			s_window = 0;
+		}
+	}
+	else if (s_wasDown)
+	{
+		// Release of a clean click: keep the window for the few calls the
+		// engine uses to execute the command after button-up.
+		s_window = s_dragged ? 0 : 3;
+	}
+	else if (s_window > 0)
+	{
+		--s_window;
+	}
+
+	s_wasDown = down;
+
+	return s_window > 0;
 }
 
 // DisplayClass::ProcessClickCoords applies selectability filters after the
