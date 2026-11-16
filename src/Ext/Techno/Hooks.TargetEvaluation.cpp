@@ -1058,7 +1058,10 @@ Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* 
 
 			if (mouse.X != 0 || mouse.Y != 0)
 			{
-				const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+				// WWMouse coords are screen coords; ClientToCoords wants
+				// coords relative to the tactical viewport.
+				const Point2D client = mouse - TacticalClass::Instance->TacticalPos;
+				const auto world = TacticalClass::Instance->ClientToCoords(client);
 				const auto cell = CellClass::Coord2Cell(world);
 
 				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))

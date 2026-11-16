@@ -3825,7 +3825,10 @@ bool Footprint::CaptureCarrierReturnClick(TechnoClass* pTarget)
 
 			if (mouse.X != 0 || mouse.Y != 0)
 			{
-				const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+				// WWMouse coords are screen coords; ClientToCoords wants
+				// coords relative to the tactical viewport.
+				const Point2D client = mouse - TacticalClass::Instance->TacticalPos;
+				const auto world = TacticalClass::Instance->ClientToCoords(client);
 				const auto cell = CellClass::Coord2Cell(world);
 				specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
 			}
@@ -4305,11 +4308,13 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		// movement update, but let a real player order survive so
 		// UpdateCarrierPayload can cancel the landing.
 		const auto mission = pAircraft->GetCurrentMission();
+		// Guard is also set by the engine's idle/auto-acquire code; treating it
+		// as a player order cancelled the landing immediately after touchdown.
 		const bool playerOrder = pAircraft->IsSelected
 			&& (mission == Mission::Move || mission == Mission::QMove
 				|| mission == Mission::Attack || mission == Mission::AttackMove
-				|| mission == Mission::Stop || mission == Mission::Guard)
-			&& (mission == Mission::Stop || mission == Mission::Guard
+				|| mission == Mission::Stop)
+			&& (mission == Mission::Stop
 				|| pAircraft->Destination || pAircraft->Target);
 
 		Debug::CarrierLog("[DiagLock] state2 slot=%u playerOrder=%d mission=%d sel=%d dest=%p target=%p inAir=%d\n",
@@ -6962,8 +6967,10 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		if (mission == Mission::Attack || mission == Mission::AttackMove)
 			return true;
 
-		// Stop/Guard from the player cancels a manual return.
-		if (mission == Mission::Stop || mission == Mission::Guard)
+		// Only an explicit player Stop cancels a manual return. Guard is set
+		// automatically by the engine when the aircraft reaches the deck and
+		// must not abort the last moments of the landing.
+		if (mission == Mission::Stop)
 			return true;
 
 		// The engine converts any destination assigned to an airport-bound
