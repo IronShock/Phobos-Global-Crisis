@@ -53,8 +53,7 @@ static bool IsCommandCaller(DWORD retAddr)
 {
 	switch (retAddr)
 	{
-	case 0x693001: // LeftMouseButtonDown/Up path -> DecideAction
-	case 0x693175: // same
+	case 0x693175: // LeftMouseButtonDown/Up path -> DecideAction
 	case 0x693263: // same
 	case 0x693306: // same
 		return true;
@@ -77,12 +76,14 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 	// screen/client conversion was off by TacticalPos, which made every
 	// peripheral carrier cell resolve to the wrong place (only the anchor
 	// cell worked) and broke normal move/takeoff clicks.
-	GET_STACK(CellStruct*, pResolvedCell, 0x30);
+	GET_STACK(CellStruct*, pResolvedCell, 0x2c);
 	GET_STACK(DWORD, retAddr, 0x28);
 
 	const bool commandClick = IsCommandCaller(retAddr);
 
-	if (pResolvedCell && pResolvedCell->X >= 0 && pResolvedCell->Y >= 0)
+	if (pResolvedCell
+		&& pResolvedCell->X >= 0 && pResolvedCell->Y >= 0
+		&& pResolvedCell->X < MapClass::MaxCells && pResolvedCell->Y < MapClass::MaxCells)
 	{
 		Footprint::SetLastMouseCell(*pResolvedCell);
 

@@ -1055,7 +1055,8 @@ Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* 
 		{
 			const CellStruct cell = Footprint::GetLastMouseCell();
 
-			if (cell.X >= 0 && cell.Y >= 0)
+			if (cell.X >= 0 && cell.Y >= 0
+				&& cell.X < MapClass::MaxCells && cell.Y < MapClass::MaxCells)
 			{
 				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
 				{

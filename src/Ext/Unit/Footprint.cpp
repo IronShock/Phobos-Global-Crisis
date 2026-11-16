@@ -3499,8 +3499,11 @@ CellStruct Footprint::GetLastMouseCell()
 
 void Footprint::CaptureClickDestination(const CellStruct& cell)
 {
-	if (cell.X < 0 || cell.Y < 0)
+	if (cell.X < 0 || cell.Y < 0
+		|| cell.X >= MapClass::MaxCells || cell.Y >= MapClass::MaxCells)
+	{
 		return;
+	}
 
 	Debug::CarrierLog("[DiagClick] CaptureClickDestination f=%d cell=(%d,%d) selected=%d\n",
 		Unsorted::CurrentFrame, cell.X, cell.Y, ObjectClass::CurrentObjects.Count);
