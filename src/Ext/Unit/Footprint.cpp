@@ -157,6 +157,18 @@ namespace
 	std::vector<CarrierTakeoffIntent> s_carrierTakeoffIntents;
 	std::unordered_set<AircraftClass*> s_carrierTakeoffIntentAircraft;
 
+	// A click while the aircraft is already returning/landing (state 2-5) is
+	// a player cancel + move order. It cannot go through the engine's mission
+	// path because an airport-bound destination is converted to Enter, which
+	// the carrier gate suppresses.
+	struct CarrierCancelIntent
+	{
+		AircraftClass* Aircraft = nullptr;
+		CellStruct Destination { -1, -1 };
+	};
+
+	std::vector<CarrierCancelIntent> s_carrierCancelIntents;
+
 	// Takeoff command restoration is deferred to the next global tick so the
 	// aircraft is not handed back to the engine while its own Update is still
 	// on the stack.
@@ -863,6 +875,7 @@ namespace
 			pState->CarrierPayloadLanding.size());
 
 		bool selfExplicitWait = false;
+		bool selfActiveReserved = false;
 
 		for (size_t i = 0; i < count; ++i)
 		{
@@ -872,6 +885,17 @@ namespace
 				selfExplicitWait = selfProgress.ExplicitRunway
 					&& selfProgress.RunwayIndex == runwayIndex
 					&& selfProgress.Phase == CarrierLandingPhase::OrbitWait;
+
+				// An aircraft that already holds the runway and has left the
+				// holding pattern must not be blocked by another aircraft that
+				// is merely waiting. Without this, an explicit waiter kept
+				// knocking the active explicit aircraft back into OrbitWait and
+				// both looped forever.
+				selfActiveReserved = selfProgress.Reserved
+					&& selfProgress.RunwayIndex == runwayIndex
+					&& selfProgress.Phase != CarrierLandingPhase::None
+					&& selfProgress.Phase != CarrierLandingPhase::GoAround
+					&& selfProgress.Phase != CarrierLandingPhase::OrbitWait;
 				break;
 			}
 		}
@@ -898,6 +922,11 @@ namespace
 			{
 				return true;
 			}
+
+			// The other aircraft is only waiting. If we already own the runway
+			// and have left OrbitWait, it must not block us.
+			if (selfActiveReserved)
+				continue;
 
 			// Stable tie-breaker for two aircraft that are both still before
 			// the runway (OrbitWait or ReturnToApproach) with no reservation
@@ -3524,6 +3553,25 @@ void Footprint::CaptureClickDestination(const CellStruct& cell)
 			}
 		}
 
+		// A selected payload that is already returning/landing must still
+		// accept a real move click. Defer the cancel+move to the global tick;
+		// the engine's Enter conversion is suppressed by the carrier gate.
+		if (currentState >= 2 && currentState <= 5 && pAircraft->IsSelected)
+		{
+			bool ownCell = false;
+
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+				ownCell = IsOwnCell(pCarrier, pCell, pState->Alt);
+
+			if (!ownCell)
+			{
+				s_carrierCancelIntents.push_back({ pAircraft, cell });
+				Debug::CarrierLog("[DiagClick]   cancel landing intent plane=%p cell=(%d,%d)\n",
+					static_cast<void*>(pAircraft), cell.X, cell.Y);
+				continue;
+			}
+		}
+
 		if (currentState != 1)
 			continue;
 
@@ -3868,6 +3916,64 @@ void Footprint::ProcessCarrierIntents()
 			static_cast<unsigned>(s_carrierLandingIntents.size()),
 			static_cast<unsigned>(s_carrierTakeoffIntents.size()),
 			static_cast<unsigned>(s_carrierTakeoffHandoffs.size()));
+	}
+
+	// A real player click on a returning/landing payload cancels the landing
+	// and applies the clicked destination. This cannot go through the engine
+	// because an airport-bound destination becomes Mission::Enter, which the
+	// carrier gate intentionally suppresses.
+	if (!s_carrierCancelIntents.empty())
+	{
+		auto intents = std::move(s_carrierCancelIntents);
+		s_carrierCancelIntents.clear();
+
+		for (auto const& intent : intents)
+		{
+			auto const pAircraft = intent.Aircraft;
+
+			if (!pAircraft || !pAircraft->IsAlive || pAircraft->InLimbo)
+				continue;
+
+			auto const pCarrier = GetCarrierPayloadOwner(pAircraft);
+
+			if (!pCarrier || !pCarrier->IsAlive)
+				continue;
+
+			auto const pState = GetState(pCarrier);
+
+			if (!pState)
+				continue;
+
+			auto const it = std::find(pState->CarrierPayloads.begin(),
+				pState->CarrierPayloads.end(), pAircraft);
+
+			if (it == pState->CarrierPayloads.end())
+				continue;
+
+			const size_t index = static_cast<size_t>(
+				std::distance(pState->CarrierPayloads.begin(), it));
+
+			if (index >= pState->CarrierPayloadDocked.size())
+				continue;
+
+			const unsigned char payloadState = pState->CarrierPayloadDocked[index];
+
+			if (payloadState < 2 || payloadState > 5)
+				continue;
+
+			CancelCarrierLanding(pCarrier, pAircraft, index, pState,
+				pState->CarrierPayloadDocked[index], "player click", true);
+
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(intent.Destination))
+			{
+				pAircraft->SetDestination(pCell, true);
+				pAircraft->QueueMission(Mission::Move, true);
+			}
+
+			Debug::CarrierLog("[AircraftCarrier] %s landing cancelled by click, move to (%d,%d)\n",
+				pAircraft->Type ? pAircraft->Type->ID : "?",
+				intent.Destination.X, intent.Destination.Y);
+		}
 	}
 
 	// Restore commands that were captured when a takeoff departure completed.
