@@ -6200,21 +6200,22 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				runway.PathIndex = 0;
 				runway.TrailEnabled = false;
 
-				// Reverse of takeoff departure: start beyond Z and descend
-				// along Z -> A. No separate lineup phase.
-				progress.Phase = CarrierLandingPhase::FinalApproach;
+				// Do not snap the facing here. Line up with the landing
+				// runway direction (A -> Z) first; the descent starts only
+				// when the aircraft is actually aligned.
+				progress.Phase = CarrierLandingPhase::Lineup;
 				progress.PhaseTimer = 0;
 				progress.StuckTimer = 0;
 				progress.LastPos = current;
 				progress.Speed = std::max(8.0, std::min(cruiseSpeed, 32.0));
 
-				pAircraft->PrimaryFacing.SetCurrent(DirStruct(progress.RunwayFacingRaw));
-				pAircraft->PrimaryFacing.SetDesired(DirStruct(progress.RunwayFacingRaw));
 				pAircraft->SetLocation(current);
 				UpdateCarrierFlightLevel(pAircraft, current);
-				Debug::CarrierLog("[AircraftCarrier] %s landing descent begins slot=%u runway=%d\n",
+				Debug::CarrierLog("[AircraftCarrier] %s lineup at approach slot=%u runway=%d facing=%u target=%u\n",
 					pAircraft->Type ? pAircraft->Type->ID : "?",
-					static_cast<unsigned>(index), progress.RunwayIndex);
+					static_cast<unsigned>(index), progress.RunwayIndex,
+					static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
+					static_cast<unsigned>(progress.RunwayFacingRaw));
 				return;
 			}
 
@@ -6227,6 +6228,53 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			if (UpdateLandingWatchdog(progress, current, 240))
 				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
 					"return approach stuck");
+
+			return;
+		}
+
+		if (progress.Phase == CarrierLandingPhase::Lineup)
+		{
+			auto current = pAircraft->Location;
+
+			if (current.Z < progress.CruiseZ)
+				current.Z = std::min(progress.CruiseZ, current.Z + climbStep);
+			else if (current.Z > progress.CruiseZ)
+				current.Z = std::max(progress.CruiseZ, current.Z - climbStep);
+
+			const auto desired = DirStruct(progress.RunwayFacingRaw);
+			const int diff = std::abs(static_cast<short>(
+				desired.Raw - pAircraft->PrimaryFacing.Current().Raw));
+
+			if (diff > 512)
+			{
+				// Turn toward the runway heading at the approach point. This
+				// replaces the old one-frame SetCurrent snap.
+				TurnAircraftToward(pAircraft, desired, std::max(turnStep, 1024));
+				pAircraft->SetLocation(current);
+				pAircraft->InAir = true;
+				UpdateCarrierFlightLevel(pAircraft, current);
+
+				if (UpdateLandingWatchdog(progress, current, 240))
+				{
+					StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+						"lineup stuck");
+				}
+
+				return;
+			}
+
+			pAircraft->PrimaryFacing.SetCurrent(desired);
+			pAircraft->PrimaryFacing.SetDesired(desired);
+			progress.Phase = CarrierLandingPhase::FinalApproach;
+			progress.PhaseTimer = 0;
+			progress.StuckTimer = 0;
+			progress.LastPos = current;
+			progress.Speed = std::max(8.0, std::min(cruiseSpeed, 32.0));
+
+			Debug::CarrierLog("[AircraftCarrier] %s landing descent begins slot=%u runway=%d facing=%u\n",
+				pAircraft->Type ? pAircraft->Type->ID : "?",
+				static_cast<unsigned>(index), progress.RunwayIndex,
+				static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw));
 
 			return;
 		}
@@ -6348,14 +6396,17 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			current.Z = end.Z + static_cast<int>(std::lround(
 				static_cast<double>(cruiseZ - end.Z) * ratio));
 
-			const auto reverseDir = DirStruct(progress.RunwayFacingRaw);
-			pAircraft->PrimaryFacing.SetCurrent(reverseDir);
-			pAircraft->PrimaryFacing.SetDesired(reverseDir);
+			const auto runwayDir = DirStruct(progress.RunwayFacingRaw);
+			TurnAircraftToward(pAircraft, runwayDir, turnStep);
+			const int alignDiff = std::abs(static_cast<short>(
+				runwayDir.Raw - pAircraft->PrimaryFacing.Current().Raw));
+
 			pAircraft->SetLocation(current);
 			pAircraft->InAir = true;
 			UpdateCarrierFlightLevel(pAircraft, current);
 
-			if (remainingAfter <= std::max(16.0, speed) || current.Z <= end.Z + 8)
+			if (alignDiff <= 512
+				&& (remainingAfter <= std::max(16.0, speed) || current.Z <= end.Z + 8))
 			{
 				pAircraft->SetLocation(end);
 				pAircraft->InAir = false;
@@ -6476,8 +6527,11 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			{
 				progress.TaxiPath = BuildRunwayTaxiPath(pCarrier, pState, pAircraft, slot);
 				progress.TaxiPathIndex = 0;
-				progress.TaxiTurnTimer = progress.TaxiPath.empty() ? 0 : 1;
-				progress.TaxiSpeed = GetRunwayTaxiSpeed(pTypeExt);
+				// Move continuously. The old stop-at-every-waypoint turn made
+				// the landing taxi feel much slower than the takeoff taxi.
+				progress.TaxiTurnTimer = 0;
+				progress.TaxiSpeed = std::min(64.0,
+					GetRunwayTaxiSpeed(pTypeExt) * 1.5);
 
 				if (progress.TaxiPath.empty())
 				{
@@ -6540,10 +6594,6 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				pAircraft->SetLocation(target);
 				UpdateCarrierFlightLevel(pAircraft, target);
 				++progress.TaxiPathIndex;
-
-				if (progress.TaxiPathIndex < progress.TaxiPath.size())
-					progress.TaxiTurnTimer = 1;
-
 				progress.StuckTimer = 0;
 				progress.LastPos = target;
 				return;

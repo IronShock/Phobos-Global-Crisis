@@ -426,6 +426,22 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 		{
 			Point2D shadowPos = drawPoint + shadowOffset;
 
+			// The pre-rendered shadow frame is authored for an aircraft in
+			// flight, with the ground shadow baked in below the body anchor.
+			// For a deck-parked aircraft that baked offset puts the shadow
+			// below the hull / on the water. Cancel the frame-bound offset so
+			// the shadow sits under the parked body on the deck.
+			if (parkedDeckShadow)
+			{
+				const auto bodyBounds = pImage->GetFrameBounds(facing);
+				const auto shadowBounds = pImage->GetFrameBounds(shadowFrame);
+
+				shadowPos.X -= (shadowBounds.X + shadowBounds.Width / 2)
+					- (bodyBounds.X + bodyBounds.Width / 2);
+				shadowPos.Y -= (shadowBounds.Y + shadowBounds.Height / 2)
+					- (bodyBounds.Y + bodyBounds.Height / 2);
+			}
+
 			DSurface::Temp->DrawSHP(pDrawer, pImage, shadowFrame, &shadowPos, &DSurface::ViewBounds,
 				BlitterFlags::bf_400 | BlitterFlags::Darken | BlitterFlags::Centered,
 				0, zAdjust - 1, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
