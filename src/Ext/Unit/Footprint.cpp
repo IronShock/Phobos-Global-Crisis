@@ -888,9 +888,25 @@ namespace
 			if (progress.RunwayIndex != runwayIndex)
 				continue;
 
+			// OrbitWait is a waiting state, not an active reservation. Two
+			// aircraft that both fell back to OrbitWait used to keep seeing
+			// each other's stale Reserved flag and neither could ever land.
 			if (progress.Reserved
 				&& progress.Phase != CarrierLandingPhase::None
-				&& progress.Phase != CarrierLandingPhase::GoAround)
+				&& progress.Phase != CarrierLandingPhase::GoAround
+				&& progress.Phase != CarrierLandingPhase::OrbitWait)
+			{
+				return true;
+			}
+
+			// Stable tie-breaker for two aircraft that are both still before
+			// the runway (OrbitWait or ReturnToApproach) with no reservation
+			// yet. The lower pointer always gets the runway first; this also
+			// covers the automatic (non-explicit) return path, which has no
+			// click order to break the tie.
+			if ((progress.Phase == CarrierLandingPhase::OrbitWait
+					|| progress.Phase == CarrierLandingPhase::ReturnToApproach)
+				&& pAircraft < pSelf)
 			{
 				return true;
 			}
@@ -6169,6 +6185,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				&& IsLandingRunwayReserved(pState, progress.RunwayIndex, pAircraft))
 			{
 				progress.Phase = CarrierLandingPhase::OrbitWait;
+				progress.Reserved = false;
 				progress.PhaseTimer = 0;
 				progress.StuckTimer = 0;
 				return;
