@@ -4092,6 +4092,24 @@ static void ForceCarrierSleep(AircraftClass* pAircraft)
 	pAircraft->MissionStatus = 0;
 }
 
+// A parked or deck-bound payload must not keep a fly-locomotor takeoff or
+// landing sub-state alive. If it does, the locomotor applies a small vertical
+// offset every tick and the deck pin snaps it back: the aircraft visibly
+// convulses. Clear the state together with the mission.
+static void ResetCarrierFlightState(AircraftClass* pAircraft)
+{
+	if (!pAircraft)
+		return;
+
+	if (auto const pFly = locomotion_cast<FlyLocomotionClass*>(pAircraft->Locomotor))
+	{
+		pFly->IsLanding = false;
+		pFly->IsTakingOff = false;
+		pFly->IsElevating = false;
+		pFly->FlightLevel = 0;
+	}
+}
+
 void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 {
 	if (!pPayload || pPayload->WhatAmI() != AbstractType::Aircraft)
@@ -4224,6 +4242,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		pAircraft->Target = nullptr;
 		pAircraft->ArchiveTarget = nullptr;
 		ForceCarrierSleep(pAircraft);
+		ResetCarrierFlightState(pAircraft);
 
 		if (auto const pLoco = pAircraft->Locomotor)
 			pLoco->Stop_Moving();
@@ -4274,6 +4293,8 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 	{
 		ForceCarrierSleep(pAircraft);
 	}
+
+	ResetCarrierFlightState(pAircraft);
 
 	if (pAircraft->Locomotor)
 		pAircraft->Locomotor->Stop_Moving();
@@ -4331,8 +4352,12 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		pAircraft->DockNowHeadingTo = nullptr;
 		pAircraft->InAir = false;
 		pAircraft->SetSpeedPercentage(0.0);
-		pAircraft->QueueMission(Mission::Sleep, true);
-		pAircraft->PrimaryFacing.SetDesired(GetCarrierSlotFacing(pCarrier, pTypeExt, index));
+		ForceCarrierSleep(pAircraft);
+		ResetCarrierFlightState(pAircraft);
+
+		const DirStruct slotFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
+		pAircraft->PrimaryFacing.SetCurrent(slotFacing);
+		pAircraft->PrimaryFacing.SetDesired(slotFacing);
 
 		if (auto const pLoco = pAircraft->Locomotor)
 			pLoco->Stop_Moving();
@@ -6918,19 +6943,31 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		// Keep the parked aircraft pinned to the moving deck.
 		const auto expected = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
 
-		if (pAircraft->Location.X != expected.X
-			|| pAircraft->Location.Y != expected.Y
-			|| pAircraft->Location.Z != expected.Z)
-		{
+		const int dx = std::abs(pAircraft->Location.X - expected.X);
+		const int dy = std::abs(pAircraft->Location.Y - expected.Y);
+		const int dz = std::abs(pAircraft->Location.Z - expected.Z);
+
+		if (dx > 2 || dy > 2 || dz > 2)
 			pAircraft->SetLocation(expected);
-		}
 
 		pAircraft->InAir = false;
 
-		// Keep requesting the tuned slot facing; the controller rotates to it
-		// smoothly instead of snapping every frame.
+		// Snap once inside tolerance. Continuously requesting a desired facing
+		// while the engine/transform jitters by a few raw units makes parked
+		// aircraft rotate back and forth forever.
 		const DirStruct facing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
-		pAircraft->PrimaryFacing.SetDesired(facing);
+		const int facingDiff = std::abs(static_cast<short>(
+			facing.Raw - pAircraft->PrimaryFacing.Current().Raw));
+
+		if (facingDiff > 256)
+		{
+			pAircraft->PrimaryFacing.SetDesired(facing);
+		}
+		else
+		{
+			pAircraft->PrimaryFacing.SetCurrent(facing);
+			pAircraft->PrimaryFacing.SetDesired(facing);
+		}
 
 		return;
 	}

@@ -495,6 +495,11 @@ DEFINE_HOOK(0x6FCDB0, TechnoClass_AssignTarget_SyncLog, 0x5)
 	// Remember an attack order issued during takeoff.
 	Footprint::RememberRunwayCommandTarget(pThis, pTarget);
 
+	// A runway-controlled payload must not hold a live target: FootClass::AI
+	// can use it to rotate/move the aircraft between two deck pins.
+	if (Footprint::IsCarrierPayloadRunwayControlled(pThis) && pTarget)
+		R->Stack(0x4, 0);
+
 	if (!Phobos::Optimizations::DisableSyncLogging)
 	{
 		auto const RTTI = pThis->WhatAmI();
@@ -570,6 +575,15 @@ DEFINE_HOOK(0x41AA80, AircraftClass_AssignDestination_SyncLog, 0x7)
 	// Remember a move issued while the aircraft is still in the takeoff
 	// sequence; the command must not reach the engine yet.
 	Footprint::RememberRunwayCommandDestination(pThis, pDest);
+
+	// Runway-controlled aircraft (takeoff/landing) must not receive a live
+	// Destination: FootClass::AI can act on it before the next deck pin and
+	// the aircraft visibly slides out of the runway. Only state 2 (manual
+	// return) is allowed to take ordinary move orders so the player can
+	// cancel a return. The repeat breaker above bounds the recursion that
+	// this argument rewrite used to cause.
+	if (Footprint::IsCarrierPayloadRunwayControlled(pThis) && pDest)
+		R->Stack(0x4, 0);
 
 	if (!Phobos::Optimizations::DisableSyncLogging)
 		SyncLogger::AddDestinationChangeSyncLogEvent(pThis, pDest, callerAddress);
