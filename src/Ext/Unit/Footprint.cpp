@@ -3230,42 +3230,22 @@ void Footprint::NotifyDestinationAssigned(TechnoClass* pThis, AbstractClass* pDe
 
 	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
 
-	if (index >= pState->CarrierPayloadDocked.size())
+	if (index >= pState->CarrierPayloadDocked.size() || pState->CarrierPayloadDocked[index] != 1)
 		return;
 
-	const unsigned char payloadState = pState->CarrierPayloadDocked[index];
+	// Do NOT turn this into a launch request. AssignDestination is also used
+	// by the engine for selection/return/landing bookkeeping; doing so made a
+	// parked aircraft take off just because it was selected. Launch requests
+	// are captured only from real player clicks (CaptureClickDestination /
+	// CaptureAttackClick).
 	const auto destCoords = pDest->GetCoords();
-	const double carrierDistance = destCoords.DistanceFrom(pCarrier->GetCoords());
 
-	// The engine always calls this with the real clicked destination. Use it
-	// directly instead of depending on our own mouse-cell conversion:
-	//  - parked + selected + destination far from the ship => takeoff;
-	//  - airborne + selected + destination on/at the ship => return/landing.
-	if (pAircraft->IsSelected && payloadState == 1 && carrierDistance > 512.0)
-	{
-		if (index < pState->CarrierPayloadLaunchRequest.size())
-			pState->CarrierPayloadLaunchRequest[index] = 1;
-
-		if (index < pState->CarrierPayloadRequestedDest.size())
-			pState->CarrierPayloadRequestedDest[index] = CellClass::Coord2Cell(destCoords);
-
-		QueueCarrierTakeoffIntent(pAircraft, pCarrier);
-	}
-	else if (pAircraft->IsSelected && payloadState == 0 && carrierDistance <= 4096.0)
-	{
-		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
-
-		if (pTypeExt && HasRunwayMode(pTypeExt, true))
-			QueueCarrierLandingIntent(pAircraft, pCarrier, -1, false, false);
-	}
-
-	Debug::CarrierLog("[CarrierCmd] AssignDest slot=%d selected=%d state=%d mission=%d destCell=(%d,%d,%d) plane=(%d,%d,%d) dist=%.0f\n",
+	Debug::CarrierLog("[CarrierCmd] AssignDest slot=%d selected=%d state=%d mission=%d destCell=(%d,%d,%d) plane=(%d,%d,%d)\n",
 		static_cast<int>(index), pAircraft->IsSelected ? 1 : 0,
-		static_cast<int>(payloadState),
+		static_cast<int>(pState->CarrierPayloadDocked[index]),
 		static_cast<int>(pAircraft->GetCurrentMission()),
 		destCoords.X, destCoords.Y, destCoords.Z,
-		pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z,
-		carrierDistance);
+		pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
 }
 
 void Footprint::LogPayloadCommand(const char* tag, TechnoClass* pThis, AbstractClass* pTarget)
@@ -3556,11 +3536,8 @@ CellStruct Footprint::GetLastMouseCell()
 
 void Footprint::CaptureClickDestination(const CellStruct& cell)
 {
-	if (cell.X < 0 || cell.Y < 0
-		|| cell.X >= MapClass::MaxCells || cell.Y >= MapClass::MaxCells)
-	{
+	if (cell.X < 0 || cell.Y < 0)
 		return;
-	}
 
 	Debug::CarrierLog("[DiagClick] CaptureClickDestination f=%d cell=(%d,%d) selected=%d\n",
 		Unsorted::CurrentFrame, cell.X, cell.Y, ObjectClass::CurrentObjects.Count);
@@ -3609,7 +3586,10 @@ void Footprint::CaptureClickDestination(const CellStruct& cell)
 		if (currentState == 0 && pAircraft->IsSelected && HasRunwayMode(pTypeExt, true))
 		{
 			const int specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
-			const bool ownCell = IsCarrierHullCell(pCarrier, cell);
+			bool ownCell = false;
+
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+				ownCell = IsOwnCell(pCarrier, pCell, pState->Alt);
 
 			Debug::CarrierLog("[DiagClick]   landing-click ownCell=%d specificRunway=%d cell=(%d,%d)\n",
 				ownCell ? 1 : 0, specificRunway, cell.X, cell.Y);
@@ -3618,22 +3598,6 @@ void Footprint::CaptureClickDestination(const CellStruct& cell)
 			{
 				Footprint::QueueCarrierLandingIntent(pAircraft, pCarrier,
 					specificRunway, specificRunway >= 0, false);
-				continue;
-			}
-		}
-
-		// A selected payload that is already returning/landing must still
-		// accept a real move click. Defer the cancel+move to the global tick;
-		// the engine's Enter conversion is suppressed by the carrier gate.
-		if (currentState >= 2 && currentState <= 5 && pAircraft->IsSelected)
-		{
-			const bool ownCell = IsCarrierHullCell(pCarrier, cell);
-
-			if (!ownCell)
-			{
-				s_carrierCancelIntents.push_back({ pAircraft, cell });
-				Debug::CarrierLog("[DiagClick]   cancel landing intent plane=%p cell=(%d,%d)\n",
-					static_cast<void*>(pAircraft), cell.X, cell.Y);
 				continue;
 			}
 		}
@@ -3884,11 +3848,18 @@ bool Footprint::CaptureCarrierReturnClick(TechnoClass* pTarget)
 		// selection.
 		int specificRunway = -1;
 
-		// The click hook cached the cell that DisplayClass resolved this frame.
-		const CellStruct cell = Footprint::GetLastMouseCell();
+		if (WWMouseClass::Instance && TacticalClass::Instance)
+		{
+			Point2D mouse { 0, 0 };
+			WWMouseClass::Instance->GetCoords(&mouse);
 
-		if (cell.X >= 0 && cell.Y >= 0)
-			specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
+			if (mouse.X != 0 || mouse.Y != 0)
+			{
+				const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+				const auto cell = CellClass::Coord2Cell(world);
+				specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
+			}
+		}
 
 		// Defer until ProcessCarrierIntents. Do not mutate the payload from
 		// inside the click/target-resolution path.

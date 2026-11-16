@@ -15,7 +15,6 @@
 #include <Locomotion/FootprintLocomotionClass.h>
 
 #include <Helpers/Macro.h>
-#include <Utilities/Debug.h>
 
 #include <Ext/Techno/Body.h>
 #include <Ext/TechnoType/Body.h>
@@ -45,22 +44,58 @@ DEFINE_HOOK(0x736BE2, UnitClass_UpdateRotation_FootprintAim, 0x6)
 	return 0;
 }
 
-// DisplayClass::ProcessClickCoords is called both for pure cursor hover and
-// for real command clicks. Distinguish them by the return address instead of
-// guessing mouse button state: only the click callers run DecideAction and
-// execute the command. Hover callers only refresh the cursor cell.
-static bool IsCommandCaller(DWORD retAddr)
+// DisplayClass::ProcessClickCoords is also used while the cursor is merely
+// hovering over the tactical map. Capturing a "click" there made any mouse
+// movement over water launch every selected parked payload. Only treat the
+// mouse as commanding while the left button is down (plus a short tail so the
+// engine's button-up handler still sees the command frame).
+static bool IsTacticalCommandClick()
 {
-	switch (retAddr)
+	static bool s_wasDown = false;
+	static bool s_dragged = false;
+	static Point2D s_press { 0, 0 };
+	static int s_window = 0;
+
+	const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+
+	Point2D current { 0, 0 };
+
+	if (WWMouseClass::Instance)
+		WWMouseClass::Instance->GetCoords(&current);
+
+	if (down && !s_wasDown)
 	{
-	case 0x4AACD9: // command click path
-	case 0x693175: // LeftMouseButtonDown/Up path -> DecideAction
-	case 0x693263: // same
-	case 0x693306: // same
-		return true;
-	default:
-		return false;
+		// Do not issue anything on press: a press may still become a drag
+		// (selection box / map scroll). The command is captured on release.
+		s_press = current;
+		s_dragged = false;
+		s_window = 0;
 	}
+	else if (down)
+	{
+		const int dx = current.X > s_press.X ? current.X - s_press.X : s_press.X - current.X;
+		const int dy = current.Y > s_press.Y ? current.Y - s_press.Y : s_press.Y - current.Y;
+
+		if (dx > 4 || dy > 4)
+		{
+			s_dragged = true;
+			s_window = 0;
+		}
+	}
+	else if (s_wasDown)
+	{
+		// Release of a clean click: keep the window for the few calls the
+		// engine uses to execute the command after button-up.
+		s_window = s_dragged ? 0 : 3;
+	}
+	else if (s_window > 0)
+	{
+		--s_window;
+	}
+
+	s_wasDown = down;
+
+	return s_window > 0;
 }
 
 // DisplayClass::ProcessClickCoords applies selectability filters after the
@@ -72,41 +107,7 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 {
 	enum { Success = 0x6925F0, Continue = 0x692527 };
 
-	// DisplayClass::ProcessClickCoords already resolved the hovered cell.
-	// Use that cell instead of recomputing it from WWMouse coordinates: the
-	// screen/client conversion was off by TacticalPos, which made every
-	// peripheral carrier cell resolve to the wrong place (only the anchor
-	// cell worked) and broke normal move/takeoff clicks.
-	GET_STACK(CellStruct*, pResolvedCell, 0x2c);
-	GET_STACK(DWORD, retAddr, 0x28);
-
-	// Only act while the left button is down, or on the release frame. This is
-	// the same gate that worked before; the command caller alone also fires on
-	// pure hover.
-	static bool s_wasDown = false;
-	const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-	const bool held = down || s_wasDown;
-	s_wasDown = down;
-	const bool commandClick = IsCommandCaller(retAddr) && held;
-
-	if (pResolvedCell
-		&& pResolvedCell->X >= 0 && pResolvedCell->Y >= 0
-		&& pResolvedCell->X < MapClass::MaxCells && pResolvedCell->Y < MapClass::MaxCells)
-	{
-		Footprint::SetLastMouseCell(*pResolvedCell);
-
-		static CellStruct s_lastCell { -1, -1 };
-		static DWORD s_lastRet = 0;
-
-		if (commandClick || *pResolvedCell != s_lastCell || retAddr != s_lastRet)
-		{
-			Debug::CarrierLog("[DiagCell] f=%d ret=0x%08X cell=(%d,%d) cmd=%d target=%p\n",
-				Unsorted::CurrentFrame, retAddr, pResolvedCell->X, pResolvedCell->Y,
-				commandClick ? 1 : 0, static_cast<void*>(*reinterpret_cast<ObjectClass**>(R->EDI())));
-			s_lastCell = *pResolvedCell;
-			s_lastRet = retAddr;
-		}
-	}
+	const bool commandClick = IsTacticalCommandClick();
 
 	auto const ppTarget = reinterpret_cast<ObjectClass**>(R->EDI());
 	auto const pTarget = *ppTarget;
@@ -124,16 +125,16 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 		Footprint::CaptureCarrierReturnClick(pTechnoTarget);
 	}
 
-	if (commandClick)
+	if (commandClick && !pTarget && WWMouseClass::Instance && TacticalClass::Instance)
 	{
-		// A click anywhere on the carrier's drawn hull is a return order,
-		// independent of the resolved cell or whether the engine found an
-		// object under a peripheral hull cell.
-		Footprint::CaptureCarrierHullClick();
+		Point2D mouse { 0, 0 };
+		WWMouseClass::Instance->GetCoords(&mouse);
 
-		// The resolved-cell stack value is not reliable in this build; do not
-		// use it for command capture. Takeoff/cancel are driven by the engine's
-		// AssignDestination; hull return uses CaptureCarrierHullClick.
+		if (mouse.X != 0 || mouse.Y != 0)
+		{
+			const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+			Footprint::CaptureClickDestination(CellClass::Coord2Cell(world));
+		}
 	}
 
 	if (pTarget)

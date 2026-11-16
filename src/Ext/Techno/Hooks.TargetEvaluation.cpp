@@ -9,10 +9,6 @@
 #include <Utilities/PointerSanity.h>
 #include <Phobos.h>
 #include <Unsorted.h>
-#include <CellClass.h>
-#include <MapClass.h>
-#include <TacticalClass.h>
-#include <WWMouseClass.h>
 #include <algorithm>  // std::find
 
 // Per-weapon ammo: a slot with its own pool cannot fire when the pool is empty,
@@ -1044,14 +1040,7 @@ Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* 
 	//    clamping it to the aircraft's own cell.
 	if (auto const pCarrier = Footprint::GetCarrierPayloadOwner(pThis))
 	{
-		if (pObj == pCarrier)
-			return Action::Enter;
-
-		// The carrier is a multi-cell SHP; hovering a peripheral deck cell has
-		// no object under the cursor and cell resolution is unreliable. Use the
-		// drawn hull's screen rectangle instead: any hull-area hover shows the
-		// return cursor.
-		if (!pObj && Footprint::IsMouseOverCarrierHull(pCarrier))
+		if (pObj == pCarrier && !Footprint::IsCarrierPayloadParked(pThis))
 			return Action::Enter;
 
 		if (!pObj && result == Action::Move && Footprint::IsCarrierPayloadParked(pThis))
