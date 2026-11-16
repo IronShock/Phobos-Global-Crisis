@@ -3791,10 +3791,13 @@ bool Footprint::ShouldSuppressCarrierMission(TechnoClass* pPayload, Mission miss
 	// converted into our deferred landing intent.
 	if (mission == Mission::Enter || mission == Mission::Return)
 	{
-		if (payloadState != 0)
-			return true;
+		// Reference 23c0d1c: the old build let the engine set Enter/Return and
+		// let UpdateCarrierPayload convert it into the return state. Do not
+		// swallow the mission here, or the old anchor-click path never runs.
+		if (payloadState == 0)
+			return false;
 
-		return RequestCarrierLandingFromMission(pPayload);
+		return true;
 	}
 
 	return false;
@@ -3843,28 +3846,12 @@ bool Footprint::CaptureCarrierReturnClick(TechnoClass* pTarget)
 		if (!pTypeExt || !HasRunwayMode(pTypeExt, true))
 			continue;
 
-		// Resolve the actual clicked cell so clicking a runway line selects
-		// that exact runway instead of silently falling back to automatic
-		// selection.
-		int specificRunway = -1;
-
-		if (WWMouseClass::Instance && TacticalClass::Instance)
-		{
-			Point2D mouse { 0, 0 };
-			WWMouseClass::Instance->GetCoords(&mouse);
-
-			if (mouse.X != 0 || mouse.Y != 0)
-			{
-				const auto world = TacticalClass::Instance->ClientToCoords(mouse);
-				const auto cell = CellClass::Coord2Cell(world);
-				specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
-			}
-		}
-
-		// Defer until ProcessCarrierIntents. Do not mutate the payload from
-		// inside the click/target-resolution path.
+		// Reference 23c0d1c: an anchor/hull click on the carrier means "go
+		// home", not "land on this exact runway cell". The old build never
+		// resolved the mouse cell here; doing so made a wrong screen-to-cell
+		// conversion pick a bogus runway or fail the request entirely.
 		Footprint::QueueCarrierLandingIntent(pAircraft, pCarrier,
-			specificRunway, specificRunway >= 0, false);
+			-1, false, false);
 		handled = true;
 	}
 
@@ -4232,13 +4219,17 @@ void Footprint::ProcessCarrierIntents()
 
 			if (!IsCarrierStopped(pCarrier))
 			{
-				Debug::CarrierLog("[AircraftCarrier] %s landing request rejected: carrier moving (runway=%d)\n",
-					pAircraft->Type ? pAircraft->Type->ID : "?", intent.RunwayIndex);
-
+				// Reference 23c0d1c: a manual "go home" click must never be
+				// dropped because the carrier is still moving. The old build
+				// started the return immediately and let the aircraft follow
+				// the carrier. Only the automatic out-of-ammo return waits.
 				if (intent.Kind == CarrierLandingIntentKind::AutoOutOfAmmo)
+				{
+					Debug::CarrierLog("[AircraftCarrier] %s landing request rejected: carrier moving (runway=%d)\n",
+						pAircraft->Type ? pAircraft->Type->ID : "?", intent.RunwayIndex);
 					s_returnSuppressUntil[pAircraft] = Unsorted::CurrentFrame + 300;
-
-				continue;
+					continue;
+				}
 			}
 
 			int runway = intent.RunwayIndex;
