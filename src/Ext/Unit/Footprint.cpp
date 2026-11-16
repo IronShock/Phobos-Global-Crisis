@@ -3485,6 +3485,18 @@ void Footprint::ProcessPendingKills()
 			runwayIndex, runwayIndex >= 0);
 	}
 
+static CellStruct s_lastMouseCell { -1, -1 };
+
+void Footprint::SetLastMouseCell(const CellStruct& cell)
+{
+	s_lastMouseCell = cell;
+}
+
+CellStruct Footprint::GetLastMouseCell()
+{
+	return s_lastMouseCell;
+}
+
 void Footprint::CaptureClickDestination(const CellStruct& cell)
 {
 	if (cell.X < 0 || cell.Y < 0)
@@ -3818,21 +3830,11 @@ bool Footprint::CaptureCarrierReturnClick(TechnoClass* pTarget)
 		// selection.
 		int specificRunway = -1;
 
-		if (WWMouseClass::Instance && TacticalClass::Instance)
-		{
-			Point2D mouse { 0, 0 };
-			WWMouseClass::Instance->GetCoords(&mouse);
+		// The click hook cached the cell that DisplayClass resolved this frame.
+		const CellStruct cell = Footprint::GetLastMouseCell();
 
-			if (mouse.X != 0 || mouse.Y != 0)
-			{
-				// WWMouse coords are screen coords; ClientToCoords wants
-				// coords relative to the tactical viewport.
-				const Point2D client = mouse - TacticalClass::Instance->TacticalPos;
-				const auto world = TacticalClass::Instance->ClientToCoords(client);
-				const auto cell = CellClass::Coord2Cell(world);
-				specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
-			}
-		}
+		if (cell.X >= 0 && cell.Y >= 0)
+			specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
 
 		// Defer until ProcessCarrierIntents. Do not mutate the payload from
 		// inside the click/target-resolution path.

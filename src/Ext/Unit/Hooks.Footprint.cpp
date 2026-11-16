@@ -65,11 +65,12 @@ static bool IsTacticalCommandClick()
 
 	if (down && !s_wasDown)
 	{
-		// Do not issue anything on press: a press may still become a drag
-		// (selection box / map scroll). The command is captured on release.
+		// Capture the press cell too: some commands execute on button-down.
+		// A drag cancels the window on the next call (see below), so a clean
+		// click still works both on press and on release.
 		s_press = current;
 		s_dragged = false;
-		s_window = 0;
+		s_window = 1;
 	}
 	else if (down)
 	{
@@ -109,6 +110,16 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 
 	const bool commandClick = IsTacticalCommandClick();
 
+	// DisplayClass::ProcessClickCoords already resolved the hovered cell.
+	// Use that cell instead of recomputing it from WWMouse coordinates: the
+	// screen/client conversion was off by TacticalPos, which made every
+	// peripheral carrier cell resolve to the wrong place (only the anchor
+	// cell worked) and broke normal move/takeoff clicks.
+	GET_STACK(CellStruct*, pResolvedCell, 0x30);
+
+	if (pResolvedCell && pResolvedCell->X >= 0 && pResolvedCell->Y >= 0)
+		Footprint::SetLastMouseCell(*pResolvedCell);
+
 	auto const ppTarget = reinterpret_cast<ObjectClass**>(R->EDI());
 	auto const pTarget = *ppTarget;
 
@@ -125,21 +136,8 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 		Footprint::CaptureCarrierReturnClick(pTechnoTarget);
 	}
 
-	if (commandClick && !pTarget && WWMouseClass::Instance && TacticalClass::Instance)
-	{
-		Point2D mouse { 0, 0 };
-		WWMouseClass::Instance->GetCoords(&mouse);
-
-		if (mouse.X != 0 || mouse.Y != 0)
-		{
-			// WWMouse coords are screen coords; ClientToCoords expects tactical
-			// client coords. Without this subtraction the clicked cell is off by
-			// TacticalPos, which is why only the carrier anchor cell worked.
-			const Point2D client = mouse - TacticalClass::Instance->TacticalPos;
-			const auto world = TacticalClass::Instance->ClientToCoords(client);
-			Footprint::CaptureClickDestination(CellClass::Coord2Cell(world));
-		}
-	}
+	if (commandClick && !pTarget && pResolvedCell)
+		Footprint::CaptureClickDestination(*pResolvedCell);
 
 	if (pTarget)
 	{

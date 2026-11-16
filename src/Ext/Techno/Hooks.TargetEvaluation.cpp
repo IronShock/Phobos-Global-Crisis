@@ -1049,25 +1049,21 @@ Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* 
 
 		// The carrier is a multi-cell hull; hovering a peripheral deck cell
 		// has no object under the cursor, so the anchor-only check above showed
-		// a plain Move cursor. Resolve the hovered cell and treat every own
-		// hull cell as the return target.
-		if (!pObj && WWMouseClass::Instance && TacticalClass::Instance)
+		// a plain Move cursor. Use the cell DisplayClass::ProcessClickCoords
+		// resolved this frame (never recompute it from mouse screen coords).
+		if (!pObj)
 		{
-			Point2D mouse { 0, 0 };
-			WWMouseClass::Instance->GetCoords(&mouse);
+			const CellStruct cell = Footprint::GetLastMouseCell();
 
-			if (mouse.X != 0 || mouse.Y != 0)
+			if (cell.X >= 0 && cell.Y >= 0)
 			{
-				// WWMouse coords are screen coords; ClientToCoords wants
-				// coords relative to the tactical viewport.
-				const Point2D client = mouse - TacticalClass::Instance->TacticalPos;
-				const auto world = TacticalClass::Instance->ClientToCoords(client);
-				const auto cell = CellClass::Coord2Cell(world);
-
 				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
 				{
-					if (Footprint::IsOwnCell(pCarrier, pCell, false))
+					if (Footprint::IsOwnCell(pCarrier, pCell, false)
+						|| Footprint::IsOwnCell(pCarrier, pCell, true))
+					{
 						return Action::Enter;
+					}
 				}
 			}
 		}

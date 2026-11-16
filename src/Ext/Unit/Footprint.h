@@ -617,6 +617,11 @@ public:
 	static void RememberRunwayCommandTarget(TechnoClass* pThis, AbstractClass* pTarget);
 	// Records the real clicked cell for the currently selected parked payloads.
 	static void CaptureClickDestination(const CellStruct& cell);
+	// Cell resolved by DisplayClass::ProcessClickCoords this frame. The cursor
+	// action and the click hooks must use this instead of recomputing it from
+	// WWMouse screen coordinates (that conversion was off by TacticalPos).
+	static void SetLastMouseCell(const CellStruct& cell);
+	static CellStruct GetLastMouseCell();
 	static void CaptureAttackClick(TechnoClass* pTarget);
 	// Deferred landing/takeoff entry points. Hooks and click handling must only
 	// queue these; the actual aircraft state change happens once per frame in
