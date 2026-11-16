@@ -7015,6 +7015,13 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 				}
 			}
 
+			// The auto-return standoff cell is a few cells behind the ship and
+			// can be farther than the stored CarrierPayloadReturnCell. A target
+			// this close to the carrier is a return/dock destination, not a
+			// player move that should cancel the landing.
+			if (HorizontalDistance(destCoords, pCarrier->GetCoords()) <= 4096.0)
+				return false;
+
 			return true;
 		}
 

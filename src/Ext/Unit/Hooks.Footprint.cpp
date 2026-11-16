@@ -132,7 +132,11 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 
 		if (mouse.X != 0 || mouse.Y != 0)
 		{
-			const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+			// WWMouse coords are screen coords; ClientToCoords expects tactical
+			// client coords. Without this subtraction the clicked cell is off by
+			// TacticalPos, which is why only the carrier anchor cell worked.
+			const Point2D client = mouse - TacticalClass::Instance->TacticalPos;
+			const auto world = TacticalClass::Instance->ClientToCoords(client);
 			Footprint::CaptureClickDestination(CellClass::Coord2Cell(world));
 		}
 	}
