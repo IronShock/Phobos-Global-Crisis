@@ -171,6 +171,13 @@ public:
 
 	// helpers
 
+	size_t Remaining() const
+	{
+		return this->stream->Size() >= this->stream->Offset()
+			? this->stream->Size() - this->stream->Offset()
+			: 0;
+	}
+
 	bool AtEndOfBlock() const
 	{
 		return this->stream->Size() == this->stream->Offset();

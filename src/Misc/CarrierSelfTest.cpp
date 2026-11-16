@@ -265,8 +265,15 @@ void CarrierSelfTest::Tick()
 		pAircraft->SetDestination(pTargetCell, true);
 		pAircraft->QueueMission(Mission::Move, true);
 
-		Debug::Log("[CarrierSelfTest] issued left-click move: slot0=(%d,%d,%d) target=(%d,%d)\n",
-			s_slot0.X, s_slot0.Y, s_slot0.Z, targetCell.X, targetCell.Y);
+		// The parked-state launch gate requires a selected payload (or an AI
+		// carrier). Select it and use the same deferred intent as a real
+		// left-click so this test actually exercises the runway takeoff.
+		pAircraft->Select();
+		Footprint::QueueCarrierTakeoffIntent(pAircraft, s_carrier);
+
+		Debug::Log("[CarrierSelfTest] issued left-click move: slot0=(%d,%d,%d) target=(%d,%d) selected=%d\n",
+			s_slot0.X, s_slot0.Y, s_slot0.Z, targetCell.X, targetCell.Y,
+			pAircraft->IsSelected ? 1 : 0);
 
 		s_phase = 1;
 		s_phaseFrame = Unsorted::CurrentFrame;

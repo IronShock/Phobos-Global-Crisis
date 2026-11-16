@@ -6,6 +6,7 @@
 #include <Unsorted.h>
 
 #include <Utilities/Debug.h>
+#include <Phobos.h>
 #include <Ext/Unit/Footprint.h>
 #include <Utilities/Macro.h>
 #include <Utilities/GeneralUtils.h>
@@ -458,10 +459,69 @@ DEFINE_HOOK(0x6FCDB0, TechnoClass_AssignTarget_SyncLog, 0x5)
 	GET_STACK(AbstractClass*, pTarget, 0x4);
 	GET_STACK(const unsigned int, callerAddress, 0x0);
 
-	auto const RTTI = pThis->WhatAmI();
+	// A repeated assignment with the same target in the same frame is an
+	// engine/AI loop. Never feed it back through the hook: after a few repeats
+	// stop logging and stop remembering, and let the vanilla code take its own
+	// path. This is a breaker, not a filter.
+	static TechnoClass* s_lastPlane = nullptr;
+	static AbstractClass* s_lastTarget = nullptr;
+	static int s_lastFrame = -1;
+	static int s_repeats = 0;
 
-	if (RTTI != AbstractType::Building && RTTI != AbstractType::Infantry)
-		SyncLogger::AddTargetChangeSyncLogEvent(pThis, pTarget, callerAddress);
+	if (pThis == s_lastPlane && pTarget == s_lastTarget
+		&& Unsorted::CurrentFrame == s_lastFrame)
+	{
+		if (++s_repeats > 16)
+		{
+			if (s_repeats == 17)
+			{
+				Debug::CarrierLog("[CarrierGuard] AssignTarget repeat storm plane=%p target=%p broken\n",
+					static_cast<void*>(pThis), static_cast<void*>(pTarget));
+			}
+
+			return 0;
+		}
+	}
+	else
+	{
+		s_lastPlane = pThis;
+		s_lastTarget = pTarget;
+		s_lastFrame = Unsorted::CurrentFrame;
+		s_repeats = 1;
+	}
+
+	Footprint::LogPayloadCommand("AssignTarget", pThis, pTarget);
+
+	// Remember an attack order issued during takeoff.
+	Footprint::RememberRunwayCommandTarget(pThis, pTarget);
+
+	if (!Phobos::Optimizations::DisableSyncLogging)
+	{
+		auto const RTTI = pThis->WhatAmI();
+
+		if (RTTI != AbstractType::Building && RTTI != AbstractType::Infantry)
+			SyncLogger::AddTargetChangeSyncLogEvent(pThis, pTarget, callerAddress);
+	}
+
+	return 0;
+}
+
+// The engine turns a destination order for an airport-bound aircraft into
+// Mission::Enter through this virtual call (vtable +0x1E8). Override_Mission
+// is not used for that path, so Enter/Return must be stopped here. A carrier
+// has no native dock; letting Enter through makes the vanilla return path
+// re-enter AssignDestination every frame until the stack overflows.
+DEFINE_HOOK(0x41BA90, AircraftClass_QueueMission_CarrierGate, 0x6)
+{
+	GET(TechnoClass*, pThis, ECX);
+	GET_STACK(const int, mission, 0x4);
+
+	if (Footprint::ShouldSuppressCarrierMission(pThis, static_cast<Mission>(mission)))
+	{
+		Debug::CarrierLog("[DiagCmd] QueueMission suppressed=%d plane=%p\n",
+			mission, static_cast<void*>(pThis));
+		R->Stack(0x4, static_cast<int>(Mission::Sleep));
+	}
 
 	return 0;
 }
@@ -474,7 +534,45 @@ DEFINE_HOOK(0x41AA80, AircraftClass_AssignDestination_SyncLog, 0x7)
 	GET_STACK(AbstractClass*, pDest, 0x4);
 	GET_STACK(const unsigned int, callerAddress, 0x0);
 
-	SyncLogger::AddDestinationChangeSyncLogEvent(pThis, pDest, callerAddress);
+	// Same-frame repeat breaker. Zeroing the destination argument here used to
+	// defeat the engine's own "already assigned" guard and caused an 8487-deep
+	// AssignDestination recursion during a takeoff. Never rewrite the argument;
+	// block the order at QueueMission / the parked pin instead.
+	static TechnoClass* s_lastPlane = nullptr;
+	static AbstractClass* s_lastDest = nullptr;
+	static int s_lastFrame = -1;
+	static int s_repeats = 0;
+
+	if (pThis == s_lastPlane && pDest == s_lastDest
+		&& Unsorted::CurrentFrame == s_lastFrame)
+	{
+		if (++s_repeats > 16)
+		{
+			if (s_repeats == 17)
+			{
+				Debug::CarrierLog("[CarrierGuard] AssignDestination repeat storm plane=%p dest=%p broken\n",
+					static_cast<void*>(pThis), static_cast<void*>(pDest));
+			}
+
+			return 0;
+		}
+	}
+	else
+	{
+		s_lastPlane = pThis;
+		s_lastDest = pDest;
+		s_lastFrame = Unsorted::CurrentFrame;
+		s_repeats = 1;
+	}
+
+	Footprint::LogPayloadCommand("AssignDestination", pThis, pDest);
+
+	// Remember a move issued while the aircraft is still in the takeoff
+	// sequence; the command must not reach the engine yet.
+	Footprint::RememberRunwayCommandDestination(pThis, pDest);
+
+	if (!Phobos::Optimizations::DisableSyncLogging)
+		SyncLogger::AddDestinationChangeSyncLogEvent(pThis, pDest, callerAddress);
 
 	Footprint::NotifyDestinationAssigned(pThis, pDest);
 
@@ -522,7 +620,21 @@ DEFINE_HOOK(0x41BB30, AircraftClass_OverrideMission_SyncLog, 0x6)
 	GET_STACK(const int, mission, 0x4);
 	GET_STACK(const unsigned int, callerAddress, 0x0);
 
-	SyncLogger::AddMissionOverrideSyncLogEvent(pThis, mission, callerAddress);
+	Footprint::LogPayloadCommand("OverrideMission", pThis, nullptr);
+	Debug::CarrierLog("[DiagCmd] OverrideMission requested=%d caller=0x%08X\n",
+		mission, callerAddress);
+
+	// Keep this hook as a second line of defence, but the real path is
+	// AircraftClass::QueueMission above; the engine does not call
+	// Override_Mission for ordinary destination orders.
+	if (Footprint::ShouldSuppressCarrierMission(pThis, static_cast<Mission>(mission)))
+	{
+		R->Stack(0x4, static_cast<int>(Mission::Sleep));
+		return 0;
+	}
+
+	if (!Phobos::Optimizations::DisableSyncLogging)
+		SyncLogger::AddMissionOverrideSyncLogEvent(pThis, mission, callerAddress);
 
 	return 0;
 }

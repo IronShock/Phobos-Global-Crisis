@@ -1249,6 +1249,15 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 	this->AircraftCarrier_NumberOfDocks.Read(exINI, pSection, "NumberOfDocks");
 	this->AircraftCarrier_Payloads.Read(exINI, pSection, "AircraftCarrier.Payloads");
 	this->AircraftCarrier_PayloadsNum.Read(exINI, pSection, "AircraftCarrier.PayloadsNum");
+	this->AircraftCarrier_TakeOffMode.Read(exINI, pSection, "AircraftCarrier.TakeOff");
+	this->AircraftCarrier_RunwayTaxiSpeed.Read(exINI, pSection, "AircraftCarrier.RunwayTaxiSpeed");
+	this->AircraftCarrier_RunwayTakeoffDelay.Read(exINI, pSection, "AircraftCarrier.RunwayTakeoffDelay");
+	this->AircraftCarrier_RunwayApproachDistance.Read(exINI, pSection, "AircraftCarrier.RunwayApproachDistance");
+	this->AircraftCarrier_RunwayTurnRate.Read(exINI, pSection, "AircraftCarrier.RunwayTurnRate");
+	this->AircraftCarrier_RunwayTakeoffAcceleration.Read(exINI, pSection, "AircraftCarrier.TakeoffAcceleration");
+	this->AircraftCarrier_RunwayTakeoffInitialSpeed.Read(exINI, pSection, "AircraftCarrier.TakeoffInitialSpeed");
+	this->AircraftCarrier_RunwayLandingDeceleration.Read(exINI, pSection, "AircraftCarrier.LandingDeceleration");
+	this->AircraftCarrier_RunwayLandingMaxOverrun.Read(exINI, pSection, "AircraftCarrier.LandingMaxOverrun");
 
 	this->Spawner_RecycleRange.Read(exINI, pSection, "Spawner.RecycleRange");
 	this->Spawner_RecycleAnim.Read(exINI, pSection, "Spawner.RecycleAnim");
@@ -1639,6 +1648,10 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 	{
 		s_aircraftCarrierTypes.insert(pThis);
 
+		// A carrier must die like a building: no long sinking animation, which
+		// also avoids tearing down its deck aircraft and anims mid-sink.
+		this->Sinkable = true;
+
 		int docks = std::max(0, this->AircraftCarrier_NumberOfDocks.Get());
 		const int payloadTypes = static_cast<int>(this->AircraftCarrier_Payloads.size());
 
@@ -1687,6 +1700,48 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 
 			this->AircraftCarrier_DockingDirs.push_back(dockDir.Get(0));
 		}
+
+		this->AircraftCarrier_TakeoffRunwayA.clear();
+		this->AircraftCarrier_TakeoffRunwayZ.clear();
+		this->AircraftCarrier_LandingRunwayA.clear();
+		this->AircraftCarrier_LandingRunwayZ.clear();
+
+		auto readRunways = [&](const char* countKey, const char* prefix,
+			std::vector<CoordStruct>& aOut, std::vector<CoordStruct>& zOut)
+		{
+			Nullable<int> count;
+			count.Read(exArtINI, pArtSection, countKey);
+			const int n = std::clamp(count.Get(0), 0, 16);
+
+			for (int i = 0; i < n; ++i)
+			{
+				char aKey[64];
+				char zKey[64];
+				_snprintf_s(aKey, sizeof(aKey), "%s%dA", prefix, i);
+				_snprintf_s(zKey, sizeof(zKey), "%s%dZ", prefix, i);
+
+				Nullable<CoordStruct> a;
+				Nullable<CoordStruct> z;
+				a.Read(exArtINI, pArtSection, aKey);
+				z.Read(exArtINI, pArtSection, zKey);
+
+				if (!a.isset() || !z.isset()
+					|| a.Get() == z.Get() || a.Get().Z != z.Get().Z)
+				{
+					Debug::Log("[AircraftCarrier] %s: invalid %s%dA/Z, skipped\n",
+						pThis->ID, prefix, i);
+					continue;
+				}
+
+				aOut.push_back(a.Get());
+				zOut.push_back(z.Get());
+			}
+		};
+
+		readRunways("TakeoffRunwayCount", "TakeoffRunway",
+			this->AircraftCarrier_TakeoffRunwayA, this->AircraftCarrier_TakeoffRunwayZ);
+		readRunways("LandingRunwayCount", "LandingRunway",
+			this->AircraftCarrier_LandingRunwayA, this->AircraftCarrier_LandingRunwayZ);
 
 		this->Spawns_Queue.clear();
 		int total = 0;

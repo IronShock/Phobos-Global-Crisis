@@ -245,6 +245,12 @@ enum class TargetZoneScanType
 	InRange = 2
 };
 
+enum class AircraftCarrierTakeOffMode
+{
+	Vanilla = 0,
+	Runway = 1
+};
+
 enum class DamageDisplayType
 {
 	Regular = 0,

@@ -271,6 +271,13 @@ DEFINE_HOOK(0x55B4E1, LogicClass_Update_BeforeAll, 0x5)
 	// Global() can be null while a scenario is being torn down (restart).
 	if (auto pExt = ScenarioExt::Global())
 	{
+		// Destroy carrier deck casualties before any object's AI runs. Doing
+		// this from FootClass_AI could destroy the very aircraft whose AI call
+		// is on the stack, which corrupted the heap and surfaced as a popup on
+		// the next save/load/restart.
+		Footprint::ProcessPendingKills();
+		Footprint::ProcessCarrierIntents();
+
 		pExt->UpdateAutoDeathObjectsInLimbo();
 		pExt->UpdateTransportReloaders();
 	}

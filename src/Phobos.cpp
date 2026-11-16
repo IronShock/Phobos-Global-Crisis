@@ -590,11 +590,13 @@ void Phobos::ApplyOptimizations()
 		// Disable BuildingClass_AssignTarget_SyncLog
 		Patch::Apply_RAW(0x443B90, { 0x56, 0x8B, 0xF1, 0x57, 0x83, 0xBE, 0xAC, 0x0, 0x0, 0x0, 0x13 });
 
-		// Disable TechnoClass_AssignTarget_SyncLog
-		Patch::Apply_RAW(0x6FCDB0, { 0x83, 0xEC, 0x0C, 0x53, 0x56 });
+		// Do not disable TechnoClass_AssignTarget_SyncLog here; that hook
+		// also blocks attack targets for runway-controlled aircraft.
 
-		// Disable AircraftClass_AssignDestination_SyncLog
-		Patch::Apply_RAW(0x41AA80, { 0x53, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x10 });
+		// Do not disable AircraftClass_AssignDestination_SyncLog here.
+		// That hook also contains the carrier-runway destination lock; the
+		// previous optimization overwrote the hook and let player move orders
+		// through during takeoff/landing.
 
 		// Disable BuildingClass_AssignDestination_SyncLog
 		Patch::Apply_RAW(0x455D50, { 0x56, 0x8B, 0xF1, 0x83, 0xBE, 0xAC, 0x0, 0x0, 0x0, 0x13 });
@@ -605,8 +607,8 @@ void Phobos::ApplyOptimizations()
 		// Disable UnitClass_AssignDestination_SyncLog
 		Patch::Apply_RAW(0x741970, { 0x81, 0xEC, 0x80, 0x0, 0x0, 0x00 });
 
-		// Disable AircraftClass_OverrideMission_SyncLog
-		Patch::Apply_RAW(0x41BB30, { 0x8B, 0x81, 0xAC, 0x0, 0x0, 0x0 });
+		// Do not disable AircraftClass_OverrideMission_SyncLog here; that
+		// hook also blocks mission changes for runway-controlled aircraft.
 
 		// Disable FootClass_OverrideMission_SyncLog
 		Patch::Apply_RAW(0x4D8F40, { 0x8B, 0x54, 0x24, 0x4, 0x56 });

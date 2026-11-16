@@ -26,6 +26,7 @@
 
 #include <Ext/Anim/Body.h>
 #include <Ext/Bullet/Body.h>
+#include <Ext/Unit/Footprint.h>
 #include <Ext/House/Body.h>
 #include <Ext/WeaponType/Body.h>
 #include <Ext/Scenario/Body.h>
@@ -1678,6 +1679,27 @@ void TechnoExt::ExtData::UpdateLaserTrails()
 	auto const pThis = this->OwnerObject();
 	auto const pOwner = pThis->Owner;
 	auto const cloakState = pThis->CloakState;
+
+	// A parked carrier payload is moved by SetLocation to follow the moving
+	// deck. Without this gate the LaserTrail system treats that displacement as
+	// flight and draws a contrail behind aircraft that are sitting still.
+	// The one exception is the takeoff roll: the aircraft is still on the
+	// deck, but the runway controller explicitly wants its existing J35
+	// LaserTrail visible.
+	const bool runwayRollTrail = Footprint::IsCarrierPayloadRunwayTrailEnabled(pThis);
+
+	if (pThis->WhatAmI() == AbstractType::Aircraft
+		&& !runwayRollTrail
+		&& (!pThis->InAir || Footprint::IsCarrierPayloadParked(pThis)))
+	{
+		for (auto const& pTrail : this->LaserTrails)
+		{
+			pTrail->Visible = false;
+			pTrail->LastLocation = {};
+		}
+
+		return;
+	}
 
 	// LaserTrails update routine is in TechnoClass::AI hook because LaserDrawClass-es are updated in LogicClass::AI
 	for (const auto& pTrail : this->LaserTrails)

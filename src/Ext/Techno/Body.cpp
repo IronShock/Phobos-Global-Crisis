@@ -13,6 +13,8 @@
 #include <Ext/Scenario/Body.h>
 #include <Ext/WeaponType/Body.h>
 
+#include <algorithm>
+
 #include <Utilities/AresFunctions.h>
 #include <Utilities/CrashTrace.h>
 #include <Utilities/PointerSanity.h>
@@ -1859,6 +1861,54 @@ void TechnoExt::ExtData::InvalidatePointer(void* ptr, bool bRemoved)
 		AnnounceInvalidPointer(pDock, ptr);
 
 	AnnounceInvalidPointer(this->Footprint.CarrierDockBuilding, ptr);
+
+	auto fixRunway = [ptr](CarrierRunwayState& runway)
+	{
+		AnnounceInvalidPointer(runway.Occupant, ptr);
+		AnnounceInvalidPointer(runway.TakeoffRequest, ptr);
+		AnnounceInvalidPointer(runway.CommandTarget, ptr);
+		AnnounceInvalidPointer(runway.PendingTarget, ptr);
+
+		for (auto& task : runway.TaxiTasks)
+			AnnounceInvalidPointer(task.Aircraft, ptr);
+
+		for (auto& task : runway.Departures)
+		{
+			AnnounceInvalidPointer(task.Aircraft, ptr);
+			AnnounceInvalidPointer(task.CommandTarget, ptr);
+		}
+
+		if (!runway.Occupant && runway.Phase != CarrierRunwayPhase::Idle)
+		{
+			runway.Phase = CarrierRunwayPhase::Idle;
+			runway.Timer = 0;
+			runway.Speed = 0.0;
+			runway.MaxSpeed = 0.0;
+			runway.Acceleration = 0.0;
+			runway.Path.clear();
+			runway.PathIndex = 0;
+			runway.TrailEnabled = false;
+		}
+
+		runway.TaxiTasks.erase(
+			std::remove_if(runway.TaxiTasks.begin(), runway.TaxiTasks.end(),
+				[](const CarrierRunwayTaxiTask& task) { return task.Aircraft == nullptr; }),
+			runway.TaxiTasks.end());
+
+		runway.Departures.erase(
+			std::remove_if(runway.Departures.begin(), runway.Departures.end(),
+				[](const CarrierRunwayDeparture& task) { return task.Aircraft == nullptr; }),
+			runway.Departures.end());
+	};
+
+	fixRunway(this->Footprint.Runway);
+	fixRunway(this->Footprint.LandingRunway);
+
+	for (auto& runway : this->Footprint.TakeoffRunways)
+		fixRunway(runway);
+
+	for (auto& runway : this->Footprint.LandingRunways)
+		fixRunway(runway);
 
 	Footprint::OnPointerInvalidated(ptr);
 }

@@ -50,6 +50,7 @@ DEFINE_HOOK(0x6F9E50, TechnoClass_AI, 0x5)
 	GET(TechnoClass*, pThis, ECX);
 
 	TechnoExt::ExtMap.Find(pThis)->OnEarlyUpdate();
+	Footprint::LockParkedCarrierPayload(pThis);
 
 	return 0;
 }
@@ -58,6 +59,11 @@ DEFINE_HOOK(0x6F9E50, TechnoClass_AI, 0x5)
 DEFINE_HOOK(0x4DA54E, FootClass_AI, 0x6)
 {
 	GET(FootClass*, pThis, ESI);
+
+	// Runway landing/takeoff is fully manual. This hook runs immediately
+	// after TechnoClass_AI, still before the controlled aircraft gets a chance
+	// to move, so clear any destination/mission the engine restored.
+	Footprint::LockParkedCarrierPayload(pThis);
 
 	auto const pExt = TechnoExt::ExtMap.Find(pThis);
 
@@ -1031,6 +1037,19 @@ DEFINE_HOOK(0x4DF4A5, FootClass_UpdateAttackMove_SetTarget, 0x6)
 {
 	GET(FootClass*, pThis, ESI);
 
+	if (R->Origin() == 0x4DF4A5)
+	{
+		GET(AbstractClass*, pTarget, EAX);
+		Footprint::RememberRunwayCommandTarget(pThis, pTarget);
+	}
+
+	if (Footprint::IsCarrierPayloadRunwayControlled(pThis))
+	{
+		pThis->Target = nullptr;
+		pThis->ArchiveTarget = nullptr;
+		return R->Origin() != 0x4DF4A5 ? R->Origin() + 0xA : 0x4DF4AB;
+	}
+
 	const auto pExt = TechnoExt::ExtMap.Find(pThis);
 
 	if (R->Origin() != 0x4DF4A5)
@@ -1055,6 +1074,23 @@ DEFINE_HOOK(0x6FCF3E, TechnoClass_SetTarget_After, 0x6)
 {
 	GET(TechnoClass*, pThis, ESI);
 	GET(AbstractClass*, pTarget, EDI);
+
+	Footprint::LogPayloadCommand("SetTargetAfter", pThis, pTarget);
+
+	// Remember an attack order issued during takeoff; the target itself must
+	// not reach the engine until departure completes.
+	Footprint::RememberRunwayCommandTarget(pThis, pTarget);
+
+	// A runway-controlled aircraft must not receive attack/move targets from
+	// a left-click while it is taxiing or rolling. Clearing only Destination
+	// was insufficient: Attack/AttackMove still installed a target and made
+	// the aircraft lift vertically.
+	if (Footprint::IsCarrierPayloadRunwayControlled(pThis))
+	{
+		pThis->Target = nullptr;
+		pThis->ArchiveTarget = nullptr;
+		return 0;
+	}
 
 	if (pThis->LocomotorTarget != pTarget)
 		pThis->ReleaseLocomotor(true);

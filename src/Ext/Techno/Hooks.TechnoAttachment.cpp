@@ -959,20 +959,15 @@ DEFINE_HOOK(0x6DA4FB, TacticalClass_SelectAt_TransparentToMouse_OccupierPtr, 0x6
 		break;
 	}
 
-	if (!pFoundObject)
-	{
-		pFoundObject = Footprint::OwnerAt(pCell, false);
-
-		if (!pFoundObject)
-			pFoundObject = Footprint::OwnerAt(pCell, true);
-
-		if (auto const pOwnerUnit = abstract_cast<UnitClass*>(pFoundObject))
-		{
-			Debug::CarrierLog("[FootprintSelect] cell=(%d,%d) owner=%s\n",
-				pCell->MapCoords.X, pCell->MapCoords.Y, pOwnerUnit->Type->ID);
-		}
-	}
-
+	// Never substitute the footprint owner here. TacticalClass::SelectAt is
+	// called recursively by the engine's target-resolution fallback; returning
+	// an object that is not in the cell's real object list makes it recurse
+	// until the stack overflows. Multi-cell selection is handled by the click
+	// path and CellClass::GetSomeObject instead.
+	// Never consume or null an occupied cell here. This hook runs for cursor
+	// selection, not only for clicks; returning nullptr used to send the engine
+	// into its multi-cell fallback and overflow the stack. Click intents are
+	// captured in DisplayClass_ProcessClickCoords instead.
 	R->EAX<ObjectClass*>(pFoundObject);
 	return 0x6DA501;
 }

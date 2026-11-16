@@ -372,22 +372,45 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 	Point2D shadowOffset { 0, 0 };
 
 	// A payload parked on a carrier deck must cast its shadow on the deck, not
-	// on the water below the ship. Draw the pre-rendered shadow under the body
-	// (the aircraft already sits at deck height).
-	const bool deckShadow = Footprint::IsCarrierPayloadParked(pThis);
+	// on the water below the ship. A payload that is still descending must
+	// project its shadow onto the deck plane as well; the engine's ground
+	// projection would put it on the water under the hull.
+	const bool parkedDeckShadow = Footprint::IsCarrierPayloadParked(pThis);
+	const bool landingDeckShadow = Footprint::IsCarrierPayloadLanding(pThis);
+	const bool runwayDeckShadow = Footprint::IsCarrierPayloadRunwayControlled(pThis);
+	const bool deckShadow = parkedDeckShadow || landingDeckShadow || runwayDeckShadow;
 
-	if (!deckShadow)
+	if (!parkedDeckShadow)
 	{
-		if (auto const pFoot = abstract_cast<FootClass*>(pThis))
+		bool projectedOnDeck = false;
+
+		if (landingDeckShadow || runwayDeckShadow)
 		{
-			if (auto const pLoco = pFoot->Locomotor)
-				shadowOffset = pLoco->Shadow_Point();
+			const int deckZ = Footprint::GetCarrierPayloadDeckZ(pThis);
+
+			if (deckZ >= 0)
+			{
+				const Point2D deckPoint = TacticalClass::CoordsToScreen(
+					CoordStruct { renderCoords.X, renderCoords.Y, deckZ });
+
+				shadowOffset = deckPoint - screenPoint;
+				projectedOnDeck = true;
+			}
 		}
 
-		if (shadowOffset.X == 0 && shadowOffset.Y == 0)
+		if (!projectedOnDeck)
 		{
-			const Point2D groundPoint = TacticalClass::CoordsToScreen(CoordStruct { renderCoords.X, renderCoords.Y, 0 });
-			shadowOffset = groundPoint - screenPoint;
+			if (auto const pFoot = abstract_cast<FootClass*>(pThis))
+			{
+				if (auto const pLoco = pFoot->Locomotor)
+					shadowOffset = pLoco->Shadow_Point();
+			}
+
+			if (shadowOffset.X == 0 && shadowOffset.Y == 0)
+			{
+				const Point2D groundPoint = TacticalClass::CoordsToScreen(CoordStruct { renderCoords.X, renderCoords.Y, 0 });
+				shadowOffset = groundPoint - screenPoint;
+			}
 		}
 	}
 

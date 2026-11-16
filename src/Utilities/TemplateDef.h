@@ -1099,6 +1099,31 @@ namespace detail
 	}
 
 	template <>
+	inline bool read<AircraftCarrierTakeOffMode>(AircraftCarrierTakeOffMode& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			if (_strcmpi(parser.value(), "vanilla") == 0)
+			{
+				value = AircraftCarrierTakeOffMode::Vanilla;
+			}
+			else if (_strcmpi(parser.value(), "runway") == 0)
+			{
+				value = AircraftCarrierTakeOffMode::Runway;
+			}
+			else
+			{
+				Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected vanilla or runway");
+				return false;
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	template <>
 	inline bool read<ChronoSparkleDisplayPosition>(ChronoSparkleDisplayPosition& value, INI_EX& parser, const char* pSection, const char* pKey)
 	{
 		if (parser.ReadString(pSection, pKey))

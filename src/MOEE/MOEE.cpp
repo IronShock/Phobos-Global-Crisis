@@ -58,15 +58,67 @@ namespace MOEE
 				// itself happens deep inside a virtual call.
 				CrashTrace::Dump();
 
+				static int s_stackN = 0;
+
+				const unsigned eip = ep->ContextRecord
+					? static_cast<unsigned>(ep->ContextRecord->Eip) : 0u;
+				const unsigned esp = ep->ContextRecord
+					? static_cast<unsigned>(ep->ContextRecord->Esp) : 0u;
+				const unsigned ebp = ep->ContextRecord
+					? static_cast<unsigned>(ep->ContextRecord->Ebp) : 0u;
+
 				if (s_n < 8)
 				{
-					const unsigned eip = ep->ContextRecord
-						? static_cast<unsigned>(ep->ContextRecord->Eip) : 0u;
 					s_n++;
-					Log("fault", "code=0x%08X eip=0x%08X addr=0x%08X",
+					Log("fault", "code=0x%08X eip=0x%08X addr=0x%08X esp=0x%08X ebp=0x%08X",
 						static_cast<unsigned>(code), eip,
 						static_cast<unsigned>(
-							reinterpret_cast<size_t>(ep->ExceptionRecord->ExceptionAddress)));
+							reinterpret_cast<size_t>(ep->ExceptionRecord->ExceptionAddress)),
+						esp, ebp);
+				}
+
+				if (s_stackN < 4)
+				{
+					s_stackN++;
+
+					// CaptureStackBackTrace may itself be unable to walk a
+					// completely exhausted stack, so also dump the raw EBP
+					// chain. The chain is what identifies the recursive
+					// function when the fault is 0xC00000FD.
+					typedef USHORT(WINAPI* FnCaptureStack)(ULONG, ULONG, PVOID*, PULONG);
+					static FnCaptureStack pCapture = reinterpret_cast<FnCaptureStack>(
+						GetProcAddress(GetModuleHandleA("kernel32.dll"),
+							"CaptureStackBackTrace"));
+
+					if (pCapture)
+					{
+						void* frames[24] = {};
+						const USHORT count = pCapture(0, 24, frames, nullptr);
+						Log("stack", "capture frames=%u esp=0x%08X ebp=0x%08X",
+							static_cast<unsigned>(count), esp, ebp);
+
+						for (USHORT i = 0; i < count; ++i)
+							Log("stack", "#%02u %p", static_cast<unsigned>(i), frames[i]);
+					}
+
+					DWORD frame = ebp;
+
+					for (int i = 0; i < 40 && frame; ++i)
+					{
+						if (IsBadReadPtr(reinterpret_cast<void*>(frame), 8))
+							break;
+
+						const DWORD ret = *reinterpret_cast<DWORD*>(frame + 4);
+						const DWORD next = *reinterpret_cast<DWORD*>(frame);
+						Log("stack", "ebp#%02d ret=%p next=%p", i,
+							reinterpret_cast<void*>(ret),
+							reinterpret_cast<void*>(next));
+
+						if (next <= frame)
+							break;
+
+						frame = next;
+					}
 				}
 			}
 		}

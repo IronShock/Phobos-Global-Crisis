@@ -568,8 +568,11 @@ DEFINE_HOOK(0x414F10, AircraftClass_AI_Trailer, 0x5)
 
 	// Carrier payloads are moved by SetLocation while following the moving
 	// ship. The engine would otherwise treat that as real flight and spawn a
-	// contrail under parked aircraft.
-	if (Footprint::IsCarrierPayloadParked(pThis))
+	// contrail under parked aircraft. Runway roll/alignment enables the trailer
+	// explicitly while InAir is still false.
+	const bool runwayTrail = Footprint::IsCarrierPayloadRunwayTrailEnabled(pThis);
+
+	if (!runwayTrail && (!pThis->InAir || Footprint::IsCarrierPayloadParked(pThis)))
 		return SkipGameCode;
 
 	auto const pTrailerAnim = GameCreate<AnimClass>(pThis->Type->Trailer, coords, 1, 1);
@@ -951,9 +954,17 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 		// A parked payload must not run the rest of AircraftClass::Update: its
 		// airport/landing logic keeps moving the aircraft and fights the deck
 		// pin every frame (visible jitter). Jump straight to the epilogue.
-		if (Footprint::IsCarrierPayloadParked(pThis) || Footprint::IsCarrierPayloadLanding(pThis))
+		if (Footprint::IsCarrierPayloadParked(pThis)
+			|| Footprint::IsCarrierPayloadLanding(pThis)
+			|| Footprint::IsCarrierPayloadRunwayControlled(pThis)
+			|| Footprint::IsCarrierPayloadLandingSequence(pThis))
+		{
 			return 0x4151B0;
+		}
 
+		// The hook replaced `mov al, [esi + 0x90]`; restore the original value
+		// so the vanilla IsAlive branch does not depend on leftover AL.
+		R->AL(pThis->IsAlive);
 		return 0;
 	}
 

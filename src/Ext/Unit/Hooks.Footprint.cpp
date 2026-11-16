@@ -1,11 +1,16 @@
 #include <Ext/Unit/Footprint.h>
 
+#include <Windows.h>
+
 #include <CellClass.h>
 #include <ObjectClass.h>
 #include <UnitClass.h>
 #include <UnitTypeClass.h>
 #include <Unsorted.h>
 #include <HouseClass.h>
+#include <MapClass.h>
+#include <TacticalClass.h>
+#include <WWMouseClass.h>
 
 #include <Locomotion/FootprintLocomotionClass.h>
 
@@ -39,6 +44,27 @@ DEFINE_HOOK(0x736BE2, UnitClass_UpdateRotation_FootprintAim, 0x6)
 	return 0;
 }
 
+// DisplayClass::ProcessClickCoords is also used while the cursor is merely
+// hovering over the tactical map. Capturing a "click" there made any mouse
+// movement over water launch every selected parked payload. Only treat the
+// mouse as commanding while the left button is down (plus a short tail so the
+// engine's button-up handler still sees the command frame).
+static bool IsTacticalCommandClick()
+{
+	static int s_tailCalls = 0;
+
+	const SHORT state = GetAsyncKeyState(VK_LBUTTON);
+	const bool down = (state & 0x8000) != 0;
+	const bool fresh = (state & 0x0001) != 0;
+
+	if (down || fresh)
+		s_tailCalls = 3;
+	else if (s_tailCalls > 0)
+		--s_tailCalls;
+
+	return down || fresh || s_tailCalls > 0;
+}
+
 // DisplayClass::ProcessClickCoords applies selectability filters after the
 // tactical target has been resolved. A peripheral hull cell can pass the
 // target lookup but fail those filters because the object's own cell is the
@@ -48,8 +74,35 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 {
 	enum { Success = 0x6925F0, Continue = 0x692527 };
 
+	const bool commandClick = IsTacticalCommandClick();
+
 	auto const ppTarget = reinterpret_cast<ObjectClass**>(R->EDI());
 	auto const pTarget = *ppTarget;
+
+	if (commandClick && pTarget && abstract_cast<TechnoClass*>(pTarget)
+		&& !abstract_cast<AircraftClass*>(pTarget))
+	{
+		auto const pTechnoTarget = abstract_cast<TechnoClass*>(pTarget);
+		// A click on some other techno is an attack order for a parked payload.
+		Footprint::CaptureAttackClick(pTechnoTarget);
+
+		// A click on the carrier records a deferred landing intent. Do not
+		// null the target: the engine's normal Enter/Return mission is caught
+		// by AircraftClass_QueueMission and converted to the same intent.
+		Footprint::CaptureCarrierReturnClick(pTechnoTarget);
+	}
+
+	if (commandClick && !pTarget && WWMouseClass::Instance && TacticalClass::Instance)
+	{
+		Point2D mouse { 0, 0 };
+		WWMouseClass::Instance->GetCoords(&mouse);
+
+		if (mouse.X != 0 || mouse.Y != 0)
+		{
+			const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+			Footprint::CaptureClickDestination(CellClass::Coord2Cell(world));
+		}
+	}
 
 	if (pTarget)
 	{

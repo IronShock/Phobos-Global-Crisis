@@ -430,6 +430,19 @@ public:
 		ValueableVector<int> AircraftCarrier_PayloadsNum;
 		ValueableVector<CoordStruct> AircraftCarrier_DockingOffsets;
 		ValueableVector<int> AircraftCarrier_DockingDirs;
+		Valueable<AircraftCarrierTakeOffMode> AircraftCarrier_TakeOffMode { AircraftCarrierTakeOffMode::Vanilla };
+		Valueable<double> AircraftCarrier_RunwayTaxiSpeed { 6.0 };
+		Valueable<int> AircraftCarrier_RunwayTakeoffDelay { 45 };
+		Valueable<int> AircraftCarrier_RunwayApproachDistance { 4096 };
+		Valueable<int> AircraftCarrier_RunwayTurnRate { 512 };
+		Valueable<double> AircraftCarrier_RunwayTakeoffAcceleration { 2.0 };
+		Valueable<int> AircraftCarrier_RunwayTakeoffInitialSpeed { 0 };
+		Valueable<double> AircraftCarrier_RunwayLandingDeceleration { 2.0 };
+		Valueable<int> AircraftCarrier_RunwayLandingMaxOverrun { 512 };
+		std::vector<CoordStruct> AircraftCarrier_TakeoffRunwayA;
+		std::vector<CoordStruct> AircraftCarrier_TakeoffRunwayZ;
+		std::vector<CoordStruct> AircraftCarrier_LandingRunwayA;
+		std::vector<CoordStruct> AircraftCarrier_LandingRunwayZ;
 
 		Valueable<Leptons> Spawner_RecycleRange;
 		ValueableVector<AnimTypeClass*> Spawner_RecycleAnim;
