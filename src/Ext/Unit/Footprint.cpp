@@ -1315,8 +1315,12 @@ namespace
 			pFly->IsLanding = false;
 			pFly->IsTakingOff = false;
 			pFly->IsElevating = false;
-			pFly->FlightLevel = location.Z
-				- MapClass::Instance.GetCellFloorHeight(location);
+			// On the deck the aircraft's altitude relative to the deck is 0.
+			// Setting FlightLevel to the deck world Z here left the SHP body
+			// and shadow one cell above the ship.
+			pFly->FlightLevel = pAircraft->InAir
+				? location.Z - MapClass::Instance.GetCellFloorHeight(location)
+				: 0;
 		}
 	}
 
@@ -4246,7 +4250,13 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		// must not be allowed to lift vertically when a player/engine order
 		// arrives during taxi or alignment.
 		if (runwayState == 6)
+		{
 			pAircraft->InAir = false;
+			// The engine altitude field is also fed to the SHP draw/shadow.
+			// A stale flight altitude here is why the parked aircraft visibly
+			// floats above the deck with the shadow left on the deck.
+			pAircraft->SetHeight(0);
+		}
 
 		if (runwayState == 7)
 		{
@@ -4335,6 +4345,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 	pAircraft->SetTarget(nullptr);
 	pAircraft->SetArchiveTarget(nullptr);
 	pAircraft->InAir = false;
+	pAircraft->SetHeight(0);
 
 	if (pAircraft->GetCurrentMission() != Mission::Sleep
 		|| pAircraft->QueuedMission != Mission::Sleep)
@@ -4399,6 +4410,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		pAircraft->Destination = nullptr;
 		pAircraft->DockNowHeadingTo = nullptr;
 		pAircraft->InAir = false;
+		pAircraft->SetHeight(0);
 		pAircraft->SetSpeedPercentage(0.0);
 		ForceCarrierSleep(pAircraft);
 		ResetCarrierFlightState(pAircraft);
@@ -4544,14 +4556,9 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		const auto slotCoords = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
 		pAircraft->SetLocation(slotCoords);
 		pAircraft->InAir = false;
+		pAircraft->SetHeight(0);
 
-		if (auto const pFly = locomotion_cast<FlyLocomotionClass*>(pAircraft->Locomotor))
-		{
-			pFly->IsLanding = false;
-			pFly->IsTakingOff = false;
-			pFly->IsElevating = false;
-			pFly->FlightLevel = 0;
-		}
+		ResetCarrierFlightState(pAircraft);
 
 		// Keep the command captured from the parked order (or queued pending
 		// command). Further commands issued during taxi/roll/departure update
@@ -6200,7 +6207,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 			const double distance = HorizontalDistance(current, progress.ApproachPoint);
 
-			if (distance <= 512.0
+			if (distance <= 1024.0
 				&& progress.RunwayIndex >= 0
 				&& !IsLandingRunwayReserved(pState, progress.RunwayIndex, pAircraft))
 			{
@@ -6265,8 +6272,23 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			if (diff > 512)
 			{
 				// Turn toward the runway heading at the approach point. This
-				// replaces the old one-frame SetCurrent snap.
-				TurnAircraftToward(pAircraft, desired, std::max(turnStep, 1024));
+				// replaces the old one-frame SetCurrent snap; the higher rate
+				// keeps the lineup from looking like a long stationary spin.
+				TurnAircraftToward(pAircraft, desired, std::max(turnStep, 4096));
+
+				// Keep closing on the approach point while turning instead of
+				// hovering in place and rotating.
+				const double toApproach = HorizontalDistance(current, progress.ApproachPoint);
+
+				if (toApproach > 16.0)
+				{
+					const double dx = static_cast<double>(progress.ApproachPoint.X - current.X);
+					const double dy = static_cast<double>(progress.ApproachPoint.Y - current.Y);
+					const double step = std::min(std::max(8.0, cruiseSpeed * 0.6), toApproach);
+					current.X += static_cast<int>(std::lround(dx / toApproach * step));
+					current.Y += static_cast<int>(std::lround(dy / toApproach * step));
+				}
+
 				pAircraft->SetLocation(current);
 				pAircraft->InAir = true;
 				UpdateCarrierFlightLevel(pAircraft, current);
@@ -6446,6 +6468,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		{
 			pAircraft->SetLocation(progress.TouchdownPoint);
 			pAircraft->InAir = false;
+			pAircraft->SetHeight(0);
 			UpdateCarrierFlightLevel(pAircraft, progress.TouchdownPoint);
 			progress.Phase = CarrierLandingPhase::LandingRoll;
 			progress.PhaseTimer = 0;
