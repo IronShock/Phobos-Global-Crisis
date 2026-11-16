@@ -6966,21 +6966,47 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		if (mission == Mission::Stop || mission == Mission::Guard)
 			return true;
 
-		// Only a real Move/QMove mission counts as a player order. The engine
-		// also sets Destination during Enter/return handling; treating any
-		// Destination as a player order cancelled the final approach every
-		// frame (mission=0 in the logs) and sent the aircraft back to circling.
-		if ((mission == Mission::Move || mission == Mission::QMove)
-			&& pAircraft->Destination)
+		// The engine converts any destination assigned to an airport-bound
+		// aircraft into Mission::Enter, which the carrier gate suppresses. A
+		// selected payload with a destination is therefore a real player move
+		// order unless the destination is the carrier itself, one of its
+		// landing runway cells, the standoff return cell, or the approach /
+		// touchdown geometry. Treating the carrier click as a move order was
+		// repeatedly cancelling the final approach at A.
+		if (pAircraft->Destination)
 		{
-			const auto destCell = CellClass::Coord2Cell(pAircraft->Destination->GetCoords());
+			const auto destCoords = pAircraft->Destination->GetCoords();
+			const auto destCell = CellClass::Coord2Cell(destCoords);
 			const auto returnCell = index < pState->CarrierPayloadReturnCell.size()
 				? pState->CarrierPayloadReturnCell[index]
 				: CellStruct { -1, -1 };
 
-			// Our own return destination is not a player order.
 			if (returnCell.X >= 0 && destCell == returnCell)
 				return false;
+
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(destCell))
+			{
+				if (IsOwnCell(pCarrier, pCell, pState->Alt)
+					|| IsOwnCell(pCarrier, pCell, !pState->Alt))
+				{
+					return false;
+				}
+			}
+
+			if (pTypeExt && FindLandingRunwayAtCell(pCarrier, pTypeExt, destCell) >= 0)
+				return false;
+
+			if (index < pState->CarrierPayloadLanding.size())
+			{
+				auto const& progress = pState->CarrierPayloadLanding[index];
+
+				if (HorizontalDistance(destCoords, progress.ApproachPoint) < 512.0
+					|| HorizontalDistance(destCoords, progress.TouchdownPoint) < 512.0
+					|| HorizontalDistance(destCoords, progress.RollEndPoint) < 512.0)
+				{
+					return false;
+				}
+			}
 
 			return true;
 		}
