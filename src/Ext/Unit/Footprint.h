@@ -696,6 +696,10 @@ public:
 
 	static int GetYSort(TechnoClass* pThis);
 	static bool IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt);
+	// Own-cell test that also covers the footprint span directly. Some hull
+	// cells are not present in the owner grid on the frame the cursor is
+	// queried; the span is always current.
+	static bool IsCarrierHullCell(TechnoClass* pThis, const CellStruct& cell);
 	static bool HasObstacleNear(TechnoClass* pThis, int radius);
 	// Writes a full deck/footprint snapshot of every live carrier to debug.log.
 	// Bound to the "Dump Carrier State" debug command.

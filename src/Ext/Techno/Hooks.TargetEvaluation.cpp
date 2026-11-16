@@ -1058,14 +1058,8 @@ Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* 
 			if (cell.X >= 0 && cell.Y >= 0
 				&& cell.X < MapClass::MaxCells && cell.Y < MapClass::MaxCells)
 			{
-				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
-				{
-					if (Footprint::IsOwnCell(pCarrier, pCell, false)
-						|| Footprint::IsOwnCell(pCarrier, pCell, true))
-					{
-						return Action::Enter;
-					}
-				}
+				if (Footprint::IsCarrierHullCell(pCarrier, cell))
+					return Action::Enter;
 			}
 		}
 

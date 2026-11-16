@@ -2406,6 +2406,43 @@ bool Footprint::IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt)
 	return false;
 }
 
+bool Footprint::IsCarrierHullCell(TechnoClass* pThis, const CellStruct& cell)
+{
+	if (!pThis)
+		return false;
+
+	if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+	{
+		if (IsOwnCell(pThis, pCell, false) || IsOwnCell(pThis, pCell, true))
+			return true;
+	}
+
+	const auto pState = GetState(pThis);
+
+	if (!pState || !pState->Initialized)
+		return false;
+
+	if (pState->Anchor == cell)
+		return true;
+
+	for (auto const& offset : pState->Span)
+	{
+		if (offset == cell)
+			return true;
+
+		const CellStruct absolute
+		{
+			static_cast<short>(pState->Anchor.X + offset.X),
+			static_cast<short>(pState->Anchor.Y + offset.Y)
+		};
+
+		if (absolute == cell)
+			return true;
+	}
+
+	return false;
+}
+
 bool Footprint::HasObstacleNear(TechnoClass* pThis, int radius)
 {
 	if (!pThis || radius <= 0)
@@ -3552,10 +3589,7 @@ void Footprint::CaptureClickDestination(const CellStruct& cell)
 		if (currentState == 0 && pAircraft->IsSelected && HasRunwayMode(pTypeExt, true))
 		{
 			const int specificRunway = FindLandingRunwayAtCell(pCarrier, pTypeExt, cell);
-			bool ownCell = false;
-
-			if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
-				ownCell = IsOwnCell(pCarrier, pCell, pState->Alt);
+			const bool ownCell = IsCarrierHullCell(pCarrier, cell);
 
 			Debug::CarrierLog("[DiagClick]   landing-click ownCell=%d specificRunway=%d cell=(%d,%d)\n",
 				ownCell ? 1 : 0, specificRunway, cell.X, cell.Y);
@@ -3573,10 +3607,7 @@ void Footprint::CaptureClickDestination(const CellStruct& cell)
 		// the engine's Enter conversion is suppressed by the carrier gate.
 		if (currentState >= 2 && currentState <= 5 && pAircraft->IsSelected)
 		{
-			bool ownCell = false;
-
-			if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
-				ownCell = IsOwnCell(pCarrier, pCell, pState->Alt);
+			const bool ownCell = IsCarrierHullCell(pCarrier, cell);
 
 			if (!ownCell)
 			{
@@ -6323,7 +6354,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 			const double distance = HorizontalDistance(current, progress.ApproachPoint);
 
-			if (distance <= 1024.0
+			if (distance <= 2048.0
 				&& progress.RunwayIndex >= 0
 				&& !IsLandingRunwayReserved(pState, progress.RunwayIndex, pAircraft))
 			{
