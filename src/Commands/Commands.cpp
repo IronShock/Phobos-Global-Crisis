@@ -54,6 +54,11 @@ DEFINE_HOOK(0x533066, CommandClassCallback_Register, 0x6)
 	MakeCommand<ToggleTacticalMapCommandClass>();
 	MakeCommand<ToggleSWSidebar>();
 
+	// Registered unconditionally: it takes over the vanilla Stop hotkey so S
+	// recalls airborne carrier payloads while keeping normal stop behaviour.
+	RecallCarrierAircraftCommandClass::Instance =
+		MakeCommand<RecallCarrierAircraftCommandClass>();
+
 	// MOEE keyboard-side bindings for the mouse combos.
 	MOEE::RegisterCommands();
 
@@ -88,7 +93,6 @@ DEFINE_HOOK(0x533066, CommandClassCallback_Register, 0x6)
 		MakeCommand<SaveVariablesToFileCommandClass>();
 		MakeCommand<ObjectInfoCommandClass>();
 		MakeCommand<DumpCarrierStateCommandClass>();
-	MakeCommand<RecallCarrierAircraftCommandClass>();
 		MakeCommand<FrameByFrameCommandClass>();
 		MakeCommand<FrameStepCommandClass<1>>(); // Single step in
 		MakeCommand<FrameStepCommandClass<5>>(); // Speed 1

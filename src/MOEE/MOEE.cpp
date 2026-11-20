@@ -4,7 +4,6 @@
 #include <Phobos.h>
 #include <SessionClass.h>
 #include <Unsorted.h>
-#include <Ext/Unit/FootprintDebug.h>
 #include <Utilities/Debug.h>
 #include <Utilities/CrashTrace.h>
 
@@ -188,6 +187,5 @@ namespace MOEE
 		SmartArea::Draw();
 		DeployPreview::Draw();
 		WeaponRange::Draw();
-		FootprintDebug::Draw();
 	}
 }

@@ -31,6 +31,106 @@ bool TechnoTypeExt::SelectWeaponMutex = false;
 namespace
 {
 	std::unordered_set<TechnoTypeClass*> s_aircraftCarrierTypes;
+
+	SHPStruct* LoadCarrierIslandImage(const char* pName)
+	{
+		if (!pName || !pName[0]
+			|| _stricmp(pName, "none") == 0
+			|| _stricmp(pName, "no") == 0)
+		{
+			return nullptr;
+		}
+
+		std::string name = pName;
+
+		if (name.size() < 4 || _stricmp(name.c_str() + name.size() - 4, ".shp") != 0)
+			name += ".shp";
+
+		if (auto const pImage = FileSystem::LoadSHPFile(name.c_str()))
+			return pImage;
+
+		Debug::Log("[AircraftCarrier] Failed to load island image %s\n", name.c_str());
+		return nullptr;
+	}
+
+	// Carrier-only art keys. Kept separate from the main art parse so it can be
+	// re-run lazily after a savegame restores TechnoTypeExt from the stream.
+	void ParseAircraftCarrierExtraArt(TechnoTypeClass* pType, TechnoTypeExt::ExtData* pExt)
+	{
+		if (!pType || !pExt)
+			return;
+
+		INI_EX exArtINI(CCINIClass::INI_Art);
+		const char* pSection = pType->ImageFile;
+
+		pExt->AircraftCarrier_IslandImage = nullptr;
+		pExt->AircraftCarrier_IslandDisabled = false;
+		pExt->AircraftCarrier_BlockedCells.clear();
+		pExt->AircraftCarrier_BlockedAreas.clear();
+		pExt->AircraftCarrier_ShowBlockedCells = false;
+		pExt->AircraftCarrier_ShowDeckSlots = false;
+
+		exArtINI.ReadBool(pSection, "ShowBlockedCells", &pExt->AircraftCarrier_ShowBlockedCells);
+		exArtINI.ReadBool(pSection, "ShowDeckSlots", &pExt->AircraftCarrier_ShowDeckSlots);
+
+		if (exArtINI.ReadString(pSection, "IslandImage"))
+		{
+			const char* value = exArtINI.value();
+
+			if (_stricmp(value, "none") == 0 || _stricmp(value, "no") == 0)
+				pExt->AircraftCarrier_IslandDisabled = true;
+			else if (auto const pImage = LoadCarrierIslandImage(value))
+				pExt->AircraftCarrier_IslandImage = pImage;
+		}
+		else if (auto const pImage = LoadCarrierIslandImage("AIRCARR_ISLAND.SHP"))
+		{
+			// Preserve the original hard-coded default.
+			pExt->AircraftCarrier_IslandImage = pImage;
+		}
+
+		for (int i = 0; ; ++i)
+		{
+			char key[64];
+			_snprintf_s(key, sizeof(key), "BlockedCell%d", i);
+
+			int value[2] {};
+			if (!exArtINI.Read2Integers(pSection, key, value))
+				break;
+
+			pExt->AircraftCarrier_BlockedCells.emplace_back(
+				static_cast<short>(value[0]), static_cast<short>(value[1]));
+		}
+
+		for (int i = 0; ; ++i)
+		{
+			char key[64];
+			_snprintf_s(key, sizeof(key), "BlockedArea%d", i);
+
+			int value[4] {};
+			if (!exArtINI.Read4Integers(pSection, key, value))
+				break;
+
+			if (value[2] <= 0 || value[3] <= 0)
+			{
+				Debug::Log("[AircraftCarrier] %s: BlockedArea%d has non-positive size, skipped\n",
+					pType->ID, i);
+				continue;
+			}
+
+			pExt->AircraftCarrier_BlockedAreas.push_back(
+				CarrierBlockedArea { value[0], value[1], value[2], value[3] });
+		}
+
+		Debug::CarrierLog("[AircraftCarrier] %s art island=%s disabled=%d blockedCells=%u blockedAreas=%u showDeckSlots=%d\n",
+			pType->ID,
+			pExt->AircraftCarrier_IslandImage.isset() ? "yes" : "no",
+			pExt->AircraftCarrier_IslandDisabled ? 1 : 0,
+			static_cast<unsigned>(pExt->AircraftCarrier_BlockedCells.size()),
+			static_cast<unsigned>(pExt->AircraftCarrier_BlockedAreas.size()),
+			pExt->AircraftCarrier_ShowDeckSlots ? 1 : 0);
+
+		pExt->AircraftCarrier_ArtParsed = true;
+	}
 }
 
 bool TechnoTypeExt::IsAircraftCarrier(TechnoTypeClass* pType)
@@ -43,6 +143,16 @@ bool TechnoTypeExt::IsAircraftCarrier(TechnoTypeClass* pType)
 
 	const auto pExt = TechnoTypeExt::ExtMap.TryFind(pType);
 	return pExt && pExt->AircraftCarrier;
+}
+
+void TechnoTypeExt::EnsureAircraftCarrierArt(TechnoTypeClass* pType)
+{
+	const auto pExt = TechnoTypeExt::ExtMap.TryFind(pType);
+
+	if (!pExt || pExt->AircraftCarrier_ArtParsed)
+		return;
+
+	ParseAircraftCarrierExtraArt(pType, pExt);
 }
 
 void TechnoTypeExt::ExtData::ApplyTurretOffset(Matrix3D* mtx, double factor)
@@ -1247,12 +1357,18 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 
 	this->AircraftCarrier.Read(exINI, pSection, "AircraftCarrier");
 	this->AircraftCarrier_NumberOfDocks.Read(exINI, pSection, "NumberOfDocks");
+	this->AircraftCarrier_Attached.Read(exINI, pSection, "AircraftCarrier.Attached");
+	this->AircraftCarrier_DockStricted.Read(exINI, pSection, "AircraftCarrier.DockStricted");
+	this->AircraftCarrier_AllowRestore.Read(exINI, pSection, "AircraftCarrier.AllowRestore");
+	this->AircraftCarrier_Restore.Read(exINI, pSection, "AircraftCarrier.Restore");
+	this->AircraftCarrier_DockRadius.Read(exINI, pSection, "AircraftCarrier.DockRadius");
 	this->AircraftCarrier_Payloads.Read(exINI, pSection, "AircraftCarrier.Payloads");
 	this->AircraftCarrier_PayloadsNum.Read(exINI, pSection, "AircraftCarrier.PayloadsNum");
 	this->AircraftCarrier_TakeOffMode.Read(exINI, pSection, "AircraftCarrier.TakeOff");
 	this->AircraftCarrier_RunwayTaxiSpeed.Read(exINI, pSection, "AircraftCarrier.RunwayTaxiSpeed");
 	this->AircraftCarrier_RunwayTakeoffDelay.Read(exINI, pSection, "AircraftCarrier.RunwayTakeoffDelay");
 	this->AircraftCarrier_RunwayApproachDistance.Read(exINI, pSection, "AircraftCarrier.RunwayApproachDistance");
+	this->AircraftCarrier_RunwayDescentDistance.Read(exINI, pSection, "AircraftCarrier.RunwayDescentDistance");
 	this->AircraftCarrier_RunwayTurnRate.Read(exINI, pSection, "AircraftCarrier.RunwayTurnRate");
 	this->AircraftCarrier_RunwayTakeoffAcceleration.Read(exINI, pSection, "AircraftCarrier.TakeoffAcceleration");
 	this->AircraftCarrier_RunwayTakeoffInitialSpeed.Read(exINI, pSection, "AircraftCarrier.TakeoffInitialSpeed");
@@ -1319,6 +1435,25 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 		if (exINI.ReadInteger(pSection, "Foundation.Width", &foundationWidth))
 			this->MultiCell.Width = foundationWidth;
 
+		// Foundation.Length/Width accept more than the 15x15 limit of the
+		// combined Foundation= key, but a typo must never create a hull of
+		// thousands of cells (that stalls the pathfinder and the owner grid).
+		constexpr int maxFoundationSide = 64;
+		constexpr int maxFoundationCells = 4096;
+
+		if (this->MultiCell.Length < 1 || this->MultiCell.Length > maxFoundationSide
+			|| this->MultiCell.Width < 1 || this->MultiCell.Width > maxFoundationSide
+			|| this->MultiCell.Length * this->MultiCell.Width > maxFoundationCells)
+		{
+			Debug::Log("[Footprint] [%s] Foundation.Length=%d Foundation.Width=%d out of range (1..%d, at most %d cells); footprint disabled.\n",
+				pSection, this->MultiCell.Length, this->MultiCell.Width,
+				maxFoundationSide, maxFoundationCells);
+
+			this->MultiCell.Length = 1;
+			this->MultiCell.Width = 1;
+			this->MultiCell.Enabled = false;
+		}
+
 		if (this->MultiCell.Length > 0 && this->MultiCell.Width > 0)
 			this->MultiCell.Enabled = (this->MultiCell.Length > 1 || this->MultiCell.Width > 1);
 
@@ -1329,6 +1464,18 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 
 		if (exINI.ReadBool(pSection, "Foundation.Rotates", &rotates))
 			this->MultiCell.Rotates = rotates;
+
+		if (exINI.ReadString(pSection, "Foundation.Raster"))
+		{
+			const char* raster = exINI.value();
+
+			if (_stricmp(raster, "solid") == 0)
+				this->MultiCell.Raster = FootprintRasterMode::Solid;
+			else if (_stricmp(raster, "lattice") == 0)
+				this->MultiCell.Raster = FootprintRasterMode::Lattice;
+			else
+				Debug::INIParseFailed(pSection, "Foundation.Raster", raster, "Expected solid or lattice");
+		}
 
 		if (exINI.ReadBool(pSection, "Foundation.TurnAssist", &turnAssist))
 			this->MultiCell.TurnAssist = turnAssist;
@@ -1389,8 +1536,9 @@ void TechnoTypeExt::ExtData::LoadFromINIFile(CCINIClass* const pINI)
 			this->OwnerObject()->Locomotor = __uuidof(FootprintLocomotionClass);
 			this->MultiCell.TurnMode = FootprintTurnMode::Pivot;
 
-			Debug::CarrierLog("[Footprint] [%s] Foundation=%dx%d rot=%d SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f MaxClimb=%d PerCellDamage=%d HitAllCells=%d, forced FootprintLocomotionClass\n",
+			Debug::CarrierLog("[Footprint] [%s] Foundation=%dx%d rot=%d raster=%s SpeedType=%d MovementZone=%d Speed=%d ROT=%d Turret=%d TurretCount=%d PivotF=%.2f PivotL=%.2f MaxClimb=%d PerCellDamage=%d HitAllCells=%d, forced FootprintLocomotionClass\n",
 				pSection, this->MultiCell.Length, this->MultiCell.Width, this->MultiCell.Rotates ? 1 : 0,
+				this->MultiCell.Raster == FootprintRasterMode::Lattice ? "lattice" : "solid",
 				static_cast<int>(this->OwnerObject()->SpeedType),
 				static_cast<int>(this->OwnerObject()->MovementZone),
 				this->OwnerObject()->Speed,
@@ -1671,15 +1819,59 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 		}
 
 		this->AircraftCarrier_DockingOffsets.clear();
+		this->AircraftCarrier_DockingOffsetsConfigured.clear();
+		this->AircraftCarrier_DockingOffsetsByFacing.clear();
+		this->AircraftCarrier_DockingOffsetsByFacingComplete = false;
+		this->AircraftCarrier_UseFacingDockingOffsets = false;
+		exArtINI.ReadBool(pArtSection, "UseFacingDockingOffsets", &this->AircraftCarrier_UseFacingDockingOffsets);
 
 		for (int i = 0; i < docks; ++i)
 		{
 			char tempBuffer[64];
 			_snprintf_s(tempBuffer, sizeof(tempBuffer), "DockingOffset%d", i);
-			Valueable<CoordStruct> offset;
+			Nullable<CoordStruct> offset;
 			offset.Read(exArtINI, pArtSection, tempBuffer);
-			this->AircraftCarrier_DockingOffsets.push_back(offset.Get());
+			this->AircraftCarrier_DockingOffsets.push_back(offset.Get(CoordStruct::Empty));
+			this->AircraftCarrier_DockingOffsetsConfigured.push_back(offset.isset() ? 1 : 0);
 		}
+
+		// Optional per-facing parking table used when the art's pre-rendered
+		// frames do not rotate exactly with the world facing. Each slot has one
+		// deck-local offset per 45-degree bucket; incomplete tables are ignored
+		// so the fixed DockingOffsetN path stays available.
+		this->AircraftCarrier_DockingOffsetsByFacing.resize(docks);
+		this->AircraftCarrier_DockingOffsetsByFacingMask.assign(docks,
+			std::array<unsigned char, 8> {});
+
+		bool anyFacingOffset = false;
+
+		for (int i = 0; i < docks; ++i)
+		{
+			for (int m = 0; m < 8; ++m)
+			{
+				char key[64];
+				_snprintf_s(key, sizeof(key), "DockingOffset%d.M%d", i, m);
+
+				Nullable<CoordStruct> value;
+				value.Read(exArtINI, pArtSection, key);
+
+				if (!value.isset())
+					continue;
+
+				this->AircraftCarrier_DockingOffsetsByFacing[i][m] = value.Get();
+				this->AircraftCarrier_DockingOffsetsByFacingMask[i][m] = 1;
+				anyFacingOffset = true;
+			}
+		}
+
+		Nullable<bool> useFacing;
+		useFacing.Read(exArtINI, pArtSection, "UseFacingDockingOffsets");
+		this->AircraftCarrier_UseFacingDockingOffsets = anyFacingOffset && useFacing.Get(true);
+		this->AircraftCarrier_DockingOffsetsByFacingComplete = anyFacingOffset;
+
+		Debug::CarrierLog("[AircraftCarrier] %s facingDockingOffsets=%d use=%d\n",
+			pThis->ID, anyFacingOffset ? 1 : 0,
+			this->AircraftCarrier_UseFacingDockingOffsets ? 1 : 0);
 
 		this->AircraftCarrier_DockingDirs.clear();
 		Nullable<int> defaultDockDir;
@@ -1743,6 +1935,66 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 		readRunways("LandingRunwayCount", "LandingRunway",
 			this->AircraftCarrier_LandingRunwayA, this->AircraftCarrier_LandingRunwayZ);
 
+		// Per-facing runway table: TakeoffRunway0A.M0..M7 etc. A bucket is used
+		// only when both A and Z exist for that bucket; otherwise the global
+		// A/Z above are used.
+		const size_t takeoffCount = this->AircraftCarrier_TakeoffRunwayA.size();
+		const size_t landingCount = this->AircraftCarrier_LandingRunwayA.size();
+
+		this->AircraftCarrier_TakeoffRunwayAByFacing.assign(takeoffCount,
+			std::array<CoordStruct, 8> {});
+		this->AircraftCarrier_TakeoffRunwayZByFacing.assign(takeoffCount,
+			std::array<CoordStruct, 8> {});
+		this->AircraftCarrier_TakeoffRunwayByFacingMask.assign(takeoffCount,
+			std::array<unsigned char, 8> {});
+		this->AircraftCarrier_LandingRunwayAByFacing.assign(landingCount,
+			std::array<CoordStruct, 8> {});
+		this->AircraftCarrier_LandingRunwayZByFacing.assign(landingCount,
+			std::array<CoordStruct, 8> {});
+		this->AircraftCarrier_LandingRunwayByFacingMask.assign(landingCount,
+			std::array<unsigned char, 8> {});
+
+		auto const readFacingRunways = [&](const char* pPrefix, size_t index,
+			std::array<CoordStruct, 8>& aTable, std::array<CoordStruct, 8>& zTable,
+			std::array<unsigned char, 8>& mask)
+		{
+			for (int m = 0; m < 8; ++m)
+			{
+				char aKey[64];
+				char zKey[64];
+				_snprintf_s(aKey, sizeof(aKey), "%s%dA.M%d", pPrefix, static_cast<int>(index), m);
+				_snprintf_s(zKey, sizeof(zKey), "%s%dZ.M%d", pPrefix, static_cast<int>(index), m);
+
+				Nullable<CoordStruct> a;
+				Nullable<CoordStruct> z;
+				a.Read(exArtINI, pArtSection, aKey);
+				z.Read(exArtINI, pArtSection, zKey);
+
+				if (!a.isset() || !z.isset())
+					continue;
+
+				aTable[m] = a.Get();
+				zTable[m] = z.Get();
+				mask[m] = 1;
+			}
+		};
+
+		for (size_t i = 0; i < takeoffCount; ++i)
+		{
+			readFacingRunways("TakeoffRunway", i,
+				this->AircraftCarrier_TakeoffRunwayAByFacing[i],
+				this->AircraftCarrier_TakeoffRunwayZByFacing[i],
+				this->AircraftCarrier_TakeoffRunwayByFacingMask[i]);
+		}
+
+		for (size_t i = 0; i < landingCount; ++i)
+		{
+			readFacingRunways("LandingRunway", i,
+				this->AircraftCarrier_LandingRunwayAByFacing[i],
+				this->AircraftCarrier_LandingRunwayZByFacing[i],
+				this->AircraftCarrier_LandingRunwayByFacingMask[i]);
+		}
+
 		this->Spawns_Queue.clear();
 		int total = 0;
 
@@ -1772,6 +2024,14 @@ this->PassengersPipOffset.Read(exINI, pSection, "PassengersPipOffset");
 		// not SpawnManager spawns. Do not let the engine create a spawner.
 		pThis->Spawns = nullptr;
 		pThis->SpawnsNumber = 0;
+
+		// UnitClass::DrawVXL tests NoSpawnAlt before SpawnManager and then
+		// calls SpawnManager->CountDockedSpawns() unconditionally. A carrier
+		// has no native spawner, so leaving the flag set would crash the
+		// first time the hull is drawn.
+		pThis->NoSpawnAlt = false;
+
+		ParseAircraftCarrierExtraArt(pThis, this);
 
 		Debug::CarrierLog("[AircraftCarrier] parsed %s docks=%d payloads=%d queue=%d spawns=%p number=%d\n",
 			pThis->ID, docks, payloadTypes, static_cast<int>(this->Spawns_Queue.size()),
@@ -2441,6 +2701,33 @@ void TechnoTypeExt::ExtData::Serialize(T& Stm)
 		.Process(this->TerrainSpeed_Railroad)
 		.Process(this->TerrainSpeed_Tunnel)
 		.Process(this->TerrainSpeed_Weeds);
+
+	// Appended after the original chain so older savegames keep their layout.
+	if constexpr (requires { Stm.Remaining(); })
+	{
+		if (Stm.Remaining() >= sizeof(bool) * 3 + sizeof(int))
+		{
+			Stm.Process(this->AircraftCarrier_Attached)
+				.Process(this->AircraftCarrier_DockStricted)
+				.Process(this->AircraftCarrier_AllowRestore)
+				.Process(this->AircraftCarrier_Restore);
+
+			if (Stm.Remaining() >= sizeof(size_t))
+				Stm.Process(this->AircraftCarrier_DockingOffsetsConfigured);
+
+			if (Stm.Remaining() >= sizeof(int))
+				Stm.Process(this->AircraftCarrier_DockRadius);
+		}
+	}
+	else
+	{
+		Stm.Process(this->AircraftCarrier_Attached)
+			.Process(this->AircraftCarrier_DockStricted)
+			.Process(this->AircraftCarrier_AllowRestore)
+			.Process(this->AircraftCarrier_Restore)
+			.Process(this->AircraftCarrier_DockingOffsetsConfigured)
+			.Process(this->AircraftCarrier_DockRadius);
+	}
 }
 void TechnoTypeExt::ExtData::LoadFromStream(PhobosStreamReader& Stm)
 {

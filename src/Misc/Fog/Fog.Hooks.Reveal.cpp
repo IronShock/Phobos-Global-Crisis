@@ -47,9 +47,13 @@ DEFINE_HOOK(0x4A9CA0, Fog_RevealFogShroud, 0x8)
 
 			if (!Fog::UsesNativeFog())
 			{
-				// AutoSpread=no: an explored cell never re-fogs. Keep it exactly as
-				// if it were in sight so no snapshot/freeze logic kicks in.
-				newFoggedness = -1;
+				// AutoSpread=no: an explored cell never goes back to the black
+				// shroud, so clamp negative (fully fogged) results to -1. Keep the
+				// engine's 0..48 frames: interior cells already resolve to -1 (all
+				// neighbours mapped) and stay fully visible, while only the border
+				// with the unexplored shroud keeps the native fog gradient.
+				if (newFoggedness < 0)
+					newFoggedness = -1;
 
 				if (newVisibility == -2)
 					newVisibility = -1;

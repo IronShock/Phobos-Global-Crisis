@@ -514,6 +514,194 @@ In `artmd.ini`:
 Image=SOMEAIRCRAFT.SHP
 ```
 
+### Aircraft carrier deck
+
+- Aircraft carriers may draw a separate superstructure overlay and may mark
+  deck cells that taxiing aircraft cannot enter.
+- `IslandImage` selects the overlay SHP in the carrier's art section. The frame
+  index is not configured: it follows the carrier's own body frame, so the
+  island rotates together with the hull. Set `IslandImage=none` to disable the
+  overlay. If the key is omitted, `AIRCARR_ISLAND.SHP` is used.
+- `BlockedCellN` marks one local deck cell. `BlockedAreaN` marks a rectangle.
+  Entries start at 0 and are read until the first missing key.
+- Coordinates are **local cells**, measured in `Forward` (toward the bow) and
+  `Lateral` (toward starboard) from the carrier's `Foundation` centre. They
+  rotate with the hull automatically; do not write world-map coordinates.
+- `Foundation.Pivot=center` is accepted and is the default, so the key can be
+  omitted. `Foundation.PivotForward` / `Foundation.PivotLateral` offset the
+  rectangle in local cells; an even side always leaves one extra half cell on
+  the bow / starboard side (see the ranges below).
+- Only the taxi path is affected. Runway takeoff/landing and the vertical
+  landing slot are unchanged. The taxi start and destination cells always stay
+  usable, so an aircraft can leave a slot even if it was accidentally marked.
+- `ShowBlockedCells=yes` is a debug aid that draws the configured cells over
+  the deck. Individual `BlockedCell` entries are red; `BlockedArea` cells are
+  yellow. This only changes what is drawn, not the actual pathfinding.
+- `AircraftCarrier.Attached` (default `yes`) keeps the carrier's own
+  `AircraftCarrier.Payloads` aircraft attached to it: they cannot dock at a
+  normal building airfield. When `no`, they may use an airfield and only fall
+  back to the carrier when no airfield is available.
+- `AircraftCarrier.DockStricted` (default `yes`) allows only the carrier's own
+  payload aircraft to land on it. When `no`, a selected foreign aircraft may
+  be adopted into a genuinely free deck slot; a slot reserved for
+  `AircraftCarrier.AllowRestore` is never preempted.
+- `AircraftCarrier.AllowRestore` (default `yes`) recreates a destroyed
+  `AircraftCarrier.Payloads` aircraft after `AircraftCarrier.Restore` logic
+  frames (default `450`; at the standard 15 logic frames per second this is
+  about 30 seconds, scaled by the game speed setting).
+- `AircraftCarrier.DockRadius` (default `0`, disabled) limits player-issued
+  move orders for the carrier's payload aircraft to a horizontal radius around
+  their deck parking spot, measured in cells. Out-of-range clicks are ignored
+  without changing the aircraft's current mission or destination.
+
+#### Carrier payloads and air wing
+
+- `AircraftCarrier=yes` on a VehicleType enables the custom deck. The engine
+  spawner is disabled for that type: `Spawns` and `SpawnsNumber` are cleared at
+  rules load and any legacy `SpawnManager` is removed, so `Spawns=...` is not
+  needed and does not create a second set of aircraft.
+- `NumberOfDocks` sets the number of deck slots. If it is `0` or omitted, the
+  slot count is derived from `AircraftCarrier.Payloads` and
+  `AircraftCarrier.PayloadsNum`.
+- `AircraftCarrier.Payloads` is a comma-separated list of `AircraftType`
+  sections. `AircraftCarrier.PayloadsNum` gives the count for each entry; a
+  single value applies to every entry. The expanded list is the initial deck
+  air wing and also the respawn type order for `AllowRestore`.
+- `AircraftCarrier.TakeOff=vanilla|runway` selects the launch/landing
+  controller. `vanilla` is the legacy vertical/short takeoff path; `runway`
+  uses the taxi/takeoff-roll/landing-roll controller and the runway keys below.
+- `DockingOffsetN=Forward,Lateral,Z` places deck slot `N` in carrier-local
+  coordinates (the same local frame as `BlockedCellN`). Unspecified slots use
+  a built-in default. `AircraftDockingDirN` sets the parking facing for slot
+  `N`; `AircraftDockingDir` sets the default used when the per-slot key is
+  absent.
+- `UseFacingDockingOffsets=yes` (art section) enables the optional
+  `DockingOffsetN.M0..M7` tables, one local offset per 45-degree facing
+  sector. Incomplete tables are ignored and the fixed `DockingOffsetN` values
+  are used. `CarrierDeckSlots.ini` is the calibration file written by the
+  in-game slot tool.
+- Runway controller keys (defaults in parentheses):
+  `AircraftCarrier.RunwayTaxiSpeed` (`6.0`),
+  `AircraftCarrier.RunwayTakeoffDelay` (`45` frames),
+  `AircraftCarrier.RunwayApproachDistance` (`4096` leptons),
+  `AircraftCarrier.RunwayDescentDistance` (`4096` leptons),
+  `AircraftCarrier.RunwayTurnRate` (`512` raw facing units),
+  `AircraftCarrier.TakeoffAcceleration` (`2.0`),
+  `AircraftCarrier.TakeoffInitialSpeed` (`0`),
+  `AircraftCarrier.LandingDeceleration` (`2.0`) and
+  `AircraftCarrier.LandingMaxOverrun` (`512` leptons).
+- Deck aircraft are ordinary `AircraftClass` objects owned by the carrier's
+  house, not engine spawn nodes. They keep their own ammo, veterancy and
+  weapon logic. While parked on the deck they are treated as grounded targets,
+  so normal ground weapons and ground auto-targeting can attack them.
+- `AircraftCarrier.Attached` (default `yes`) prevents the carrier's payload
+  aircraft from docking at a building airfield; `no` lets them use an airfield
+  and only fall back to the carrier when no airfield is available.
+- `AircraftCarrier.DockStricted` (default `yes`) only accepts the carrier's own
+  payload aircraft. With `no`, a selected aircraft of the same house can be
+  adopted into a genuinely free slot; slots waiting for `AllowRestore` are
+  reserved and are never preempted, and an aircraft already belonging to
+  another carrier is not transferred.
+- `AircraftCarrier.AllowRestore` (default `yes`) and
+  `AircraftCarrier.Restore` (default `450` logic frames) control automatic
+  recreation of destroyed `AircraftCarrier.Payloads` aircraft. The slot is
+  marked state 9 (awaiting respawn) and shows `"AwaitingRespawn"` in the
+  carrier state dump. The restored aircraft always uses the slot's configured
+  original payload type, even if the slot had been filled by a foreign aircraft.
+- `AircraftCarrier.DockRadius` (default `0`, disabled) limits player-issued
+  move orders for that carrier's payload aircraft to a horizontal radius around
+  their deck parking slot, measured in cells. An out-of-range click is ignored:
+  a parked aircraft stays parked, and an airborne aircraft keeps its previous
+  mission and destination instead of stopping or hovering. Return orders,
+  attack orders and automatic targeting are not restricted, and the limit is
+  disabled when the value is `0` or negative.
+- Carrier payload combat: a direct player attack click or Ctrl force attack on
+  a parked payload is registered as an explicit order and may use ground
+  weapons against it. AI units and auto-acquired targets are never forced, so
+  they cannot drain ammo on the deck every frame. Forced attacks still respect
+  range, rate of fire and ammo, including the vanilla `NoAmmoWeapon` switch.
+  Waypoint/queued attacks are not part of the click registration; use a direct
+  attack or Ctrl attack when the forced-attack exception is required.
+- Stop hotkey: with an airborne carrier payload selected, the vanilla Stop
+  command is wrapped and issues the normal `Mission::Enter` recall (state 2 ->
+  3 -> 4 deck landing). Every other selected object keeps the original Stop
+  behaviour. The command is exposed as "Recall Carrier Aircraft" in the
+  hotkey list; a parked payload ignores it because it is already home.
+
+`Forward` / `Lateral` for the default `Foundation.Length=36`,
+`Foundation.Width=9` carrier:
+
+```
+                         bow / +Forward
+                              ↑
+                              |
+    port / -Lateral  ←────────+────────→  starboard / +Lateral
+                              |
+                              ↓
+                        stern / -Forward
+
+Forward : -17 .. +18   (36 cells, even length: one extra cell toward the bow)
+Lateral :  -4 ..  +4   (9 cells, symmetric)
+```
+
+Local cell diagram (not to scale):
+
+```
+        Lateral
+        -4  -3  -2  -1   0  +1  +2  +3  +4
+      +------------------------------------+
+F +18 |  .   .   .   .   B   .   .   .   . |  <- bow
+      |                                    |
+F  +1 |  .   .   .   .   .   .   .   .   . |
+F   0 |  .   .   .   .   A   .   .   .   . |  <- A = anchor (0,0)
+F  -1 |  .   .   .   .   .   .   .   .   . |
+      |                                    |
+F -17 |  .   .   .   .   S   .   .   .   . |  <- stern
+      +------------------------------------+
+```
+
+The local cells are rotated with the carrier's **real** facing instead of
+being snapped to one of the eight footprint buckets, so they keep following the
+hull while it turns. For the cardinal facings this is exactly the integer
+rotation below; diagonal facings rotate by the actual heading and a
+`BlockedArea` is filled as a solid rotated rectangle (at 45 degrees two
+neighbouring local cells can land on the same map cell):
+
+```
+facing   +Forward on map   +Lateral on map
+N        (0,-1)            (1,0)
+NE       (1,-1)            (1,1)
+E        (1,0)             (0,1)
+SE       (1,1)             (-1,1)
+S        (0,1)             (-1,0)
+SW       (-1,1)            (-1,-1)
+W        (-1,0)            (0,-1)
+NW       (-1,-1)           (1,-1)
+
+a = hull heading (radians, clockwise from north)
+world.x = anchor.x + Forward * sin(a) + Lateral * cos(a)
+world.y = anchor.y - Forward * cos(a) + Lateral * sin(a)
+```
+
+Example (`artgc.ini` in this build; `artmd.ini` in stock):
+
+```ini
+[AIRCARR]                     ; UnitType art section
+IslandImage=AIRCARR_ISLAND
+
+; One cell at Forward=-6, Lateral=0
+BlockedCell0=-6,0
+
+; Rectangle: start at (-8,-2), 3 cells toward the bow, 4 cells to starboard
+BlockedArea0=-8,-2,3,4
+```
+
+`BlockedArea0=-8,-2,3,4` expands to cells `(-8..-6, -2..+1)` for a cardinal
+facing.
+
+`Foundation.Length` / `Foundation.Width` and the rest of the multi-cell keys are
+described in [Multi-cell unit footprint](#multi-cell-unit-footprint).
+
 ## Animations
 
 ### Anim-to-Unit
@@ -2036,6 +2224,92 @@ DestroySound=      ; Sound entry
 
 ## Vehicles
 
+### Multi-cell unit footprint
+
+- A VehicleType can occupy more than one map cell. The unit is still one
+  object; the *footprint* is the set of map cells the hull covers, rotated with
+  the unit's body facing.
+- A footprint is enabled by giving the type a `Length` and `Width`. `Length` is
+  measured along the facing direction (toward the bow), `Width` across it.
+- `Foundation=LengthxWidth` (or `Length,Width`) enables it, with both sides
+  limited to 15. `Foundation.Length` / `Foundation.Width` override the two
+  values separately and accept up to 64 per side (at most 4096 cells); values
+  outside that range log an error and leave the footprint disabled. `1x1`
+  disables it again.
+- Occupancy uses the engine's own per-cell occupation flags, so passability,
+  pathfinding, building placement and unit collision keep working. The owner is
+  tracked per cell as well, which is what allows per-cell damage and hull-wide
+  crushing.
+- `Foundation.Rotates=yes` (default) rotates the rectangle with the facing.
+  `no` keeps it axis-aligned, e.g. a 3x3 hull that never turns.
+- `Foundation.Raster=solid|lattice` (default `solid`) selects how the rotated
+  rectangle becomes cells. `solid` rasterizes the rectangle continuously in
+  cell space, so `Length` and `Width` are real cell dimensions in all eight
+  facings and diagonal facings are filled solidly; this is the recommended
+  mode. `lattice` is the legacy integer lattice (one map cell per step along
+  the facing direction): in the four diagonal facings the hull becomes
+  `sqrt(2)` (about 41%) longer than the same `Length` in a cardinal facing and
+  only every other cell is filled, leaving a checkerboard of holes. Use it only
+  to reproduce the old behaviour for one specific type.
+- `Foundation.Pivot=center` is accepted and is the default, so the key can be
+  omitted. `Foundation.PivotForward` / `Foundation.PivotLateral` shift the
+  rectangle in local cells. An even `Length` or `Width` cannot be centred
+  exactly on a cell centre: one extra half cell always ends up toward the bow /
+  starboard side.
+- `Foundation.MaxClimb` (default 1) is the maximum height-level difference
+  allowed inside the footprint and between consecutive movement cells; `0`
+  keeps the strict flat-footprint rule.
+- Turning reserves the whole swept area for the duration of the turn, so the
+  hull cannot rotate through another unit or a blocked cell. The reservation is
+  released when the turn finishes.
+- `Foundation.PerCellDamage=yes` damages each occupied hull cell independently
+  instead of collapsing the owner into a single hit per damage pass.
+- `Foundation.HitAllCells=yes` forces every hull cell through independent
+  damage calculation once any hull cell was hit, even outside the warhead's
+  `CellSpread`.
+- `Foundation.Crush=yes` (default) lets the whole hull crush crushable objects.
+- Footprint size, raster mode and pivot are configuration only and are not
+  written to savegames; loading a save rebuilds every hull from the current
+  rules.
+- Multi-cell hulls always use the pivot locomotor. Pivot turn speed is the
+  unit's own `ROT` (raw facing units per frame), so lower `ROT` in the unit's
+  rules section to slow a hull that turns too fast. `Foundation.TurnMode=pivot`
+  is forced and `Foundation.TurnAssist` / `Foundation.FireArc` currently have
+  no effect.
+- Movement uses the engine's effective speed via `GetCurrentSpeed()`, so
+  `SpeedPercentage`, terrain/speed-type modifiers and the engine speed scale
+  apply exactly as for a normal unit. Increasing `Speed` therefore increases
+  the actual movement rate.
+- A carrier payload parked on a deck is reported as grounded even though its
+  Z coordinate is the deck altitude. Ground weapons and ground auto-targeting
+  may attack it normally; see [Aircraft carrier deck](#aircraft-carrier-deck).
+- `RA2MD.ini [Phobos] Debug.FootprintOverlay=true` outlines the occupied
+  hull, barrier and reservation cells of selected multi-cell units. It is a
+  debug aid, independent of the MOEE master switch, and defaults to `false`.
+- Footprints rotate in eight 45-degree buckets while the drawn art may have
+  many more facings, so the occupied cells snap at 45-degree boundaries while
+  the sprite turns smoothly. The swept area covers both buckets.
+- `Foundation.TurnMode` is fixed to `pivot` for multi-cell hulls (they use a
+  dedicated pivot locomotor), and `Foundation.FireArc` / `Foundation.TurnAssist`
+  are accepted but currently have no effect.
+
+In `rulesmd.ini`:
+```ini
+[SOMESHIP]                 ; VehicleType
+Foundation=36x9            ; Length x Width, in cells
+; Foundation.Length=36    ; optional per-side override (up to 64)
+; Foundation.Width=9
+Foundation.Rotates=yes
+Foundation.Raster=solid    ; solid (default) or lattice
+Foundation.Pivot=center
+; Foundation.PivotForward=0.0
+; Foundation.PivotLateral=0.0
+Foundation.MaxClimb=1
+Foundation.PerCellDamage=yes
+Foundation.HitAllCells=yes
+Foundation.Crush=yes
+```
+
 ### Amphibious access vehicle
 
 - Now you can let amphibious infantry or vehicle passengers enter or leave amphibious transport vehicles on water surface.
@@ -3154,6 +3428,14 @@ VirtualUnit=false      ; boolean - make this attachment's children virtual
 
 ### Per-weapon ammo pools
 
+- `[General] AresWeaponAmmo` (default `yes`) is the master switch for the
+  per-weapon/ExtraFire ammo pools. With `no`, every `Ammo.*` pool is ignored
+  and weapons fall back to the vanilla unit `Ammo`; ExtraFire entries are
+  treated as unlimited. The RotE rules use `AresWeaponAmmo=no`.
+- Vanilla `NoAmmoWeapon` still applies when the unit Ammo is spent: the
+  configured backup weapon may fire at unit `Ammo=0` (for example the Ranger
+  fires its tracer primary first and then its damaging secondary). The
+  per-weapon pools described below are independent of `NoAmmoWeapon`.
 - Every weapon slot can have its own ammo pool. A weapon with `Ammo>0` drains that pool instead of the unit's `Ammo`; `Ammo=0` means unlimited, and leaving `Ammo` unset falls back to the vanilla unit `Ammo` when the techno has `Ammo>0`. If the techno has no unit `Ammo`, an unset weapon `Ammo` is unlimited.
 - Pools are per unit instance and per weapon slot: `Weapon0` is primary, `Weapon1` secondary, and `Weapon2..17` are the additional weapon slots. Elite weapons share the same slot pool, so promoting a unit does not refill its magazine. Weapons without `Ammo` still share the vanilla unit `Ammo`.
 - A unit can override the pool per slot with `WeaponN.Ammo.*`. The unit override wins over the weapon definition; `WeaponN.Ammo=-1` inherits the weapon, `0` means unlimited, and `>0` sets the capacity.
@@ -3165,6 +3447,11 @@ VirtualUnit=false      ; boolean - make this attachment's children virtual
 - Old `Ammo.Secondary` keys and `Ammo2` pip scale were removed; use `Weapon1.Ammo.*` or the weapon's `Ammo.*` instead.
 
 In `rulesmd.ini`:
+```ini
+[General]
+AresWeaponAmmo=no                    ; boolean - master switch for per-weapon pools
+```
+
 ```ini
 [SOMEWEAPON]                         ; WeaponType
 Ammo=6                               ; integer - capacity (0 = unlimited, unset = unit Ammo fallback)

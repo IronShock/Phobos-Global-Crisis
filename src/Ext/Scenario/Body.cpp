@@ -276,7 +276,9 @@ DEFINE_HOOK(0x55B4E1, LogicClass_Update_BeforeAll, 0x5)
 		// is on the stack, which corrupted the heap and surfaced as a popup on
 		// the next save/load/restart.
 		Footprint::ProcessPendingKills();
+		Footprint::ProcessPendingCarrierRemovals();
 		Footprint::ProcessCarrierIntents();
+		Footprint::UpdateCarrierArtDiag();
 
 		pExt->UpdateAutoDeathObjectsInLimbo();
 		pExt->UpdateTransportReloaders();

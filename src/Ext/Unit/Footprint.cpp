@@ -3,10 +3,15 @@
 #include <AircraftClass.h>
 #include <FlyLocomotionClass.h>
 #include <BuildingClass.h>
+#include <Drawing.h>
+#include <HouseClass.h>
 #include <InfantryClass.h>
 #include <MapClass.h>
+#include <MessageListClass.h>
 #include <OverlayTypeClass.h>
+#include <RulesClass.h>
 #include <TacticalClass.h>
+#include <Surface.h>
 #include <TerrainClass.h>
 #include <Unsorted.h>
 #include <WWMouseClass.h>
@@ -31,6 +36,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <map>
@@ -48,6 +54,49 @@ namespace
 	constexpr int kMapSide = 512;
 	constexpr int kMaxCells = MapClass::MaxCells;
 
+	// A returning payload keeps the engine's own flight AI until it reaches
+	// the alignment gate on the extended runway centreline. The manual landing
+	// controller then takes over while the aircraft is still flying level, so
+	// it is already lined up when the configured descent point is reached.
+	//
+	// The gate sits this far before the approach/descent point. At cruise
+	// speed this is enough room to turn onto the runway heading and settle on
+	// the centreline before the descent starts.
+	constexpr double kLandingAlignLead = 16.0 * 256.0;
+	// Hand-off capture radius around the gate. The manual controller takes
+	// over this far before the gate, so the engine never has to slow down for
+	// its Move destination and the aircraft has the whole alignment segment to
+	// turn in.
+	constexpr double kLandingHandoffDistance = 8.0 * 256.0;
+	// Heading / lateral tolerances used by the manual join phase. The heading
+	// tolerance is deliberately a few degrees: in a steady pursuit the bearing
+	// to the centreline never becomes exactly the runway heading, and the
+	// descent phase rotates the last few degrees away at the aircraft's ROT.
+	constexpr int kLandingAlignHeadingRaw = 1024;
+	constexpr double kLandingAlignCrossTrack = 128.0;
+	constexpr double kLandingJoinLead = 1024.0;
+	// Maximum vertical step of the landing glide path, in leptons per frame.
+	// This is a safety limit only: the path normally descends at whatever rate
+	// matches the aircraft's current forward speed so it never has to slow down
+	// (to taxi speed) merely because the configured descent distance is short.
+	constexpr double kLandingMaxDescentRate = 32.0;
+	// Minimum horizontal speed the glide path may slow down to. Below this the
+	// aircraft is too slow to fly a useful approach and goes around instead.
+	constexpr double kLandingFinalMinSpeed = 8.0;
+	// Maximum change of the forward speed per frame while the controller eases
+	// the aircraft from cruise speed onto the glide speed. Prevents the old
+	// abrupt 48 -> 32 -> 12 drops.
+	constexpr double kLandingSpeedAccel = 1.0;
+	// Minimum runway left ahead of the aircraft before the descent may start.
+	// Below this the glide path would need an unsafe speed.
+	constexpr double kLandingFinalMinRunway = 512.0;
+	// A go-around flies out along the extended centreline, away from A, far
+	// enough that the aircraft can turn around and come back lined up.
+	constexpr double kLandingGoAroundOutbound = 2048.0;
+	// The go-around hands the aircraft back to the engine return leg once it
+	// is this close to the outbound point.
+	constexpr double kLandingGoAroundCapture = 512.0;
+
 	std::vector<UnitClass*> s_ownerNormal;
 	std::vector<UnitClass*> s_ownerAlt;
 	std::vector<UnitClass*> s_barrierNormal;
@@ -59,6 +108,38 @@ namespace
 	// Use a set so BeginCarrierSinkDestruction and OnUnitDestroyed cannot queue
 	// the same aircraft twice and hand a stale pointer to a second kill.
 	std::unordered_set<AircraftClass*> s_pendingKills;
+	// Dead carrier payloads are removed from the global logic tick, outside
+	// every object's AI. Deleting them inside AircraftClass::Update corrupts
+	// the heap because the update call is still on the stack.
+	std::unordered_set<AircraftClass*> s_pendingCarrierRemovals;
+
+	// A manual return command (Stop hotkey / Enter) can be overwritten by the
+	// engine before UpdateCarrierPayload reads the current mission. Remember
+	// the frame it arrived so the state-0 handler cannot miss it.
+	std::unordered_map<AircraftClass*, int> s_manualReturnRequest;
+
+	// A rejected move order (outside AircraftCarrier.DockRadius) is undone by
+	// restoring the mission/destination the aircraft had before the click, so
+	// the payload keeps its previous behaviour instead of hovering.
+	struct RejectedMoveState
+	{
+		AbstractClass* Destination = nullptr;
+		AbstractClass* MegaDestination = nullptr;
+		AbstractClass* MegaTarget = nullptr;
+		AbstractClass* Target = nullptr;
+		AbstractClass* ArchiveTarget = nullptr;
+		int CurrentMission = 0;
+		int QueuedMission = 0;
+		int MissionStatus = 0;
+		int Frame = -1;
+	};
+
+	std::unordered_map<AircraftClass*, RejectedMoveState> s_rejectedMove;
+
+	// Explicit player attack orders against parked carrier payloads. Without
+	// this, forcing FireError::OK for every hostile parked payload made AI and
+	// auto-acquired units try to fire at the deck every frame.
+	std::unordered_map<TechnoClass*, TechnoClass*> s_forcedParkedTargets;
 
 	// Carrier return autopilot: detect when the carrier has actually stopped.
 	// The fly locomotor keeps reporting movement while the ship turns or
@@ -67,6 +148,100 @@ namespace
 	std::unordered_map<UnitClass*, int> s_carrierLastMoveFrame;
 	std::unordered_map<UnitClass*, unsigned> s_carrierLastFacing;
 
+	// Per-frame deck transform. A landed aircraft is glued to the moving
+	// carrier: every world-space point of its rollout/taxi is transformed by
+	// the same rigid delta the hull moved. Updated once per frame from
+	// ProcessCarrierIntents, before any payload AI, so every payload sees the
+	// same deck delta.
+	struct CarrierDeckMotion
+	{
+		bool Valid = false;
+		bool Moving = false;
+		CoordStruct FromCoords {};
+		CoordStruct ToCoords {};
+		short FacingDeltaRaw = 0;
+		CoordStruct PrevCoords {};
+		unsigned short PrevFacingRaw = 0;
+	};
+
+	std::unordered_map<UnitClass*, CarrierDeckMotion> s_carrierDeckMotion;
+
+	void UpdateCarrierDeckMotion()
+	{
+		for (auto const pUnit : UnitClass::Array)
+		{
+			if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo)
+				continue;
+
+			const auto pType = pUnit->GetTechnoType();
+
+			if (!pType || !TechnoTypeExt::IsAircraftCarrier(pType))
+				continue;
+
+			if (!Footprint::GetState(pUnit))
+				continue;
+
+			auto& motion = s_carrierDeckMotion[pUnit];
+			const auto now = pUnit->GetRenderCoords();
+			const auto facing = pUnit->PrimaryFacing.Current().Raw;
+
+			if (!motion.Valid)
+			{
+				motion.PrevCoords = now;
+				motion.PrevFacingRaw = facing;
+				motion.Valid = true;
+				motion.Moving = false;
+				continue;
+			}
+
+			motion.FromCoords = motion.PrevCoords;
+			motion.ToCoords = now;
+			motion.FacingDeltaRaw = static_cast<short>(facing - motion.PrevFacingRaw);
+			motion.Moving = motion.FacingDeltaRaw != 0
+				|| now.X != motion.PrevCoords.X
+				|| now.Y != motion.PrevCoords.Y
+				|| now.Z != motion.PrevCoords.Z;
+
+			motion.PrevCoords = now;
+			motion.PrevFacingRaw = facing;
+		}
+	}
+
+	bool GetCarrierDeckMotion(UnitClass* pCarrier, CarrierDeckMotion& out)
+	{
+		auto const it = s_carrierDeckMotion.find(pCarrier);
+
+		if (it == s_carrierDeckMotion.end() || !it->second.Valid || !it->second.Moving)
+			return false;
+
+		out = it->second;
+		return true;
+	}
+
+	CoordStruct CarryDeckPoint(const CarrierDeckMotion& motion, const CoordStruct& point)
+	{
+		const double angle = static_cast<double>(motion.FacingDeltaRaw)
+			* (Math::TwoPi / 65536.0);
+		const double dx = static_cast<double>(point.X - motion.FromCoords.X);
+		const double dy = static_cast<double>(point.Y - motion.FromCoords.Y);
+		const double cs = std::cos(angle);
+		const double sn = std::sin(angle);
+
+		return CoordStruct
+		{
+			motion.ToCoords.X + static_cast<int>(std::lround(dx * cs - dy * sn)),
+			motion.ToCoords.Y + static_cast<int>(std::lround(dx * sn + dy * cs)),
+			point.Z + (motion.ToCoords.Z - motion.FromCoords.Z)
+		};
+	}
+
+	DirStruct CarryDeckFacing(const CarrierDeckMotion& motion, const DirStruct& facing)
+	{
+		return DirStruct(static_cast<unsigned short>(
+			static_cast<unsigned short>(facing.Raw)
+			+ static_cast<unsigned short>(motion.FacingDeltaRaw)));
+	}
+
 	// After the player cancels a return, do not immediately force the aircraft
 	// home again just because it is still out of ammo.
 	std::unordered_map<TechnoClass*, int> s_returnSuppressUntil;
@@ -74,6 +249,10 @@ namespace
 	// Captured at the moment the return starts: the aircraft's actual current
 	// flight speed, used by the short manual final phase.
 	std::unordered_map<AircraftClass*, double> s_carrierReturnSpeed;
+	// Cruise speed captured when the landing controller takes over. The engine
+	// speed percentage is zeroed during the manual phases, so GetAircraftFlightSpeed
+	// can decay; the approach speed must stay based on the real cruise speed.
+	std::unordered_map<AircraftClass*, double> s_landingCruiseSpeed;
 
 	// Native-return stuck detection: if Mission Move makes no progress, hand
 	// over to the manual final phase instead of freezing.
@@ -96,6 +275,42 @@ namespace
 	// A player clicked a specific landing runway. If it is occupied, the
 	// aircraft must wait instead of silently diverting to another runway.
 	std::unordered_set<AircraftClass*> s_landingRunwayExplicit;
+
+	// Deterministic landing queue. The order is assigned when the first
+	// landing intent is queued and is used instead of pointer comparisons so
+	// multiple aircraft wait for one runway in click/selection order.
+	std::unordered_map<AircraftClass*, int> s_landingQueueOrder;
+	int s_nextLandingQueueOrder = 1;
+
+	// Last frame a real command click was captured. Engine idle/return
+	// bookkeeping also assigns destinations; this window tells the two apart.
+	int s_lastCommandClickFrame = -1000000;
+
+	// Read-only carrier hull position diagnostic (Debug.CarrierArtDiag).
+	// Keyed by live unit; never written into the save game.
+	struct CarrierArtDiagState
+	{
+		bool HasLast = false;
+		CoordStruct LastLocation = CoordStruct::Empty;
+		int FramesRemaining = 0;
+	};
+
+	std::unordered_map<UnitClass*, CarrierArtDiagState> s_carrierArtDiag;
+
+	int GetLandingQueueOrder(AircraftClass* pAircraft)
+	{
+		if (!pAircraft)
+			return std::numeric_limits<int>::max();
+
+		auto const it = s_landingQueueOrder.find(pAircraft);
+
+		if (it != s_landingQueueOrder.end())
+			return it->second;
+
+		const int order = s_nextLandingQueueOrder++;
+		s_landingQueueOrder[pAircraft] = order;
+		return order;
+	}
 
 	// Landing progress watchdog. A state-7 aircraft that neither moves nor
 	// turns for 180 frames is considered stuck and goes around.
@@ -230,6 +445,7 @@ namespace
 		case 6: return "RunwayTakeoff";
 		case 7: return "RunwayLanding7";
 		case 8: return "TakeoffDeparture";
+		case 9: return "AwaitingRespawn";
 		default: return "Unknown";
 		}
 	}
@@ -310,6 +526,35 @@ namespace
 		}
 	}
 
+	// Diagnostics for the manual takeoff controller. The [RunwayTakeoff] log at
+	// the top of the update shows what the engine's FootClass_Update left
+	// behind; this one is emitted after the controller ran, i.e. the facing and
+	// Destination that actually get rendered. A non-null Destination here means
+	// the engine re-injected one after our clear and the deck pin is not
+	// holding; a facing far from the runway/taxi heading means the nose was
+	// rotated back to the parking direction.
+	void LogTakeoffControlState(const char* tag, AircraftClass* pAircraft,
+		FootprintState* pState, size_t index, const CarrierRunwayState& runway)
+	{
+		if (!pAircraft || !pState || index >= pState->CarrierPayloadDocked.size())
+			return;
+
+		const auto destCell = pAircraft->Destination
+			? CellClass::Coord2Cell(pAircraft->Destination->GetCoords())
+			: CellStruct { -1, -1 };
+		const auto loc = pAircraft->Location;
+
+		Debug::CarrierLog("[CarrierFacing] %s slot=%u state=%u loc=(%d,%d,%d) facing=%u desired=%u dest=%p cell=(%d,%d) phase=%d turn=%d inAir=%d mission=%d\n",
+			tag ? tag : "?", static_cast<unsigned>(index),
+			static_cast<unsigned>(pState->CarrierPayloadDocked[index]),
+			loc.X, loc.Y, loc.Z,
+			static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
+			static_cast<unsigned>(pAircraft->PrimaryFacing.Desired().Raw),
+			static_cast<void*>(pAircraft->Destination), destCell.X, destCell.Y,
+			static_cast<int>(runway.Phase), runway.TaxiTurnTimer,
+			pAircraft->InAir ? 1 : 0, static_cast<int>(pAircraft->GetCurrentMission()));
+	}
+
 	// Fallback deck coordinates if this mod's art file fails to provide the
 	// DockingOffset tags before the carrier is initialized.
 	constexpr CoordStruct kDefaultCarrierDockOffsets[8] =
@@ -330,7 +575,14 @@ namespace
 		{
 			const auto& offset = pTypeExt->AircraftCarrier_DockingOffsets[index];
 
-			if (offset.X != 0 || offset.Y != 0 || offset.Z != 0)
+			// An explicit 0,0,0 is a valid centre offset. Only fall back to the
+			// built-in layout when the key was actually absent. Old saves have
+			// no presence mask; keep the legacy non-zero heuristic for them.
+			const bool configured = index < pTypeExt->AircraftCarrier_DockingOffsetsConfigured.size()
+				? pTypeExt->AircraftCarrier_DockingOffsetsConfigured[index] != 0
+				: (offset.X != 0 || offset.Y != 0 || offset.Z != 0);
+
+			if (configured)
 				return offset;
 		}
 
@@ -339,16 +591,76 @@ namespace
 			: CoordStruct::Empty;
 	}
 
+	// Hull heading is clockwise from north. Deck offsets are authored with
+	// +X = forward (bow) and +Y = lateral (starboard), so the Z rotation the
+	// engine matrix needs is (heading - 90 degrees). The raw facing is used
+	// instead of GetRadian<32>(), which quantises to 32 steps and made the
+	// whole deck layout jump in 11.25 degree increments while the hull itself
+	// turned smoothly. Every deck-local -> world conversion (parking slots,
+	// takeoff runways and landing runways) must go through this helper so the
+	// three stay in the same frame.
+	float GetCarrierDeckRotation(UnitClass* pCarrier)
+	{
+		if (!pCarrier)
+			return 0.0f;
+
+		const double heading =
+			pCarrier->PrimaryFacing.Current().Raw * (Math::TwoPi / 65536.0);
+
+		return static_cast<float>(heading - Math::HalfPi);
+	}
+
 	CoordStruct GetCarrierDockSlotCoords(UnitClass* pCarrier, TechnoTypeExt::ExtData* pTypeExt, size_t index)
 	{
+		// Per-facing table: the art frames do not rotate exactly with the world
+		// facing. Interpolate between the two nearest 45-degree buckets; the
+		// calibrated values come from the southeast art reference. Missing
+		// buckets fall back to the fixed DockingOffsetN.
+		if (pTypeExt
+			&& pTypeExt->AircraftCarrier_UseFacingDockingOffsets
+			&& index < pTypeExt->AircraftCarrier_DockingOffsetsByFacing.size()
+			&& index < pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask.size())
+		{
+			const double raw = pCarrier->PrimaryFacing.Current().Raw;
+			const double bucketPos = raw * (8.0 / 65536.0);
+			const int b0 = static_cast<int>(std::floor(bucketPos)) & 7;
+			const int b1 = (b0 + 1) & 7;
+			const double t = bucketPos - std::floor(bucketPos);
+
+			const auto fixed = GetCarrierDockOffset(pTypeExt, index);
+			const auto& mask = pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask[index];
+
+			const CoordStruct l0 = mask[b0]
+				? pTypeExt->AircraftCarrier_DockingOffsetsByFacing[index][b0]
+				: fixed;
+			const CoordStruct l1 = mask[b1]
+				? pTypeExt->AircraftCarrier_DockingOffsetsByFacing[index][b1]
+				: fixed;
+
+			const double localX = l0.X * (1.0 - t) + l1.X * t;
+			const double localY = l0.Y * (1.0 - t) + l1.Y * t;
+			const double localZ = l0.Z * (1.0 - t) + l1.Z * t;
+			const double phi = GetCarrierDeckRotation(pCarrier);
+
+			const double wx = localX * std::cos(phi) - localY * std::sin(phi);
+			const double wy = localX * std::sin(phi) + localY * std::cos(phi);
+
+			return pCarrier->GetRenderCoords()
+				+ CoordStruct
+				{
+					static_cast<int>(std::lround(wx)),
+					static_cast<int>(std::lround(wy)),
+					static_cast<int>(std::lround(localZ)) + Unsorted::CellHeight
+				};
+		}
+
 		auto offset = GetCarrierDockOffset(pTypeExt, index);
 		offset.Z += Unsorted::CellHeight;
 
-		// Tuned deck offsets: authored directly relative to the hull centre.
-		// Do not change this transform; the DockingOffset values were adjusted
-		// against it.
+		// Deck offsets are authored relative to the hull centre with
+		// +X = bow and +Y = starboard, so they rotate with the hull.
 		auto mtx = Matrix3D::GetIdentity();
-		mtx.RotateZ(static_cast<float>(pCarrier->PrimaryFacing.Current().GetRadian<32>()));
+		mtx.RotateZ(GetCarrierDeckRotation(pCarrier));
 		mtx.Translate(static_cast<float>(offset.X), static_cast<float>(offset.Y), static_cast<float>(offset.Z));
 
 		const auto result = mtx.GetTranslation();
@@ -356,17 +668,74 @@ namespace
 			+ CoordStruct { static_cast<int>(result.X), static_cast<int>(result.Y), static_cast<int>(result.Z) };
 	}
 
-	// Deck parking direction, absolute world facing. Slots without an
-	// AircraftDockingDirN value use 0 (north); they must not follow the ship.
+	// Deck parking direction, relative to the carrier's current hull facing.
+	// AircraftDockingDirN uses the same 0-255 direction type as vanilla; the
+	// value is a local direction, so a turning carrier carries its parked
+	// aircraft with it. The ship's own BAM facing is added to the local
+	// direction (both are clockwise from north). A north-facing carrier keeps
+	// the authored direction unchanged.
 	DirStruct GetCarrierSlotFacing(UnitClass* pCarrier, TechnoTypeExt::ExtData* pTypeExt, size_t index)
 	{
-		(void)pCarrier;
-
 		const int dockDir = pTypeExt && index < pTypeExt->AircraftCarrier_DockingDirs.size()
 			? pTypeExt->AircraftCarrier_DockingDirs[index]
 			: 0;
 
-		return DirStruct(static_cast<DirType>(dockDir & 0xFF));
+		const unsigned short carrierRaw = pCarrier
+			? pCarrier->PrimaryFacing.Current().Raw
+			: 0;
+
+		return DirStruct(static_cast<unsigned short>(
+			carrierRaw + static_cast<unsigned short>(dockDir & 0xFF) * 256));
+	}
+
+	// Deck payloads must be pinned with both facing channels. The voxel draw
+	// path uses PrimaryFacing for the body, but some parked/landed states can
+	// leave SecondaryFacing stale and the model then appears not to follow the
+	// hull. Writing both is harmless for aircraft without a turret.
+	void SetCarrierPayloadFacing(AircraftClass* pAircraft, const DirStruct& facing)
+	{
+		if (!pAircraft)
+			return;
+
+		if (pAircraft->PrimaryFacing.Current() != facing)
+			pAircraft->PrimaryFacing.SetCurrent(facing);
+
+		if (pAircraft->PrimaryFacing.Desired() != facing)
+			pAircraft->PrimaryFacing.SetDesired(facing);
+
+		if (pAircraft->SecondaryFacing.Current() != facing)
+			pAircraft->SecondaryFacing.SetCurrent(facing);
+
+		if (pAircraft->SecondaryFacing.Desired() != facing)
+			pAircraft->SecondaryFacing.SetDesired(facing);
+	}
+
+	// AircraftCarrier.DockRadius: the horizontal distance (in cells) a payload
+	// may be ordered to move from its deck parking spot. 0 disables the limit.
+	bool IsOutsideCarrierDockRadius(UnitClass* pCarrier, TechnoTypeExt::ExtData* pTypeExt,
+		size_t index, const CoordStruct& coords)
+	{
+		if (!pCarrier || !pTypeExt)
+			return false;
+
+		const int radius = pTypeExt->AircraftCarrier_DockRadius.Get();
+
+		if (radius <= 0)
+			return false;
+
+		const auto slot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+		const double limit = static_cast<double>(radius) * Unsorted::LeptonsPerCell;
+		const double dx = static_cast<double>(coords.X - slot.X);
+		const double dy = static_cast<double>(coords.Y - slot.Y);
+
+		return dx * dx + dy * dy > limit * limit;
+	}
+
+	bool IsOutsideCarrierDockRadius(UnitClass* pCarrier, TechnoTypeExt::ExtData* pTypeExt,
+		size_t index, const CellStruct& cell)
+	{
+		return IsOutsideCarrierDockRadius(pCarrier, pTypeExt, index,
+			CellClass::Cell2Coord(cell));
 	}
 
 	double GetRunwayTaxiSpeed(TechnoTypeExt::ExtData* pTypeExt)
@@ -393,6 +762,23 @@ namespace
 		return std::max(0, pTypeExt
 			? pTypeExt->AircraftCarrier_RunwayApproachDistance.Get()
 			: 4096);
+	}
+
+	int GetRunwayDescentDistance(TechnoTypeExt::ExtData* pTypeExt)
+	{
+		return std::max(0, pTypeExt
+			? pTypeExt->AircraftCarrier_RunwayDescentDistance.Get()
+			: 4096);
+	}
+
+	double GetLandingCruiseSpeed(AircraftClass* pAircraft, double fallback)
+	{
+		auto const it = s_landingCruiseSpeed.find(pAircraft);
+
+		if (it != s_landingCruiseSpeed.end() && it->second >= 4.0)
+			return it->second;
+
+		return std::max(4.0, fallback);
 	}
 
 	int GetRunwayTurnRate(TechnoTypeExt::ExtData* pTypeExt)
@@ -505,12 +891,56 @@ namespace
 			return false;
 
 		const int index = std::clamp(runwayIndex, 0, count - 1);
-		const auto& a = landing
+		CoordStruct a = landing
 			? pTypeExt->AircraftCarrier_LandingRunwayA[index]
 			: pTypeExt->AircraftCarrier_TakeoffRunwayA[index];
-		const auto& z = landing
+		CoordStruct z = landing
 			? pTypeExt->AircraftCarrier_LandingRunwayZ[index]
 			: pTypeExt->AircraftCarrier_TakeoffRunwayZ[index];
+
+		// Per-facing runway points interpolate between the two nearest 45-degree
+		// buckets. The table is generated from the southeast art reference;
+		// missing buckets fall back to the global A/Z pair above.
+		{
+			const double raw = pCarrier->PrimaryFacing.Current().Raw;
+			const double bucketPos = raw * (8.0 / 65536.0);
+			const int b0 = static_cast<int>(std::floor(bucketPos)) & 7;
+			const int b1 = (b0 + 1) & 7;
+			const double t = bucketPos - std::floor(bucketPos);
+
+			auto const& aByFacing = landing
+				? pTypeExt->AircraftCarrier_LandingRunwayAByFacing
+				: pTypeExt->AircraftCarrier_TakeoffRunwayAByFacing;
+			auto const& zByFacing = landing
+				? pTypeExt->AircraftCarrier_LandingRunwayZByFacing
+				: pTypeExt->AircraftCarrier_TakeoffRunwayZByFacing;
+			auto const& mask = landing
+				? pTypeExt->AircraftCarrier_LandingRunwayByFacingMask
+				: pTypeExt->AircraftCarrier_TakeoffRunwayByFacingMask;
+
+			if (index < static_cast<int>(aByFacing.size())
+				&& index < static_cast<int>(zByFacing.size())
+				&& index < static_cast<int>(mask.size()))
+			{
+				const CoordStruct a0 = mask[index][b0] ? aByFacing[index][b0] : a;
+				const CoordStruct a1 = mask[index][b1] ? aByFacing[index][b1] : a;
+				const CoordStruct z0 = mask[index][b0] ? zByFacing[index][b0] : z;
+				const CoordStruct z1 = mask[index][b1] ? zByFacing[index][b1] : z;
+
+				a = CoordStruct
+				{
+					static_cast<int>(std::lround(a0.X * (1.0 - t) + a1.X * t)),
+					static_cast<int>(std::lround(a0.Y * (1.0 - t) + a1.Y * t)),
+					a0.Z
+				};
+				z = CoordStruct
+				{
+					static_cast<int>(std::lround(z0.X * (1.0 - t) + z1.X * t)),
+					static_cast<int>(std::lround(z0.Y * (1.0 - t) + z1.Y * t)),
+					z0.Z
+				};
+			}
+		}
 
 		auto const toWorld = [pCarrier](const CoordStruct& offset)
 		{
@@ -518,7 +948,7 @@ namespace
 			local.Z += Unsorted::CellHeight;
 
 			auto mtx = Matrix3D::GetIdentity();
-			mtx.RotateZ(static_cast<float>(pCarrier->PrimaryFacing.Current().GetRadian<32>()));
+			mtx.RotateZ(GetCarrierDeckRotation(pCarrier));
 			mtx.Translate(static_cast<float>(local.X), static_cast<float>(local.Y), static_cast<float>(local.Z));
 
 			const auto result = mtx.GetTranslation();
@@ -580,6 +1010,9 @@ namespace
 
 		if (pState->CarrierPayloadLanding.size() < pState->CarrierPayloads.size())
 			pState->CarrierPayloadLanding.resize(pState->CarrierPayloads.size());
+
+		if (pState->CarrierPayloadNativeReturn.size() < pState->CarrierPayloads.size())
+			pState->CarrierPayloadNativeReturn.resize(pState->CarrierPayloads.size(), 0);
 
 		// A save made mid-landing may restore state 7 before the runway's
 		// Occupant pointer is rebuilt. Re-register it from the per-payload
@@ -775,6 +1208,23 @@ namespace
 		return std::sqrt(dx * dx + dy * dy);
 	}
 
+	// Highest touchdown speed the runway can absorb with the configured
+	// landing deceleration. The descent and the landing roll both use this
+	// cap, so a fast cruise-speed approach cannot overrun the runway.
+	double GetLandingTouchdownSpeedCap(const CoordStruct& touchdown,
+		const CoordStruct& rollEnd, TechnoTypeExt::ExtData* pTypeExt)
+	{
+		const double decel = GetLandingDeceleration(pTypeExt);
+		const double available = HorizontalDistance(touchdown, rollEnd)
+			+ static_cast<double>(GetLandingMaxOverrun(pTypeExt));
+
+		if (decel <= 0.0 || available <= 1.0)
+			return 64.0;
+
+		return std::clamp(std::sqrt(2.0 * decel * available),
+			kLandingFinalMinSpeed, 64.0);
+	}
+
 	CoordStruct GetRunwayApproachStart(const CoordStruct& start, const CoordStruct& end, int distance)
 	{
 		const double length = HorizontalDistance(start, end);
@@ -848,6 +1298,34 @@ namespace
 		// catches a ship that is only rotating in place, which moves the deck
 		// slots even when the hull position does not change.
 		return Unsorted::CurrentFrame - it->second > 15;
+	}
+
+	// IsCarrierStopped() only looks at actual position/facing changes. The
+	// carrier's custom locomotor moves one cell at a time and pauses between
+	// steps (about 32 frames in the shipping configuration), during which the
+	// hull is stationary but the move order and locomotor are still active.
+	// Treating that inter-cell pause as "stopped" made a taking-off aircraft
+	// alternate between taxiing and holding every cell. The takeoff roll must
+	// only start when the carrier has really finished its movement order.
+	bool IsCarrierTrulyStopped(UnitClass* pCarrier)
+	{
+		if (!pCarrier)
+			return false;
+
+		// A remaining move destination means the engine will continue with
+		// the next cell after the current pause.
+		if (pCarrier->Destination)
+			return false;
+
+		// The custom locomotor keeps Moving set during the inter-cell pause.
+		if (pCarrier->Locomotor && pCarrier->Locomotor->Is_Moving())
+			return false;
+
+		// Let the hull finish any final heading correction as well.
+		if (pCarrier->PrimaryFacing.Current() != pCarrier->PrimaryFacing.Desired())
+			return false;
+
+		return IsCarrierStopped(pCarrier);
 	}
 
 	CarrierLandingProgress& EnsureLandingProgress(FootprintState* pState, size_t index)
@@ -930,12 +1408,11 @@ namespace
 
 			// Stable tie-breaker for two aircraft that are both still before
 			// the runway (OrbitWait or ReturnToApproach) with no reservation
-			// yet. The lower pointer always gets the runway first; this also
-			// covers the automatic (non-explicit) return path, which has no
-			// click order to break the tie.
+			// yet. The lower click/selection queue order gets the runway first;
+			// this also covers the automatic (non-explicit) return path.
 			if ((progress.Phase == CarrierLandingPhase::OrbitWait
 					|| progress.Phase == CarrierLandingPhase::ReturnToApproach)
-				&& pAircraft < pSelf)
+				&& GetLandingQueueOrder(pAircraft) < GetLandingQueueOrder(pSelf))
 			{
 				return true;
 			}
@@ -948,10 +1425,13 @@ namespace
 				&& progress.Phase == CarrierLandingPhase::OrbitWait)
 			{
 				// Block automatic returns unconditionally. Two explicit
-				// requests for the same runway are resolved by a stable
-				// pointer-order tie-breaker so they cannot deadlock.
-				if (!selfExplicitWait || pAircraft < pSelf)
+				// requests for the same runway are resolved by the same
+				// click/selection order so they cannot deadlock.
+				if (!selfExplicitWait
+					|| GetLandingQueueOrder(pAircraft) < GetLandingQueueOrder(pSelf))
+				{
 					return true;
+				}
 			}
 		}
 
@@ -1047,6 +1527,42 @@ namespace
 		}
 	}
 
+	// Touchdown releases the landing runway immediately: once the aircraft is
+	// on the deck the runway is free for the next one. The aircraft keeps
+	// rolling/taxiing with its own progress data; it no longer owns the
+	// shared runway state, so the automatic re-reservation must not re-block
+	// the runway while the old aircraft is still taxiing.
+	void ReleaseCarrierLandingRunway(FootprintState* pState, AircraftClass* pAircraft,
+		size_t index, const char* reason)
+	{
+		if (!pState || !pAircraft || index >= pState->CarrierPayloadLanding.size())
+			return;
+
+		auto& progress = pState->CarrierPayloadLanding[index];
+
+		if (progress.RunwayIndex >= 0
+			&& progress.RunwayIndex < static_cast<int>(pState->LandingRunways.size()))
+		{
+			auto& runway = pState->LandingRunways[progress.RunwayIndex];
+
+			if (runway.Occupant == pAircraft)
+			{
+				runway.Occupant = nullptr;
+				runway.OccupantSlot = -1;
+				runway.Phase = CarrierRunwayPhase::Idle;
+				runway.Timer = 0;
+				runway.Speed = 0.0;
+				runway.TrailEnabled = false;
+
+				Debug::CarrierLog("[AircraftCarrier] %s landing runway %d released (%s)\n",
+					pAircraft->Type ? pAircraft->Type->ID : "?",
+					progress.RunwayIndex, reason ? reason : "touchdown");
+			}
+		}
+
+		progress.Reserved = false;
+	}
+
 	void BeginCarrierLandingControl(UnitClass* pCarrier, AircraftClass* pAircraft, size_t index,
 		FootprintState* pState, TechnoTypeExt::ExtData* pTypeExt,
 		int runwayIndex, bool explicitRunway)
@@ -1062,6 +1578,9 @@ namespace
 		progress.CruiseZ = MapClass::Instance.GetCellFloorHeight(pAircraft->Location) + flightLevel;
 		progress.ExplicitRunway = explicitRunway;
 		progress.LastPos = pAircraft->Location;
+
+		// Stable click/selection order for aircraft waiting on the same runway.
+		GetLandingQueueOrder(pAircraft);
 
 		const int count = static_cast<int>(pState->LandingRunways.size());
 		int selected = -1;
@@ -1101,13 +1620,26 @@ namespace
 				progress.TouchdownPoint = start;
 				progress.RollEndPoint = end;
 
+				// Compute cruise altitude against the actual deck/threshold
+				// cell, not against whatever terrain the aircraft happens to
+				// be over when the landing request is issued.
+				progress.CruiseZ = MapClass::Instance.GetCellFloorHeight(start) + flightLevel;
+
 				// The landing approach is on the extended runway centreline
 				// before A, moving in the same A -> Z direction as takeoff.
 				// Only the vertical profile is reversed: descend to A instead
 				// of climbing away from Z.
-				progress.ApproachPoint = GetRunwayApproachStart(start, end,
-					GetRunwayApproachDistance(pTypeExt));
-				progress.LineupPoint = progress.ApproachPoint;
+				//
+				// ApproachPoint is where the descent starts (RunwayDescentDistance
+				// before A); LineupPoint is the alignment gate further out, where
+				// the manual level-flight join begins.
+				const int descentDistance = GetRunwayDescentDistance(pTypeExt);
+				const int approachDistance = GetRunwayApproachDistance(pTypeExt);
+				const int alignGate = std::max(descentDistance, approachDistance)
+					+ static_cast<int>(kLandingAlignLead);
+
+				progress.ApproachPoint = GetRunwayApproachStart(start, end, descentDistance);
+				progress.LineupPoint = GetRunwayApproachStart(start, end, alignGate);
 				progress.RunwayFacingRaw = GetRunwayDirection(start, end).Raw;
 			}
 			else
@@ -1134,17 +1666,68 @@ namespace
 		progress.TaxiPathIndex = 0;
 		progress.TaxiSpeed = 0.0;
 		progress.TaxiTurnTimer = 0;
+		progress.TaxiTurnRaw = -1;
 
-		pAircraft->Destination = nullptr;
+		if (progress.Phase == CarrierLandingPhase::ReturnToApproach
+			&& progress.ApproachPoint == CoordStruct::Empty)
+		{
+			progress.Phase = CarrierLandingPhase::OrbitWait;
+		}
+
+		// Long return leg: keep the engine's own flight AI until the aircraft
+		// reaches the alignment gate on the extended centreline. The manual
+		// controller then flies level along the centreline and only starts the
+		// descent at RunwayDescentDistance.
+		const bool engineReturn = progress.Phase == CarrierLandingPhase::ReturnToApproach
+			&& HorizontalDistance(pAircraft->Location, progress.LineupPoint) > kLandingHandoffDistance;
+
+		if (progress.Phase == CarrierLandingPhase::ReturnToApproach && !engineReturn)
+			progress.Phase = CarrierLandingPhase::Lineup;
+
+		progress.Speed = GetAircraftFlightSpeed(pAircraft);
+		s_landingCruiseSpeed[pAircraft] = progress.Speed;
+
 		pAircraft->SetTarget(nullptr);
 		pAircraft->SetArchiveTarget(nullptr);
 		pAircraft->DockNowHeadingTo = nullptr;
 		pAircraft->InAir = true;
-		pAircraft->SetSpeedPercentage(0.0);
-		pAircraft->QueueMission(Mission::Sleep, true);
 
-		if (auto const pLoco = pAircraft->Locomotor)
-			pLoco->Stop_Moving();
+		if (engineReturn)
+		{
+			// Native Move to the alignment gate. UpdateCarrierLandingReturn
+			// re-issues this order and takes over manually once the aircraft
+			// reaches the gate.
+			auto const gateCell = CellClass::Coord2Cell(progress.LineupPoint);
+
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(gateCell))
+			{
+				pAircraft->Destination = pCell;
+				pAircraft->QueueMission(Mission::Move, true);
+				pAircraft->SetSpeedPercentage(1.0);
+
+				if (index < pState->CarrierPayloadReturnCell.size())
+					pState->CarrierPayloadReturnCell[index] = gateCell;
+			}
+			else
+			{
+				progress.Phase = CarrierLandingPhase::Lineup;
+				pAircraft->Destination = nullptr;
+				pAircraft->SetSpeedPercentage(0.0);
+				pAircraft->QueueMission(Mission::Sleep, true);
+
+				if (auto const pLoco = pAircraft->Locomotor)
+					pLoco->Stop_Moving();
+			}
+		}
+		else
+		{
+			pAircraft->Destination = nullptr;
+			pAircraft->SetSpeedPercentage(0.0);
+			pAircraft->QueueMission(Mission::Sleep, true);
+
+			if (auto const pLoco = pAircraft->Locomotor)
+				pLoco->Stop_Moving();
+		}
 
 		pState->CarrierPayloadDocked[index] = 2;
 		s_landingRunwayIndex[pAircraft] = progress.RunwayIndex;
@@ -1200,6 +1783,8 @@ namespace
 		s_landingWatch.erase(pAircraft);
 		s_taxiWatch.erase(pAircraft);
 		s_landingRunwayExplicit.erase(pAircraft);
+		s_landingQueueOrder.erase(pAircraft);
+		s_landingCruiseSpeed.erase(pAircraft);
 		s_returnSuppressUntil[pAircraft] = Unsorted::CurrentFrame + 300;
 
 		if (pCarrier)
@@ -1218,10 +1803,16 @@ namespace
 		int step = static_cast<int>(pAircraft->PrimaryFacing.ROT.Raw);
 
 		// Some types expose ROT in type units instead of the already scaled
-		// facing rate. Fall back to a sane fixed-wing turn if the value would
-		// make the aircraft effectively unable to turn.
+		// facing rate. Prefer the type's own ROT (the same value native flight
+		// uses) before falling back to a fixed step.
 		if (step < 64)
-			step = 512;
+		{
+			if (pAircraft->Type && pAircraft->Type->ROT > 0)
+				step = pAircraft->Type->ROT * 256;
+
+			if (step < 64)
+				step = 512;
+		}
 
 		return std::clamp(step, 64, 4096);
 	}
@@ -1253,13 +1844,22 @@ namespace
 		current.Y += static_cast<int>(std::lround(dy / distance * step));
 		current.Z = target.Z;
 
-		TurnAircraftToward(pAircraft, facing, GetCarrierTurnStep(pAircraft));
+		// SetLocation runs the engine's destination bookkeeping. While the
+		// aircraft is runway-controlled that can assign its own cell as a
+		// Destination and rotate the nose back to the parking/PoseDir. Apply
+		// the position first, then clear the injected destination and only
+		// afterwards write the taxi heading, otherwise the engine overwrites
+		// the facing and the aircraft visibly slides/rolls backwards.
 		pAircraft->SetLocation(current);
 		pAircraft->InAir = false;
 		pAircraft->DockNowHeadingTo = nullptr;
 
 		// Bypass AssignDestination: the runway lock would reject our own clear.
 		pAircraft->Destination = nullptr;
+		pAircraft->MegaDestination = nullptr;
+		pAircraft->MegaTarget = nullptr;
+
+		TurnAircraftToward(pAircraft, facing, GetCarrierTurnStep(pAircraft));
 
 		if (auto const pLoco = pAircraft->Locomotor)
 			pLoco->Stop_Moving();
@@ -1301,6 +1901,41 @@ namespace
 
 		const double rad = static_cast<double>(raw) * (kPi * 2.0 / 65536.0);
 		const double step = std::min(speed, moveDistance);
+
+		current.X += static_cast<int>(std::lround(std::sin(rad) * step));
+		current.Y += static_cast<int>(std::lround(-std::cos(rad) * step));
+	}
+
+	// One frame of the manual landing join. Same idea as
+	// MoveCarrierAutopilot, but it never snaps the facing: the aircraft always
+	// turns at its own ROT, even when it is sitting on top of the waypoint,
+	// and it always keeps travelling. The facing snap in MoveCarrierAutopilot
+	// was one of the sources of the visible "jumping" at the approach point;
+	// that function is shared with the takeoff flow and is left untouched.
+	void MoveCarrierJoinStep(AircraftClass* pAircraft, CoordStruct& current,
+		const CoordStruct& target, double speed, int turnStep)
+	{
+		if (!pAircraft)
+			return;
+
+		const double dx = static_cast<double>(target.X - current.X);
+		const double dy = static_cast<double>(target.Y - current.Y);
+		const double distance = std::sqrt(dx * dx + dy * dy);
+
+		// Only steer while the target direction is meaningful; on top of the
+		// waypoint the aircraft keeps its current heading and overflies it.
+		if (distance >= 1.0)
+		{
+			const auto desired = DirStruct(std::atan2(
+				static_cast<double>(current.Y - target.Y),
+				static_cast<double>(target.X - current.X)));
+
+			TurnAircraftToward(pAircraft, desired, turnStep);
+		}
+
+		const unsigned short raw = pAircraft->PrimaryFacing.Current().Raw;
+		const double rad = static_cast<double>(raw) * (kPi * 2.0 / 65536.0);
+		const double step = std::clamp(speed, 1.0, 64.0);
 
 		current.X += static_cast<int>(std::lround(std::sin(rad) * step));
 		current.Y += static_cast<int>(std::lround(-std::cos(rad) * step));
@@ -1399,6 +2034,17 @@ namespace
 		return BuildingClass::Array.FindItemIndex(pBuilding) != -1;
 	}
 
+	// Rasterize a rectangle of local deck cells (Forward toward the bow,
+	// Lateral toward starboard, both in cells) onto map cells using the hull's
+	// real facing. A local cell (f, l) sits at world cell offset
+	// f * forward + l * lateral; the rectangle is filled solidly by testing
+	// every candidate cell centre in the local frame. Cardinal facings produce
+	// exactly the same cells as the old integer bucket rotation; the four
+	// diagonal facings no longer over-shoot by sqrt(2), and rectangles stay
+	// solid instead of becoming a checkerboard.
+	std::vector<CellStruct> LocalDeckRectCells(const DirStruct& facing,
+		double forward, double lateral, double length, double width);
+
 	std::vector<CoordStruct> BuildRunwayTaxiPath(UnitClass* pCarrier, FootprintState* pState,
 		AircraftClass* pSelf, const CoordStruct& target)
 	{
@@ -1414,15 +2060,48 @@ namespace
 
 		std::set<CellKey> walkable;
 		std::set<CellKey> blocked;
+		std::set<CellKey> hardBlocked;
 
 		for (auto const& cell : span)
 			walkable.emplace(cell.X, cell.Y);
+
+		// Art-configured deck cells that no taxiing aircraft may enter. These
+		// are local (Forward, Lateral) cells and rotate with the hull.
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+		TechnoTypeExt::EnsureAircraftCarrierArt(pCarrier->GetTechnoType());
+
+		if (pTypeExt)
+		{
+			const auto& facing = pCarrier->PrimaryFacing.Current();
+
+			auto const addBlocked = [&](double forward, double lateral, double length, double width)
+			{
+				for (auto const& offset : LocalDeckRectCells(facing, forward, lateral, length, width))
+				{
+					hardBlocked.emplace(
+						pState->Anchor.X + offset.X,
+						pState->Anchor.Y + offset.Y);
+				}
+			};
+
+			for (auto const& cell : pTypeExt->AircraftCarrier_BlockedCells)
+				addBlocked(cell.X, cell.Y, 1.0, 1.0);
+
+			for (auto const& area : pTypeExt->AircraftCarrier_BlockedAreas)
+				addBlocked(area.Forward, area.Lateral, area.Length, area.Width);
+		}
+
+		for (auto const& cell : hardBlocked)
+			walkable.erase(cell);
 
 		auto const startCell = CellClass::Coord2Cell(pSelf->Location);
 		auto const targetCell = CellClass::Coord2Cell(target);
 		const CellKey start { startCell.X, startCell.Y };
 		const CellKey goal { targetCell.X, targetCell.Y };
 
+		// Start and goal stay walkable even if the user accidentally placed
+		// them on a blocked cell, otherwise the aircraft could never leave the
+		// slot or finish the taxi.
 		walkable.insert(start);
 		walkable.insert(goal);
 
@@ -1445,7 +2124,10 @@ namespace
 					target.Z
 				};
 				const auto cell = CellClass::Coord2Cell(point);
-				walkable.emplace(cell.X, cell.Y);
+				const CellKey key { cell.X, cell.Y };
+
+				if (!hardBlocked.contains(key))
+					walkable.emplace(key);
 			}
 		}
 
@@ -1695,12 +2377,106 @@ namespace
 		return result;
 	}
 
-	std::vector<CellStruct> MakeDiscreteSpan(const FootprintConfig& config, int bucket)
+	std::vector<CellStruct> LocalDeckRectCells(const DirStruct& facing,
+		double forward, double lateral, double length, double width)
 	{
-		static const int forwardX[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
-		static const int forwardY[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
-		static const int lateralX[8] = { 1, 1, 0, -1, -1, -1, 0, 1 };
-		static const int lateralY[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+		std::vector<CellStruct> result;
+
+		if (length <= 0.0 || width <= 0.0)
+			return result;
+
+		const double heading = facing.Raw * (Math::TwoPi / 65536.0);
+		const double forwardX = std::sin(heading);
+		const double forwardY = -std::cos(heading);
+		const double lateralX = std::cos(heading);
+		const double lateralY = std::sin(heading);
+
+		// Local cell (f, l) covers [f - 0.5, f + 0.5) x [l - 0.5, l + 0.5) in
+		// the hull frame, so a rectangle of cells starts half a cell before the
+		// first cell index.
+		const double forwardMin = forward - 0.5;
+		const double forwardMax = forward + length - 0.5;
+		const double lateralMin = lateral - 0.5;
+		const double lateralMax = lateral + width - 0.5;
+
+		// Nearest map cell for one local cell centre. A single local cell is
+		// not covered reliably by the centre-sampling below (its rotated square
+		// can leave the world cell centre just outside the half-cell box), so it
+		// gets an explicit containing-cell mapping. For cardinal facings this is
+		// exactly the old integer rotation.
+		const auto containingCell = [&](double f, double l)
+		{
+			const double x = f * forwardX + l * lateralX;
+			const double y = f * forwardY + l * lateralY;
+
+			return CellStruct
+			{
+				static_cast<short>(std::floor(x + 0.5)),
+				static_cast<short>(std::floor(y + 0.5))
+			};
+		};
+
+		if (length <= 1.0 && width <= 1.0)
+		{
+			result.push_back(containingCell(forward, lateral));
+			return result;
+		}
+
+		const double reach = std::sqrt(
+			std::max(forwardMin * forwardMin, forwardMax * forwardMax)
+			+ std::max(lateralMin * lateralMin, lateralMax * lateralMax)) + 1.0;
+		const int range = static_cast<int>(std::ceil(reach));
+
+		for (int dy = -range; dy <= range; ++dy)
+		{
+			for (int dx = -range; dx <= range; ++dx)
+			{
+				// forward/lateral are orthonormal, so the inverse rotation is a
+				// pair of dot products.
+				const double f = dx * forwardX + dy * forwardY;
+				const double l = dx * lateralX + dy * lateralY;
+
+				if (f >= forwardMin && f < forwardMax
+					&& l >= lateralMin && l < lateralMax)
+				{
+					result.push_back(CellStruct
+					{
+						static_cast<short>(dx),
+						static_cast<short>(dy)
+					});
+				}
+			}
+		}
+
+		// A one-cell-wide rectangle can slip between map cell centres when the
+		// hull is diagonal and end up as a broken line. Add the containing cell
+		// of every local cell along its long axis so it stays contiguous.
+		if (length <= 1.0 || width <= 1.0)
+		{
+			const int steps = std::max(1, static_cast<int>(std::max(length, width)));
+
+			for (int i = 0; i < steps; ++i)
+			{
+				const double f = length <= 1.0 ? forward : forward + i;
+				const double l = length <= 1.0 ? lateral + i : lateral;
+				result.push_back(containingCell(f, l));
+			}
+		}
+
+		return result;
+	}
+
+	// Legacy integer-lattice hull: one map cell per step along the facing
+	// direction. In the four diagonal facings this advances sqrt(2) cells per
+	// step (the hull becomes ~41% longer) and only every other cell is filled,
+	// which leaves a checkerboard of holes. Kept for Foundation.Raster=lattice
+	// so a single type can reproduce the original cell set exactly.
+	std::vector<CellStruct> MakeLatticeSpan(const FootprintConfig& config, int bucket)
+	{
+		static const int forwardXs[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+		static const int forwardYs[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
+		static const int lateralXs[8] = { 1, 1, 0, -1, -1, -1, 0, 1 };
+		static const int lateralYs[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
 
 		const int b = bucket & 7;
 		const int fMin = (config.Length % 2 == 1) ? -(config.Length / 2) : -(config.Length / 2) + 1;
@@ -1717,13 +2493,36 @@ namespace
 			{
 				result.push_back(CellStruct
 				{
-					static_cast<short>(f * forwardX[b] + l * lateralX[b]),
-					static_cast<short>(f * forwardY[b] + l * lateralY[b])
+					static_cast<short>(f * forwardXs[b] + l * lateralXs[b]),
+					static_cast<short>(f * forwardYs[b] + l * lateralYs[b])
 				});
 			}
 		}
 
 		return result;
+	}
+
+	std::vector<CellStruct> MakeDiscreteSpan(const FootprintConfig& config, int bucket)
+	{
+		const int b = bucket & 7;
+
+		if (config.Raster == FootprintRasterMode::Lattice)
+			return MakeLatticeSpan(config, bucket);
+
+		// Rasterize the hull as a solid rectangle in cell space instead of
+		// stepping integer cells along the facing direction. The old lattice
+		// walk advanced one cell per step, so a diagonal facing became sqrt(2)
+		// times longer than the same Length in a cardinal facing and only
+		// every other cell was filled, leaving a checkerboard of holes inside
+		// the hull.
+		//
+		// MakeSpanAtAngle is the continuous rectangle test already used for the
+		// turn sweep, so using it here keeps Length/Width meaning real cells in
+		// all eight facings, fills the diagonal hull, and makes the parked hull
+		// agree with the area reserved while turning. Cardinal facings produce
+		// exactly the same cells as before; only the four diagonal facings
+		// change (they are no longer stretched and are no longer porous).
+		return MakeSpanAtAngle(config, static_cast<double>(b) * 45.0, 0.0);
 	}
 
 	void LogBlockedOccupy(UnitClass* pUnit, CellClass* pCell, const CellStruct& cell,
@@ -2223,7 +3022,13 @@ bool Footprint::ReserveTurnStep(UnitClass* pThis, const CellStruct& anchor,
 	const auto reservation = MakeStepReservation(
 		pState->Span, pState->BarrierSpan, sweep);
 
-	if (reservation.empty() || !CanOccupy(pThis, reservation, alt, anchor))
+	// An empty reservation is valid. For a diagonal 3x1 hull the next 45-degree
+	// sweep consists only of cells already inside the current BarrierSpan
+	// (the concave corner cells), so there is nothing extra to reserve: those
+	// cells already block every other unit. Treating empty as failure made a
+	// diagonal hull unable to turn at all, and aborted any turn larger than
+	// 45 degrees on the first intermediate step.
+	if (!CanOccupy(pThis, reservation, alt, anchor))
 		return false;
 
 	ReleaseReservation(pThis);
@@ -2441,6 +3246,44 @@ bool Footprint::IsCarrierHullCell(TechnoClass* pThis, const CellStruct& cell)
 	}
 
 	return false;
+}
+
+UnitClass* Footprint::FindMultiCellOwnerAt(const CellStruct& cell)
+{
+	for (bool alt : { false, true })
+	{
+		auto pOwner = OwnerAt(cell, alt);
+
+		if (!pOwner)
+			pOwner = FindOwnerByScan(cell, alt);
+
+		if (pOwner && pOwner->IsAlive && !pOwner->InLimbo && IsMultiCell(pOwner))
+			return pOwner;
+	}
+
+	return nullptr;
+}
+
+bool Footprint::IsMouseOverCarrierHullCell(TechnoClass* pCarrier)
+{
+	if (!pCarrier || !WWMouseClass::Instance || !TacticalClass::Instance)
+		return false;
+
+	Point2D mouse { 0, 0 };
+	WWMouseClass::Instance->GetCoords(&mouse);
+
+	const auto world = TacticalClass::Instance->ClientToCoords(mouse);
+	return IsCarrierHullCell(pCarrier, CellClass::Coord2Cell(world));
+}
+
+bool Footprint::IsCommandClickRecent()
+{
+	return Unsorted::CurrentFrame <= s_lastCommandClickFrame + 3;
+}
+
+void Footprint::MarkCommandClick()
+{
+	s_lastCommandClickFrame = Unsorted::CurrentFrame;
 }
 
 bool Footprint::HasObstacleNear(TechnoClass* pThis, int radius)
@@ -2694,6 +3537,13 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 	if (!pState)
 		return;
 
+	// Footprint::Mark runs from the engine's Unlimbo/placement path before the
+	// carrier's final Location is established. Creating deck payloads there
+	// made them appear at the ship's old/ground position for a few frames.
+	// Defer the first initialization to the carrier's AI tick after Unlimbo.
+	if (!pState->CarrierPayloadsInitialized && s_footprintMarkDepth > 0)
+		return;
+
 	if (HasRunwayMode(pTypeExt) && s_runwayLoggedCarriers.insert(pThis).second)
 	{
 		CoordStruct start {};
@@ -2807,18 +3657,32 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 			if (!pAircraft || !pAircraft->IsAlive || pAircraft->InLimbo)
 				continue;
 
-			// Only state 1 is parked. State 2 is returning and must keep flying:
-			// treating any non-zero value as parked teleported it to the deck.
-			if (pState->CarrierPayloadDocked[i] != 1)
-				continue;
-
 			const auto expected = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+			const int dx = std::abs(pAircraft->Location.X - expected.X);
+			const int dy = std::abs(pAircraft->Location.Y - expected.Y);
+			const int dz = std::abs(pAircraft->Location.Z - expected.Z);
+			const bool atDeckSlot = dx <= 2 && dy <= 2 && dz <= 2;
+			const unsigned char dockState = pState->CarrierPayloadDocked[i];
 
-			// The facing controller keeps rotating parked aircraft back to its
-			// own desired heading, so the tuned slot facing must be written
-			// every frame, not only when the position drifts.
+			// State 1 is normally parked. A state-0 payload that is already
+			// sitting exactly on its deck slot and is not airborne is also
+			// parked visually; pin its facing as well so it follows the hull.
+			if (dockState != 1
+				&& !(dockState == 0 && !pAircraft->InAir && atDeckSlot))
+			{
+				continue;
+			}
+
+			// Parked aircraft are locked to the deck exactly like a vanilla
+			// airfield dock: the heading is always the carrier's current hull
+			// facing plus AircraftDockingDirN. Setting only the desired facing
+			// made the aircraft lag (and start the scenario pointing one frame
+			// worth of stale facing), because a sleeping aircraft rotates at its
+			// own ROT. Writing current + desired keeps it glued to the deck.
 			const DirStruct facing = GetCarrierSlotFacing(pThis, pTypeExt, i);
-			pAircraft->PrimaryFacing.SetDesired(facing);
+
+			SetCarrierPayloadFacing(pAircraft, facing);
+
 			pAircraft->InAir = false;
 
 			const bool positionUnchanged = !moved
@@ -2872,12 +3736,13 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 				continue;
 
 			const auto coords = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+			const DirStruct facing = GetCarrierSlotFacing(pThis, pTypeExt, i);
 
 			pAircraft->Spawned = false;
 			pAircraft->SpawnOwner = nullptr;
 			pAircraft->SetLocation(coords);
 
-			if (!pAircraft->Unlimbo(coords, pThis->PrimaryFacing.Current().GetDir()))
+			if (!pAircraft->Unlimbo(coords, facing.GetDir()))
 			{
 				Debug::Log("[AircraftCarrier] failed to Unlimbo payload %s for %s\n",
 					slotTypes[i]->ID, pType->ID);
@@ -2889,11 +3754,9 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 			pAircraft->SetLocation(coords);
 
 			// Unlimbo does not reliably preserve the aircraft's parked facing.
-			// Set both current and desired, otherwise the fly facing controller
+			// Set both facing channels, otherwise the fly facing controller
 			// rotates the parked aircraft back to its default direction.
-			const DirStruct facing = GetCarrierSlotFacing(pThis, pTypeExt, i);
-			pAircraft->PrimaryFacing.SetCurrent(facing);
-			pAircraft->PrimaryFacing.SetDesired(facing);
+			SetCarrierPayloadFacing(pAircraft, facing);
 
 			// Parked payloads are real units, but they must not be treated as
 			// airborne targets while they sit on the deck.
@@ -2901,6 +3764,11 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 			pAircraft->SetDestination(nullptr, true);
 			pAircraft->InAir = false;
 			pAircraft->QueueMission(Mission::Sleep, true);
+
+			// Re-assert the deck pose as the last write so the first drawn frame
+			// already has the correct Z and facing.
+			pAircraft->SetLocation(coords);
+			SetCarrierPayloadFacing(pAircraft, facing);
 
 			pState->CarrierPayloads.push_back(pAircraft);
 			pState->CarrierPayloadDocked.push_back(1);
@@ -2944,6 +3812,172 @@ void Footprint::EnsureAircraftCarrierSpawns(UnitClass* pThis)
 		static_cast<int>(pState->CarrierPayloads.size()), pType->ID);
 }
 
+void Footprint::UpdateCarrierRestore(UnitClass* pThis)
+{
+	if (!pThis || !pThis->Owner || !pThis->IsAlive || pThis->InLimbo || pThis->IsSinking)
+		return;
+
+	const auto pType = pThis->GetTechnoType();
+	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	if (!pTypeExt || !TechnoTypeExt::IsAircraftCarrier(pType)
+		|| !pTypeExt->AircraftCarrier_AllowRestore)
+	{
+		return;
+	}
+
+	const auto pState = GetState(pThis);
+
+	if (!pState || !pState->CarrierPayloadsInitialized)
+		return;
+
+	const size_t count = pState->CarrierPayloads.size();
+
+	if (count == 0)
+		return;
+
+	if (pState->CarrierPayloadDocked.size() < count)
+		pState->CarrierPayloadDocked.resize(count, 1);
+
+	if (pState->CarrierPayloadRestoreTimer.size() < count)
+		pState->CarrierPayloadRestoreTimer.resize(count, 0);
+
+	const int interval = std::max(1, pTypeExt->AircraftCarrier_Restore.Get());
+
+	for (size_t i = 0; i < count; ++i)
+	{
+		auto const pAircraft = pState->CarrierPayloads[i];
+
+		if (pAircraft && pAircraft->IsAlive)
+		{
+			pState->CarrierPayloadRestoreTimer[i] = 0;
+			continue;
+		}
+
+		// Newly destroyed slot: start the countdown and mark it reserved so
+		// DockStricted=false cannot hand it to a foreign aircraft.
+		if (pState->CarrierPayloadRestoreTimer[i] == 0)
+		{
+			if (auto const pOld = pState->CarrierPayloads[i]; pOld)
+			{
+				s_carrierPayloads.erase(pOld);
+				pState->CarrierPayloads[i] = nullptr;
+			}
+
+			pState->CarrierPayloadDocked[i] = 9;
+			pState->CarrierPayloadRestoreTimer[i] = interval;
+
+			if (i < pState->CarrierPayloadReloadTimer.size())
+				pState->CarrierPayloadReloadTimer[i] = 0;
+
+			if (i < pState->CarrierPayloadLandingTimer.size())
+				pState->CarrierPayloadLandingTimer[i] = 0;
+
+			if (i < pState->CarrierPayloadLaunchRequest.size())
+				pState->CarrierPayloadLaunchRequest[i] = 0;
+
+			if (i < pState->CarrierPayloadRequestedDest.size())
+				pState->CarrierPayloadRequestedDest[i] = CellStruct { -1, -1 };
+
+			if (i < pState->CarrierPayloadReturnCell.size())
+				pState->CarrierPayloadReturnCell[i] = CellStruct { -1, -1 };
+
+			if (i < pState->CarrierPayloadIgnoredDest.size())
+				pState->CarrierPayloadIgnoredDest[i] = CellStruct { -1, -1 };
+
+			if (i < pState->CarrierPayloadLanding.size())
+				pState->CarrierPayloadLanding[i] = CarrierLandingProgress {};
+
+			Debug::CarrierLog("[AircraftCarrier] %s slot %u destroyed; respawn in %d frames\n",
+				pType->ID, static_cast<unsigned>(i), interval);
+			continue;
+		}
+
+		if (--pState->CarrierPayloadRestoreTimer[i] > 0)
+			continue;
+
+		AircraftTypeClass* pSpawnType = nullptr;
+
+		if (i < pTypeExt->Spawns_Queue.size())
+			pSpawnType = pTypeExt->Spawns_Queue[i];
+		else if (!pTypeExt->AircraftCarrier_Payloads.empty())
+			pSpawnType = pTypeExt->AircraftCarrier_Payloads[
+				i % pTypeExt->AircraftCarrier_Payloads.size()];
+
+		if (!pSpawnType)
+		{
+			pState->CarrierPayloadRestoreTimer[i] = interval;
+			continue;
+		}
+
+		auto const pNew = static_cast<AircraftClass*>(pSpawnType->CreateObject(pThis->Owner));
+
+		if (!pNew)
+		{
+			pState->CarrierPayloadRestoreTimer[i] = interval;
+			continue;
+		}
+
+		const auto coords = GetCarrierDockSlotCoords(pThis, pTypeExt, i);
+		const auto facing = GetCarrierSlotFacing(pThis, pTypeExt, i);
+
+		pNew->Spawned = false;
+		pNew->SpawnOwner = nullptr;
+		pNew->SetLocation(coords);
+
+		if (!pNew->Unlimbo(coords, facing.GetDir()))
+		{
+			Debug::Log("[AircraftCarrier] failed to restore payload %s for %s\n",
+				pSpawnType->ID, pType->ID);
+			pNew->UnInit();
+			pState->CarrierPayloadRestoreTimer[i] = interval;
+			continue;
+		}
+
+		pNew->SetLocation(coords);
+		SetCarrierPayloadFacing(pNew, facing);
+		pNew->DockNowHeadingTo = nullptr;
+		pNew->SetDestination(nullptr, true);
+		pNew->InAir = false;
+		pNew->QueueMission(Mission::Sleep, true);
+		pNew->SetLocation(coords);
+		SetCarrierPayloadFacing(pNew, facing);
+
+		pState->CarrierPayloads[i] = pNew;
+		pState->CarrierPayloadDocked[i] = 1;
+		pState->CarrierPayloadRestoreTimer[i] = 0;
+
+		if (i < pState->CarrierPayloadLastCoords.size())
+			pState->CarrierPayloadLastCoords[i] = pNew->Location;
+
+		if (i < pState->CarrierPayloadReloadTimer.size())
+			pState->CarrierPayloadReloadTimer[i] = -60;
+
+		if (i < pState->CarrierPayloadLandingTimer.size())
+			pState->CarrierPayloadLandingTimer[i] = 0;
+
+		if (i < pState->CarrierPayloadLaunchRequest.size())
+			pState->CarrierPayloadLaunchRequest[i] = 0;
+
+		if (i < pState->CarrierPayloadRequestedDest.size())
+			pState->CarrierPayloadRequestedDest[i] = CellStruct { -1, -1 };
+
+		if (i < pState->CarrierPayloadReturnCell.size())
+			pState->CarrierPayloadReturnCell[i] = CellStruct { -1, -1 };
+
+		if (i < pState->CarrierPayloadIgnoredDest.size())
+			pState->CarrierPayloadIgnoredDest[i] = CellStruct { -1, -1 };
+
+		if (i < pState->CarrierPayloadLanding.size())
+			pState->CarrierPayloadLanding[i] = CarrierLandingProgress {};
+
+		s_carrierPayloads[pNew] = pThis;
+
+		Debug::CarrierLog("[AircraftCarrier] %s restored payload %s in slot %u\n",
+			pType->ID, pSpawnType->ID, static_cast<unsigned>(i));
+	}
+}
+
 UnitClass* Footprint::GetCarrierPayloadOwner(TechnoClass* pPayload)
 {
 	auto const it = s_carrierPayloads.find(pPayload);
@@ -2977,8 +4011,9 @@ bool Footprint::IsCarrierPayloadLanding(TechnoClass* pPayload)
 		return false;
 
 	const unsigned char state = pState->CarrierPayloadDocked[index];
-	// state 2 (native return flight) must keep the vanilla aircraft update.
-	// Only the manual final alignment / vertical descent owns the aircraft.
+	// state 2 (return flight) is flown by the engine's Move mission during
+	// FootClass::Update. This query is only about the manual final
+	// alignment / vertical descent, which skips the aircraft update.
 	return state == 3 || state == 4 || state == 5;
 }
 
@@ -3042,7 +4077,63 @@ bool Footprint::IsCarrierPayloadLandingSequence(TechnoClass* pPayload)
 		return false;
 
 	const unsigned char state = pState->CarrierPayloadDocked[index];
+
+	// The hook that consumes this runs after FootClass::Update, so the
+	// engine's native Move mission has already flown the aircraft this frame.
+	// Skipping the remainder of AircraftClass::Update keeps the carrier
+	// payload out of the native airport/dock damage and auto-acquire paths,
+	// which is what the long engine-flown return leg needs as well.
 	return state == 2 || state == 7;
+}
+
+bool Footprint::IsCarrierPayloadEngineReturning(TechnoClass* pPayload)
+{
+	if (!pPayload || pPayload->WhatAmI() != AbstractType::Aircraft)
+		return false;
+
+	const auto pCarrier = GetCarrierPayloadOwner(pPayload);
+
+	if (!pCarrier || !pCarrier->IsAlive)
+		return false;
+
+	const auto pState = GetState(pCarrier);
+
+	if (!pState)
+		return false;
+
+	const auto pAircraft = static_cast<AircraftClass*>(pPayload);
+	const auto it = std::find(pState->CarrierPayloads.begin(), pState->CarrierPayloads.end(), pAircraft);
+
+	if (it == pState->CarrierPayloads.end())
+		return false;
+
+	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
+
+	if (index >= pState->CarrierPayloadDocked.size())
+		return false;
+
+	const unsigned char state = pState->CarrierPayloadDocked[index];
+
+	// Legacy state 3 is the native Move_To final approach. Its locomotor only
+	// advances while FootClass AI is allowed to run.
+	if (state == 3)
+		return true;
+
+	if (state != 2)
+		return false;
+
+	// Runway mode flies its long return leg with the engine.
+	if (index < pState->CarrierPayloadLanding.size()
+		&& pState->CarrierPayloadLanding[index].Phase == CarrierLandingPhase::ReturnToApproach)
+	{
+		return true;
+	}
+
+	// Legacy vertical-takeoff/landing has no CarrierLandingProgress entry.
+	// It uses the engine's Move mission only while the native-return flag is
+	// set; the orbit and manual final approach must keep the engine AI off.
+	return index < pState->CarrierPayloadNativeReturn.size()
+		&& pState->CarrierPayloadNativeReturn[index] != 0;
 }
 
 bool Footprint::IsCarrierPayloadRunwayCommandLocked(TechnoClass* pPayload)
@@ -3148,6 +4239,1464 @@ int Footprint::GetCarrierPayloadDeckZ(TechnoClass* pPayload)
 	return GetCarrierDockSlotCoords(pCarrier, pTypeExt, index).Z;
 }
 
+void Footprint::CaptureCarrierIslandFrame(UnitClass* pThis, int frame)
+{
+	if (!pThis || !TechnoTypeExt::IsAircraftCarrier(pThis->GetTechnoType()))
+		return;
+
+	if (auto const pState = GetState(pThis))
+		pState->CarrierIslandFrame = frame;
+}
+
+// Cheap screen-space pre-test for the "repaint the island over a deck aircraft"
+// path. The overlay is repainted after every deck aircraft so the superstructure
+// stays in front of them, but most parked aircraft are nowhere near the island.
+// The aircraft rectangle uses the SHP canvas (the widest frame the type can
+// draw), so this can only ever skip a redraw that could not overlap the island.
+static bool CarrierIslandMayOverlap(UnitClass* pCarrier, AircraftClass* pAircraft)
+{
+	if (!pCarrier || !pAircraft || !TacticalClass::Instance)
+		return true;
+
+	auto const pType = pCarrier->GetTechnoType();
+
+	if (!pType)
+		return true;
+
+	TechnoTypeExt::EnsureAircraftCarrierArt(pType);
+
+	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	if (!pTypeExt || pTypeExt->AircraftCarrier_IslandDisabled)
+		return true;
+
+	auto const pIsland = pTypeExt->AircraftCarrier_IslandImage.Get();
+
+	if (!pIsland || pIsland->Frames <= 0)
+		return true;
+
+	auto const pAircraftType = pAircraft->GetTechnoType();
+
+	// Only SHP aircraft expose a usable frame canvas. Voxel payloads keep their
+	// shape in MainVoxel, so fall back to always repainting for them.
+	if (!pAircraftType || pAircraftType->Voxel || !pAircraftType->Image)
+		return true;
+
+	auto const pAircraftImage = pAircraftType->Image;
+
+	auto const pState = Footprint::GetState(pCarrier);
+	const int frame = std::clamp(pState ? pState->CarrierIslandFrame : 0,
+		0, static_cast<int>(pIsland->Frames) - 1);
+	const auto islandBounds = pIsland->GetFrameBounds(frame);
+
+	const int islandW = islandBounds.Width > 0 ? islandBounds.Width : pIsland->Width;
+	const int islandH = islandBounds.Height > 0 ? islandBounds.Height : pIsland->Height;
+	const int aircraftW = std::max(1, static_cast<int>(pAircraftImage->Width));
+	const int aircraftH = std::max(1, static_cast<int>(pAircraftImage->Height));
+
+	const Point2D islandPos = TacticalClass::CoordsToScreen(pCarrier->GetRenderCoords());
+	const Point2D aircraftPos = TacticalClass::CoordsToScreen(pAircraft->GetRenderCoords());
+
+	constexpr int margin = 64;
+	const int dx = std::abs(islandPos.X - aircraftPos.X);
+	const int dy = std::abs(islandPos.Y - aircraftPos.Y);
+
+	return dx <= (islandW + aircraftW) / 2 + margin
+		&& dy <= (islandH + aircraftH) / 2 + margin;
+}
+
+// The live manual landing controller keeps every landing phase in state 2
+// (the old runway controller used state 7), and takeoff departure is state 8.
+// Those aircraft are low over the deck while InAir is still set, so the
+// deck-bound state tests used by DrawCarrierIslandAfterAircraft do not match
+// them. Identify them here so they can take part in the island occlusion
+// instead of being rejected by the InAir / altitude gates.
+static bool CarrierAircraftUsesIslandOcclusion(AircraftClass* pAircraft)
+{
+	if (!pAircraft)
+		return false;
+
+	auto const pCarrier = Footprint::GetCarrierPayloadOwner(pAircraft);
+
+	if (!pCarrier || !pCarrier->IsAlive)
+		return false;
+
+	auto const pState = Footprint::GetState(pCarrier);
+
+	if (!pState)
+		return false;
+
+	auto const it = std::find(
+		pState->CarrierPayloads.begin(), pState->CarrierPayloads.end(), pAircraft);
+
+	if (it == pState->CarrierPayloads.end())
+		return false;
+
+	const size_t index = static_cast<size_t>(
+		std::distance(pState->CarrierPayloads.begin(), it));
+
+	if (index >= pState->CarrierPayloadDocked.size())
+		return false;
+
+	const unsigned char state = pState->CarrierPayloadDocked[index];
+
+	// Takeoff departure: the aircraft has left the deck and is climbing, but
+	// it still has to pass behind the superstructure while it is close.
+	if (state == 8)
+		return true;
+
+	// State 2 is the live manual controller; state 7 is the legacy runway
+	// landing path retained for old saves.
+	if (state != 2 && state != 7)
+		return false;
+
+	if (index >= pState->CarrierPayloadLanding.size())
+		return false;
+
+	switch (pState->CarrierPayloadLanding[index].Phase)
+	{
+	case CarrierLandingPhase::Lineup:
+	case CarrierLandingPhase::FinalApproach:
+	case CarrierLandingPhase::Touchdown:
+	case CarrierLandingPhase::LandingRoll:
+	case CarrierLandingPhase::TaxiToSlot:
+		return true;
+	default:
+		return false;
+	}
+}
+
+// True when the aircraft's ground position is farther from the camera than
+// the island's ground contact, i.e. the island has to be repainted over it.
+// The comparison uses the same projection and island frame bounds as the
+// draw call (DrawSHP is Centered on the SHP canvas), and projects the aircraft
+// at deck height so its altitude cannot change the depth order.
+static bool CarrierAircraftIsBehindIsland(UnitClass* pCarrier, AircraftClass* pAircraft)
+{
+	if (!pCarrier || !pAircraft || !TacticalClass::Instance)
+		return true;
+
+	auto const pType = pCarrier->GetTechnoType();
+
+	if (!pType)
+		return true;
+
+	TechnoTypeExt::EnsureAircraftCarrierArt(pType);
+
+	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	if (!pTypeExt || pTypeExt->AircraftCarrier_IslandDisabled)
+		return true;
+
+	auto const pImage = pTypeExt->AircraftCarrier_IslandImage.Get();
+
+	if (!pImage || pImage->Frames <= 0)
+		return true;
+
+	auto const pState = Footprint::GetState(pCarrier);
+	const int frame = std::clamp(pState ? pState->CarrierIslandFrame : 0,
+		0, static_cast<int>(pImage->Frames) - 1);
+	const auto bounds = pImage->GetFrameBounds(frame);
+
+	// Empty frame: DrawCarrierIslandOverlay falls back to another frame. Keep
+	// the previous unconditional repaint so this edge case cannot regress.
+	if (bounds.Width <= 0 || bounds.Height <= 0)
+		return true;
+
+	const Point2D carrierScreen = TacticalClass::CoordsToScreen(pCarrier->GetRenderCoords());
+	const int islandBaseY = carrierScreen.Y + (bounds.Y + bounds.Height)
+		- static_cast<int>(pImage->Height) / 2;
+
+	CoordStruct ground = pAircraft->Location;
+	const int deckZ = Footprint::GetCarrierPayloadDeckZ(pAircraft);
+
+	if (deckZ >= 0)
+		ground.Z = deckZ;
+
+	const int aircraftGroundY = TacticalClass::CoordsToScreen(ground).Y;
+
+	return aircraftGroundY + 2 < islandBaseY;
+}
+
+void Footprint::DrawCarrierIslandOverlay(UnitClass* pCarrier)
+{
+	if (!pCarrier || !pCarrier->IsAlive || pCarrier->InLimbo
+		|| !DSurface::Temp || !TacticalClass::Instance)
+	{
+		return;
+	}
+
+	auto const pType = pCarrier->GetTechnoType();
+
+	if (!TechnoTypeExt::IsAircraftCarrier(pType))
+		return;
+
+	TechnoTypeExt::EnsureAircraftCarrierArt(pType);
+
+	auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	if (!pTypeExt || pTypeExt->AircraftCarrier_IslandDisabled)
+		return;
+
+	auto const pImage = pTypeExt->AircraftCarrier_IslandImage.Get();
+
+	if (!pImage || pImage->Frames <= 0)
+		return;
+
+	auto const pState = GetState(pCarrier);
+	const int frame = pState ? pState->CarrierIslandFrame : 0;
+	const bool visible = pCarrier->IsClearlyVisibleTo(HouseClass::CurrentPlayer);
+
+	{
+		static std::unordered_set<TechnoTypeClass*> s_loggedCall;
+
+		if (s_loggedCall.insert(pType).second)
+		{
+			Debug::CarrierLog("[AircraftCarrier] %s island draw call visible=%d frame=%d frames=%d\n",
+				pType->ID, visible ? 1 : 0, frame, pImage->Frames);
+		}
+	}
+
+	// Only draw the superstructure when the player can actually see the hull.
+	if (!visible)
+		return;
+
+	auto const isEmptyFrame = [pImage](int index)
+	{
+		if (index < 0 || index >= pImage->Frames)
+			return true;
+
+		auto const bounds = pImage->GetFrameBounds(index);
+		return bounds.Width <= 0 || bounds.Height <= 0;
+	};
+
+	int drawFrame = frame;
+
+	if (isEmptyFrame(drawFrame))
+	{
+		// The supplied SHP may not contain art for every hull direction yet.
+		// Fall back to the first non-empty frame so the superstructure stays
+		// visible; a complete SHP overrides this automatically.
+		static std::unordered_map<SHPStruct*, int> s_fallbackFrames;
+		auto it = s_fallbackFrames.find(pImage);
+
+		if (it == s_fallbackFrames.end())
+		{
+			int fallback = -1;
+
+			for (int i = 0; i < pImage->Frames; ++i)
+			{
+				if (!isEmptyFrame(i))
+				{
+					fallback = i;
+					break;
+				}
+			}
+
+			it = s_fallbackFrames.emplace(pImage, fallback).first;
+
+			Debug::Log("[AircraftCarrier] %s: island frame %d has no pixels; using fallback frame %d\n",
+				pType->ID, frame, fallback);
+		}
+
+		drawFrame = it->second;
+
+		if (drawFrame < 0)
+			return;
+	}
+
+	static std::unordered_set<TechnoTypeClass*> s_loggedDraw;
+
+	if (s_loggedDraw.insert(pType).second)
+	{
+		Debug::CarrierLog("[AircraftCarrier] %s island draw frame=%d used=%d frames=%d\n",
+			pType->ID, frame, drawFrame, pImage->Frames);
+	}
+
+	auto const pDrawer = pCarrier->GetDrawer();
+
+	if (!pDrawer)
+		return;
+
+	const Point2D screenPoint = TacticalClass::CoordsToScreen(pCarrier->GetRenderCoords());
+	Point2D drawPoint = screenPoint - TacticalClass::Instance->TacticalPos;
+	const int zAdjust = pCarrier->GetZAdjustment() - 2;
+
+	DSurface::Temp->DrawSHP(pDrawer, pImage, drawFrame, &drawPoint, &DSurface::ViewBounds,
+		BlitterFlags::Flat | BlitterFlags::Alpha | BlitterFlags::Centered,
+		0, zAdjust, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
+}
+
+void Footprint::DrawCarrierIslandAfterAircraft(AircraftClass* pAircraft)
+{
+	if (!pAircraft || !pAircraft->IsAlive || pAircraft->InLimbo)
+		return;
+
+	auto const pCarrier = GetCarrierPayloadOwner(pAircraft);
+
+	if (!pCarrier || !pCarrier->IsAlive)
+		return;
+
+	// Landing (state 2/7) and takeoff departure (state 8) aircraft are low over
+	// the deck even while InAir is set. They cannot use the deck-bound state
+	// tests below, but they still have to be occluded by the superstructure.
+	// A screen-space depth test decides whether they are behind it.
+	const bool deckSequence = CarrierAircraftUsesIslandOcclusion(pAircraft);
+
+	if (!deckSequence)
+	{
+		// Only aircraft that are actually resting on the deck should paint the
+		// island over themselves. An aircraft on final approach is still airborne
+		// and must stay in front of the superstructure.
+		if (pAircraft->InAir)
+			return;
+
+		// InAir can be reset for a frame by the engine/deck controller. Use the
+		// real altitude as well: anything clearly above the deck is above the
+		// superstructure and must never be covered by an island repaint.
+		{
+			const int deckZ = Footprint::GetCarrierPayloadDeckZ(pAircraft);
+
+			if (deckZ >= 0 && pAircraft->Location.Z > deckZ + 128)
+				return;
+		}
+
+		if (!IsCarrierPayloadParked(pAircraft)
+			&& !IsCarrierPayloadLanding(pAircraft)
+			&& !IsCarrierPayloadRunwayControlled(pAircraft))
+		{
+			return;
+		}
+	}
+
+	// Redrawing a full alpha-blended island SHP after every deck aircraft cost
+	// one blit per payload per frame (nine for a full deck). Aircraft that
+	// cannot touch the island rectangle never need that repaint.
+	if (!CarrierIslandMayOverlap(pCarrier, pAircraft))
+		return;
+
+	// A landing/departing aircraft that is in front of the superstructure must
+	// stay in front of it. Only repaint the island for aircraft behind it.
+	if (deckSequence && !CarrierAircraftIsBehindIsland(pCarrier, pAircraft))
+		return;
+
+	DrawCarrierIslandOverlay(pCarrier);
+}
+
+void Footprint::DrawCarrierBlockedCellsOverlay()
+{
+	if (!DSurface::Temp || !TacticalClass::Instance)
+		return;
+
+	for (auto const pCarrier : UnitClass::Array)
+	{
+		if (!pCarrier || !pCarrier->IsAlive || pCarrier->InLimbo || !pCarrier->Type)
+			continue;
+
+		if (!TechnoTypeExt::IsAircraftCarrier(pCarrier->Type))
+			continue;
+
+		TechnoTypeExt::EnsureAircraftCarrierArt(pCarrier->Type);
+
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->Type);
+
+		if (!pTypeExt || !pTypeExt->AircraftCarrier_ShowBlockedCells)
+			continue;
+
+		auto const pState = GetState(pCarrier);
+
+		if (!pState || !pState->Initialized)
+			continue;
+
+		if (!pCarrier->IsClearlyVisibleTo(HouseClass::CurrentPlayer))
+			continue;
+
+		const int z = pCarrier->GetRenderCoords().Z + 8;
+
+		auto const drawCell = [&](const CellStruct& cell, int color)
+		{
+			const CellStruct corners[4] =
+			{
+				{ cell.X,     cell.Y     },
+				{ static_cast<short>(cell.X + 1), cell.Y     },
+				{ static_cast<short>(cell.X + 1), static_cast<short>(cell.Y + 1) },
+				{ cell.X,     static_cast<short>(cell.Y + 1) }
+			};
+
+			Point2D points[4];
+
+			for (int i = 0; i < 4; ++i)
+			{
+				const CoordStruct world
+				{
+					static_cast<int>(corners[i].X) * Unsorted::LeptonsPerCell,
+					static_cast<int>(corners[i].Y) * Unsorted::LeptonsPerCell,
+					z
+				};
+
+				points[i] = TacticalClass::Instance->CoordsToClient(world).first;
+			}
+
+			for (int i = 0; i < 4; ++i)
+			{
+				Point2D a = points[i];
+				Point2D b = points[(i + 1) & 3];
+
+				if (Line_In_Bounds(&a, &b, &DSurface::ViewBounds))
+					DSurface::Temp->DrawLine(&a, &b, color);
+			}
+
+			const Point2D center
+			{
+				(points[0].X + points[2].X) / 2,
+				(points[0].Y + points[2].Y) / 2
+			};
+
+			RectangleStruct marker { center.X - 3, center.Y - 3, 6, 6 };
+			DSurface::Temp->FillRect(&marker, color);
+		};
+
+		const int areaColor = Drawing::RGB_To_Int(255, 210, 0);
+		const int cellColor = Drawing::RGB_To_Int(255, 40, 40);
+
+		const auto& facing = pCarrier->PrimaryFacing.Current();
+
+		const auto drawLocalRect = [&](double forward, double lateral,
+			double length, double width, int color)
+		{
+			for (auto const& offset : LocalDeckRectCells(facing, forward, lateral, length, width))
+			{
+				drawCell(CellStruct
+				{
+					static_cast<short>(pState->Anchor.X + offset.X),
+					static_cast<short>(pState->Anchor.Y + offset.Y)
+				}, color);
+			}
+		};
+
+		// Areas first, then individual cells, so a cell that appears in both
+		// is still shown in the direct-cell colour.
+		for (auto const& area : pTypeExt->AircraftCarrier_BlockedAreas)
+			drawLocalRect(area.Forward, area.Lateral, area.Length, area.Width, areaColor);
+
+		for (auto const& cell : pTypeExt->AircraftCarrier_BlockedCells)
+			drawLocalRect(cell.X, cell.Y, 1.0, 1.0, cellColor);
+	}
+}
+
+namespace
+{
+	// Transient in-game deck calibration state. Not saved: the calibration is
+	// written to CarrierDeckSlots.ini and re-read at the next type load.
+	bool s_deckCalActive = false;
+	UnitClass* s_deckCalCarrier = nullptr;
+	// 0..docks-1 = parking slots, then takeoff A/Z pairs, then landing A/Z.
+	int s_deckCalPhase = 0;
+
+	// Phase kinds.
+	enum class DeckCalKind : int
+	{
+		Slot = 0,
+		TakeoffA,
+		TakeoffZ,
+		LandingA,
+		LandingZ
+	};
+
+	struct DeckCalPhaseInfo
+	{
+		DeckCalKind Kind = DeckCalKind::Slot;
+		int Index = 0;
+	};
+
+	size_t GetDeckCalPhaseCount(TechnoTypeExt::ExtData* pTypeExt)
+	{
+		if (!pTypeExt)
+			return 0;
+
+		return pTypeExt->AircraftCarrier_DockingOffsets.size()
+			+ pTypeExt->AircraftCarrier_TakeoffRunwayA.size() * 2
+			+ pTypeExt->AircraftCarrier_LandingRunwayA.size() * 2;
+	}
+
+	bool GetDeckCalPhaseInfo(TechnoTypeExt::ExtData* pTypeExt, int phase, DeckCalPhaseInfo& out)
+	{
+		if (!pTypeExt || phase < 0)
+			return false;
+
+		const int docks = static_cast<int>(pTypeExt->AircraftCarrier_DockingOffsets.size());
+
+		if (phase < docks)
+		{
+			out.Kind = DeckCalKind::Slot;
+			out.Index = phase;
+			return true;
+		}
+
+		int offset = phase - docks;
+		const int takeoff = static_cast<int>(pTypeExt->AircraftCarrier_TakeoffRunwayA.size());
+
+		if (offset < takeoff * 2)
+		{
+			out.Kind = (offset & 1) == 0 ? DeckCalKind::TakeoffA : DeckCalKind::TakeoffZ;
+			out.Index = offset >> 1;
+			return true;
+		}
+
+		offset -= takeoff * 2;
+		const int landing = static_cast<int>(pTypeExt->AircraftCarrier_LandingRunwayA.size());
+
+		if (offset < landing * 2)
+		{
+			out.Kind = (offset & 1) == 0 ? DeckCalKind::LandingA : DeckCalKind::LandingZ;
+			out.Index = offset >> 1;
+			return true;
+		}
+
+		return false;
+	}
+
+	bool IsDeckCalSlotPhase(TechnoTypeExt::ExtData* pTypeExt, int phase, int& slot)
+	{
+		DeckCalPhaseInfo info;
+
+		if (!GetDeckCalPhaseInfo(pTypeExt, phase, info) || info.Kind != DeckCalKind::Slot)
+			return false;
+
+		slot = info.Index;
+		return true;
+	}
+
+	UnitClass* FindSelectedCarrier()
+	{
+		for (int i = 0; i < ObjectClass::CurrentObjects.Count; ++i)
+		{
+			auto const pTechno = abstract_cast<TechnoClass*>(ObjectClass::CurrentObjects.GetItem(i));
+
+			if (!pTechno || pTechno->WhatAmI() != AbstractType::Unit)
+				continue;
+
+			auto const pUnit = static_cast<UnitClass*>(pTechno);
+
+			if (pUnit->IsAlive && TechnoTypeExt::IsAircraftCarrier(pUnit->GetTechnoType()))
+				return pUnit;
+		}
+
+		return nullptr;
+	}
+
+	int GetDeckCalibrationBucket(UnitClass* pCarrier)
+	{
+		const double raw = pCarrier->PrimaryFacing.Current().Raw;
+		return static_cast<int>(raw * (8.0 / 65536.0) + 0.5) & 7;
+	}
+
+	void EnsureDeckCalibrationArrays(TechnoTypeExt::ExtData* pTypeExt)
+	{
+		if (!pTypeExt)
+			return;
+
+		const size_t docks = std::max<size_t>(1, pTypeExt->AircraftCarrier_DockingOffsets.size());
+
+		if (pTypeExt->AircraftCarrier_DockingOffsetsByFacing.size() < docks)
+			pTypeExt->AircraftCarrier_DockingOffsetsByFacing.resize(docks);
+
+		if (pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask.size() < docks)
+			pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask.resize(docks);
+	}
+
+	// Numeric offset input state for the calibration tool.
+	bool s_deckCalEditing = false;
+	wchar_t s_deckCalInput[32] {};
+	int s_deckCalInputLength = 0;
+
+	bool GetDeckCalTargetValue(TechnoTypeExt::ExtData* pTypeExt, int phase, int bucket,
+		CoordStruct& value, bool& calibrated)
+	{
+		calibrated = false;
+		DeckCalPhaseInfo info;
+
+		if (!pTypeExt || !GetDeckCalPhaseInfo(pTypeExt, phase, info))
+			return false;
+
+		switch (info.Kind)
+		{
+		case DeckCalKind::Slot:
+			value = GetCarrierDockOffset(pTypeExt, info.Index);
+
+			if (static_cast<size_t>(info.Index) < pTypeExt->AircraftCarrier_DockingOffsetsByFacing.size()
+				&& static_cast<size_t>(info.Index) < pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask.size()
+				&& pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask[info.Index][bucket])
+			{
+				value = pTypeExt->AircraftCarrier_DockingOffsetsByFacing[info.Index][bucket];
+				calibrated = true;
+			}
+
+			return true;
+		case DeckCalKind::TakeoffA:
+		case DeckCalKind::TakeoffZ:
+		case DeckCalKind::LandingA:
+		case DeckCalKind::LandingZ:
+		{
+			const bool landing = info.Kind == DeckCalKind::LandingA
+				|| info.Kind == DeckCalKind::LandingZ;
+			const bool isA = info.Kind == DeckCalKind::TakeoffA
+				|| info.Kind == DeckCalKind::LandingA;
+			const auto& a = landing
+				? pTypeExt->AircraftCarrier_LandingRunwayA
+				: pTypeExt->AircraftCarrier_TakeoffRunwayA;
+			const auto& z = landing
+				? pTypeExt->AircraftCarrier_LandingRunwayZ
+				: pTypeExt->AircraftCarrier_TakeoffRunwayZ;
+
+			if (static_cast<size_t>(info.Index) >= std::min(a.size(), z.size()))
+				return false;
+
+			value = isA ? a[info.Index] : z[info.Index];
+			calibrated = true;
+			return true;
+		}
+		}
+
+		return false;
+	}
+
+	bool SetDeckCalTargetValue(TechnoTypeExt::ExtData* pTypeExt, int phase, int bucket,
+		const CoordStruct& value)
+	{
+		DeckCalPhaseInfo info;
+
+		if (!pTypeExt || !GetDeckCalPhaseInfo(pTypeExt, phase, info))
+			return false;
+
+		switch (info.Kind)
+		{
+		case DeckCalKind::Slot:
+			if (static_cast<size_t>(info.Index) >= pTypeExt->AircraftCarrier_DockingOffsetsByFacing.size())
+				return false;
+
+			pTypeExt->AircraftCarrier_DockingOffsetsByFacing[info.Index][bucket] = value;
+			pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask[info.Index][bucket] = 1;
+			pTypeExt->AircraftCarrier_UseFacingDockingOffsets = true;
+			return true;
+		case DeckCalKind::TakeoffA:
+		case DeckCalKind::TakeoffZ:
+		{
+			const bool isA = info.Kind == DeckCalKind::TakeoffA;
+			auto& points = isA
+				? pTypeExt->AircraftCarrier_TakeoffRunwayA
+				: pTypeExt->AircraftCarrier_TakeoffRunwayZ;
+
+			if (static_cast<size_t>(info.Index) >= points.size())
+				return false;
+
+			points[info.Index] = value;
+			return true;
+		}
+		case DeckCalKind::LandingA:
+		case DeckCalKind::LandingZ:
+		{
+			const bool isA = info.Kind == DeckCalKind::LandingA;
+			auto& points = isA
+				? pTypeExt->AircraftCarrier_LandingRunwayA
+				: pTypeExt->AircraftCarrier_LandingRunwayZ;
+
+			if (static_cast<size_t>(info.Index) >= points.size())
+				return false;
+
+			points[info.Index] = value;
+			return true;
+		}
+		}
+
+		return false;
+	}
+
+	void SaveDeckCalibration(UnitClass* pCarrier);
+
+	void ApplyDeckCalInput()
+	{
+		if (!s_deckCalActive || !s_deckCalCarrier || !s_deckCalCarrier->IsAlive
+			|| !s_deckCalCarrier->GetTechnoType())
+		{
+			s_deckCalEditing = false;
+			return;
+		}
+
+		auto const pCarrier = s_deckCalCarrier;
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+		if (!pTypeExt)
+		{
+			s_deckCalEditing = false;
+			return;
+		}
+
+		wchar_t text[32];
+		wcscpy_s(text, s_deckCalInput);
+
+		for (wchar_t& c : text)
+		{
+			if (c == L',' || c == L';' || c == L'.')
+				c = L' ';
+		}
+
+		int values[2] { 0, 0 };
+		const int parsed = swscanf_s(text, L"%d %d", &values[0], &values[1]);
+
+		if (parsed >= 1)
+		{
+			const int bucket = GetDeckCalibrationBucket(pCarrier);
+			CoordStruct current {};
+			bool calibrated = false;
+
+			if (!GetDeckCalTargetValue(pTypeExt, s_deckCalPhase, bucket, current, calibrated))
+				current = CoordStruct { 0, 0, 0 };
+
+			const int lateral = parsed >= 2 ? values[1] : current.Y;
+			const CoordStruct value { values[0], lateral, 0 };
+
+			if (SetDeckCalTargetValue(pTypeExt, s_deckCalPhase, bucket, value))
+			{
+				Debug::CarrierLog("[AircraftCarrier] deck calibration typed phase=%d bucket=%d F=%d L=%d\n",
+					s_deckCalPhase, bucket, value.X, value.Y);
+				SaveDeckCalibration(pCarrier);
+			}
+		}
+
+		s_deckCalEditing = false;
+		s_deckCalInputLength = 0;
+		s_deckCalInput[0] = L'\0';
+	}
+
+	void SaveDeckCalibration(UnitClass* pCarrier)
+	{
+		if (!pCarrier || !pCarrier->GetTechnoType())
+			return;
+
+		TechnoTypeExt::EnsureAircraftCarrierArt(pCarrier->GetTechnoType());
+
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+		if (!pTypeExt)
+			return;
+
+		EnsureDeckCalibrationArrays(pTypeExt);
+
+		const char* pSection = pCarrier->GetTechnoType()->ImageFile;
+		const char* pFile = "CarrierDeckSlots.ini";
+		int written = 0;
+
+		for (size_t i = 0; i < pTypeExt->AircraftCarrier_DockingOffsetsByFacing.size(); ++i)
+		{
+			for (int m = 0; m < 8; ++m)
+			{
+				if (!pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask[i][m])
+					continue;
+
+				const auto& value = pTypeExt->AircraftCarrier_DockingOffsetsByFacing[i][m];
+				char key[64];
+				char text[96];
+				_snprintf_s(key, sizeof(key), "DockingOffset%d.M%d", static_cast<int>(i), m);
+				_snprintf_s(text, sizeof(text), "%d,%d,%d", value.X, value.Y, value.Z);
+
+				if (WritePrivateProfileStringA(pSection, key, text, pFile))
+					++written;
+			}
+		}
+
+		WritePrivateProfileStringA(pSection, "UseFacingDockingOffsets", "yes", pFile);
+
+		auto const writePoint = [&](const char* pPrefix, int index, char suffix,
+			const CoordStruct& value)
+		{
+			char key[64];
+			char text[96];
+			_snprintf_s(key, sizeof(key), "%s%d%c", pPrefix, index, suffix);
+			_snprintf_s(text, sizeof(text), "%d,%d,%d", value.X, value.Y, value.Z);
+
+			if (WritePrivateProfileStringA(pSection, key, text, pFile))
+				++written;
+		};
+
+		const size_t takeoffCount = std::min(pTypeExt->AircraftCarrier_TakeoffRunwayA.size(),
+			pTypeExt->AircraftCarrier_TakeoffRunwayZ.size());
+
+		for (size_t i = 0; i < takeoffCount; ++i)
+		{
+			writePoint("TakeoffRunway", static_cast<int>(i), 'A',
+				pTypeExt->AircraftCarrier_TakeoffRunwayA[i]);
+			writePoint("TakeoffRunway", static_cast<int>(i), 'Z',
+				pTypeExt->AircraftCarrier_TakeoffRunwayZ[i]);
+		}
+
+		const size_t landingCount = std::min(pTypeExt->AircraftCarrier_LandingRunwayA.size(),
+			pTypeExt->AircraftCarrier_LandingRunwayZ.size());
+
+		for (size_t i = 0; i < landingCount; ++i)
+		{
+			writePoint("LandingRunway", static_cast<int>(i), 'A',
+				pTypeExt->AircraftCarrier_LandingRunwayA[i]);
+			writePoint("LandingRunway", static_cast<int>(i), 'Z',
+				pTypeExt->AircraftCarrier_LandingRunwayZ[i]);
+		}
+
+		Debug::CarrierLog("[AircraftCarrier] deck calibration saved: %s %d entries -> %s\n",
+			pSection, written, pFile);
+	}
+
+	void PlaceDeckCalibrationTarget()
+	{
+		if (!s_deckCalActive || !s_deckCalCarrier || !s_deckCalCarrier->IsAlive
+			|| !s_deckCalCarrier->GetTechnoType() || !WWMouseClass::Instance
+			|| !TacticalClass::Instance)
+		{
+			return;
+		}
+
+		auto const pCarrier = s_deckCalCarrier;
+		TechnoTypeExt::EnsureAircraftCarrierArt(pCarrier->GetTechnoType());
+
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+		if (!pTypeExt)
+			return;
+
+		EnsureDeckCalibrationArrays(pTypeExt);
+
+		DeckCalPhaseInfo info;
+
+		if (!GetDeckCalPhaseInfo(pTypeExt, s_deckCalPhase, info))
+			return;
+
+		Point2D mouse { 0, 0 };
+		WWMouseClass::Instance->GetCoords(&mouse);
+
+		// ClientToCoords assumes the ground plane. The deck is CellHeight above
+		// it, so add the screen-space height offset before the inverse
+		// projection; otherwise every click lands about one cell behind the
+		// painted box.
+		Point2D deckClick = mouse;
+		deckClick.Y += TacticalClass::AdjustForZ(
+			pCarrier->GetRenderCoords().Z + Unsorted::CellHeight);
+
+		const auto world = TacticalClass::Instance->ClientToCoords(deckClick);
+		const auto anchor = pCarrier->GetRenderCoords();
+		const double phi = GetCarrierDeckRotation(pCarrier);
+		const double dx = static_cast<double>(world.X - anchor.X);
+		const double dy = static_cast<double>(world.Y - anchor.Y);
+
+		// Inverse of the deck-local -> world rotation.
+		double forward = dx * std::cos(phi) + dy * std::sin(phi);
+		double lateral = -dx * std::sin(phi) + dy * std::cos(phi);
+
+		forward = std::clamp(forward, -20.0 * 256.0, 20.0 * 256.0);
+		lateral = std::clamp(lateral, -5.0 * 256.0, 5.0 * 256.0);
+
+		const CoordStruct point
+		{
+			static_cast<int>(std::lround(forward)),
+			static_cast<int>(std::lround(lateral)),
+			0
+		};
+
+		const int bucket = GetDeckCalibrationBucket(pCarrier);
+
+		switch (info.Kind)
+		{
+		case DeckCalKind::Slot:
+		{
+			if (static_cast<size_t>(info.Index) >= pTypeExt->AircraftCarrier_DockingOffsetsByFacing.size())
+				return;
+
+			pTypeExt->AircraftCarrier_DockingOffsetsByFacing[info.Index][bucket] = point;
+			pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask[info.Index][bucket] = 1;
+			pTypeExt->AircraftCarrier_UseFacingDockingOffsets = true;
+
+			Debug::CarrierLog("[AircraftCarrier] deck calibration slot=%d bucket=%d F=%d L=%d\n",
+				info.Index, bucket, point.X, point.Y);
+			break;
+		}
+		case DeckCalKind::TakeoffA:
+		case DeckCalKind::TakeoffZ:
+		{
+			if (static_cast<size_t>(info.Index) >= pTypeExt->AircraftCarrier_TakeoffRunwayA.size())
+				return;
+
+			auto& runway = info.Kind == DeckCalKind::TakeoffA
+				? pTypeExt->AircraftCarrier_TakeoffRunwayA[info.Index]
+				: pTypeExt->AircraftCarrier_TakeoffRunwayZ[info.Index];
+
+			runway = point;
+
+			Debug::CarrierLog("[AircraftCarrier] deck calibration takeoff%d%c F=%d L=%d\n",
+				info.Index, info.Kind == DeckCalKind::TakeoffA ? 'A' : 'Z',
+				point.X, point.Y);
+			break;
+		}
+		case DeckCalKind::LandingA:
+		case DeckCalKind::LandingZ:
+		{
+			if (static_cast<size_t>(info.Index) >= pTypeExt->AircraftCarrier_LandingRunwayA.size())
+				return;
+
+			auto& runway = info.Kind == DeckCalKind::LandingA
+				? pTypeExt->AircraftCarrier_LandingRunwayA[info.Index]
+				: pTypeExt->AircraftCarrier_LandingRunwayZ[info.Index];
+
+			runway = point;
+
+			Debug::CarrierLog("[AircraftCarrier] deck calibration landing%d%c F=%d L=%d\n",
+				info.Index, info.Kind == DeckCalKind::LandingA ? 'A' : 'Z',
+				point.X, point.Y);
+			break;
+		}
+		}
+
+		SaveDeckCalibration(pCarrier);
+	}
+}
+
+void Footprint::UpdateDeckCalibration()
+{
+	static bool s_k1Down = false;
+	static bool s_k2Down = false;
+	static bool s_mbDown = false;
+
+	const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+	const bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+	const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+	const bool keyDown = (GetAsyncKeyState('K') & 0x8000) != 0;
+	const bool mbDown = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+
+	const bool k1 = keyDown && ctrlDown && altDown;
+	const bool k2 = keyDown && ctrlDown && shiftDown;
+
+	bool toggle = false;
+
+	if (k1 && !s_k1Down)
+		toggle = true;
+
+	if (k2 && !s_k2Down)
+		toggle = true;
+
+	if (mbDown && !s_mbDown)
+		toggle = true;
+
+	s_k1Down = k1;
+	s_k2Down = k2;
+	s_mbDown = mbDown;
+
+	auto const notify = [](const wchar_t* text)
+	{
+		if (HouseClass::CurrentPlayer && RulesClass::Instance)
+		{
+			MessageListClass::Instance.PrintMessage(text,
+				RulesClass::Instance->MessageDelay,
+				HouseClass::CurrentPlayer->ColorSchemeIndex,
+				true);
+		}
+	};
+
+	if (toggle)
+	{
+		if (s_deckCalActive)
+		{
+			SaveDeckCalibration(s_deckCalCarrier);
+			Debug::CarrierLog("[AircraftCarrier] deck calibration off\n");
+			s_deckCalActive = false;
+			s_deckCalCarrier = nullptr;
+			s_deckCalEditing = false;
+			s_deckCalInputLength = 0;
+			s_deckCalInput[0] = L'\0';
+			notify(L"Carrier deck calibration OFF (saved).");
+		}
+		else
+		{
+			auto const pCarrier = FindSelectedCarrier();
+
+			if (!pCarrier)
+			{
+				Debug::CarrierLog("[AircraftCarrier] deck calibration: select a carrier first\n");
+				notify(L"Deck calibration: select a carrier first!");
+			}
+			else
+			{
+				TechnoTypeExt::EnsureAircraftCarrierArt(pCarrier->GetTechnoType());
+
+				if (auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType()))
+					EnsureDeckCalibrationArrays(pTypeExt);
+
+				s_deckCalCarrier = pCarrier;
+				s_deckCalPhase = 0;
+				s_deckCalActive = true;
+
+				Debug::CarrierLog("[AircraftCarrier] deck calibration on: %s bucket=%d\n",
+					pCarrier->GetTechnoType()->ID, GetDeckCalibrationBucket(pCarrier));
+
+				notify(L"Deck calibration ON: LMB place, RMB skip, Ctrl+Alt+K / MMB exit.");
+			}
+		}
+	}
+
+	if (!s_deckCalActive)
+	{
+		s_deckCalEditing = false;
+		return;
+	}
+
+	if (!s_deckCalCarrier || !s_deckCalCarrier->IsAlive)
+	{
+		s_deckCalActive = false;
+		s_deckCalCarrier = nullptr;
+		s_deckCalEditing = false;
+		return;
+	}
+
+	static bool s_keyPrev[256] {};
+	auto const pressed = [&](int vk) -> bool
+	{
+		const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+		const bool result = down && !s_keyPrev[vk];
+		s_keyPrev[vk] = down;
+		return result;
+	};
+
+	auto const cancelInput = [&]()
+	{
+		s_deckCalEditing = false;
+		s_deckCalInputLength = 0;
+		s_deckCalInput[0] = L'\0';
+	};
+
+	if (s_deckCalEditing)
+	{
+		if (pressed(VK_ESCAPE))
+		{
+			cancelInput();
+			notify(L"Offset input cancelled.");
+		}
+		else if (pressed(VK_RETURN) || pressed(VK_INSERT) || pressed(VK_F2))
+		{
+			ApplyDeckCalInput();
+		}
+		else
+		{
+			if (pressed(VK_BACK) && s_deckCalInputLength > 0)
+			{
+				s_deckCalInput[--s_deckCalInputLength] = L'\0';
+			}
+
+			for (int digit = 0; digit <= 9; ++digit)
+			{
+				if ((pressed('0' + digit) || pressed(VK_NUMPAD0 + digit))
+					&& s_deckCalInputLength < static_cast<int>(_countof(s_deckCalInput)) - 1)
+				{
+					s_deckCalInput[s_deckCalInputLength++] = static_cast<wchar_t>(L'0' + digit);
+					s_deckCalInput[s_deckCalInputLength] = L'\0';
+				}
+			}
+
+			if ((pressed(VK_OEM_MINUS) || pressed(VK_SUBTRACT))
+				&& s_deckCalInputLength < static_cast<int>(_countof(s_deckCalInput)) - 1)
+			{
+				s_deckCalInput[s_deckCalInputLength++] = L'-';
+				s_deckCalInput[s_deckCalInputLength] = L'\0';
+			}
+
+			if ((pressed(VK_OEM_COMMA) || pressed(VK_OEM_PERIOD) || pressed(VK_DECIMAL))
+				&& s_deckCalInputLength < static_cast<int>(_countof(s_deckCalInput)) - 1)
+			{
+				s_deckCalInput[s_deckCalInputLength++] = L',';
+				s_deckCalInput[s_deckCalInputLength] = L'\0';
+			}
+		}
+	}
+	else if (pressed(VK_RETURN) || pressed(VK_INSERT) || pressed(VK_F2))
+	{
+		s_deckCalEditing = true;
+		s_deckCalInputLength = 0;
+		s_deckCalInput[0] = L'\0';
+
+		notify(L"Type F,L (e.g. 896,1024); Enter/Insert/F2 applies, Esc cancels.");
+	}
+}
+
+bool Footprint::HandleDeckCalibrationClick()
+{
+	static bool s_leftWasDown = false;
+	static bool s_rightWasDown = false;
+	static bool s_dragged = false;
+	static Point2D s_press { 0, 0 };
+	static int s_lastPlaceFrame = -1;
+
+	if (!s_deckCalActive)
+	{
+		s_leftWasDown = false;
+		s_rightWasDown = false;
+		return false;
+	}
+
+	if (!s_deckCalCarrier || !s_deckCalCarrier->IsAlive || !s_deckCalCarrier->GetTechnoType())
+	{
+		s_deckCalActive = false;
+		s_deckCalCarrier = nullptr;
+		s_leftWasDown = false;
+		s_rightWasDown = false;
+		return false;
+	}
+
+	if (s_deckCalEditing)
+	{
+		// The user is typing a numeric offset; swallow clicks so a stray
+		// click cannot move the target or advance the phase.
+		s_leftWasDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+		s_rightWasDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+		return true;
+	}
+
+	Point2D current { 0, 0 };
+
+	if (WWMouseClass::Instance)
+		WWMouseClass::Instance->GetCoords(&current);
+
+	const bool leftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+	const bool rightDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+
+	if (leftDown && !s_leftWasDown)
+	{
+		s_press = current;
+		s_dragged = false;
+	}
+	else if (leftDown)
+	{
+		const int dx = current.X > s_press.X ? current.X - s_press.X : s_press.X - current.X;
+		const int dy = current.Y > s_press.Y ? current.Y - s_press.Y : s_press.Y - current.Y;
+
+		if (dx > 4 || dy > 4)
+			s_dragged = true;
+	}
+	else if (s_leftWasDown)
+	{
+		if (!s_dragged && s_lastPlaceFrame != Unsorted::CurrentFrame)
+		{
+			s_lastPlaceFrame = Unsorted::CurrentFrame;
+			PlaceDeckCalibrationTarget();
+		}
+	}
+
+	if (rightDown && !s_rightWasDown)
+	{
+		TechnoTypeExt::EnsureAircraftCarrierArt(s_deckCalCarrier->GetTechnoType());
+
+		if (auto const pTypeExt = TechnoTypeExt::ExtMap.Find(s_deckCalCarrier->GetTechnoType()))
+		{
+			const size_t count = GetDeckCalPhaseCount(pTypeExt);
+
+			if (count > 0)
+				s_deckCalPhase = (s_deckCalPhase + 1) % static_cast<int>(count);
+		}
+
+		Debug::CarrierLog("[AircraftCarrier] deck calibration skip to phase=%d\n", s_deckCalPhase);
+	}
+
+	s_leftWasDown = leftDown;
+	s_rightWasDown = rightDown;
+
+	// While calibrating, swallow the tactical click handler completely so no
+	// selection box / move order / landing request is issued.
+	return true;
+}
+
+bool Footprint::IsDeckCalibrationActive()
+{
+	return s_deckCalActive && s_deckCalCarrier != nullptr;
+}
+
+void Footprint::DrawCarrierDeckSlotsOverlay()
+
+{
+	if (!DSurface::Temp || !TacticalClass::Instance)
+		return;
+
+	for (auto const pCarrier : UnitClass::Array)
+	{
+		if (!pCarrier || !pCarrier->IsAlive || pCarrier->InLimbo || !pCarrier->Type)
+			continue;
+
+		if (!TechnoTypeExt::IsAircraftCarrier(pCarrier->Type))
+			continue;
+
+		TechnoTypeExt::EnsureAircraftCarrierArt(pCarrier->Type);
+
+		auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->Type);
+
+		const bool calibratingThis = IsDeckCalibrationActive() && s_deckCalCarrier == pCarrier;
+
+		if (!pTypeExt || (!pTypeExt->AircraftCarrier_ShowDeckSlots && !calibratingThis))
+			continue;
+
+		auto const pState = GetState(pCarrier);
+
+		if (!pState || !pState->Initialized)
+			continue;
+
+		if (!pCarrier->IsClearlyVisibleTo(HouseClass::CurrentPlayer))
+			continue;
+
+		auto const toClient = [](const CoordStruct& world)
+		{
+			return TacticalClass::Instance->CoordsToClient(world).first;
+		};
+
+		auto const drawWorldLine = [&](const CoordStruct& a, const CoordStruct& b, int color)
+		{
+			Point2D pa = toClient(a);
+			Point2D pb = toClient(b);
+
+			if (Line_In_Bounds(&pa, &pb, &DSurface::ViewBounds))
+				DSurface::Temp->DrawLine(&pa, &pb, color);
+		};
+
+		auto const drawCross = [&](const Point2D& p, int size, int color)
+		{
+			Point2D h0 { p.X - size, p.Y };
+			Point2D h1 { p.X + size, p.Y };
+			Point2D v0 { p.X, p.Y - size };
+			Point2D v1 { p.X, p.Y + size };
+
+			if (Line_In_Bounds(&h0, &h1, &DSurface::ViewBounds))
+				DSurface::Temp->DrawLine(&h0, &h1, color);
+
+			if (Line_In_Bounds(&v0, &v1, &DSurface::ViewBounds))
+				DSurface::Temp->DrawLine(&v0, &v1, color);
+		};
+
+		auto const drawBox = [&](const Point2D& p, int half, int color)
+		{
+			Point2D a { p.X - half, p.Y - half };
+			Point2D b { p.X + half, p.Y - half };
+			Point2D c { p.X + half, p.Y + half };
+			Point2D d { p.X - half, p.Y + half };
+
+			DSurface::Temp->DrawLine(&a, &b, color);
+			DSurface::Temp->DrawLine(&b, &c, color);
+			DSurface::Temp->DrawLine(&c, &d, color);
+			DSurface::Temp->DrawLine(&d, &a, color);
+		};
+
+		auto const drawText = [&](const wchar_t* text, const Point2D& p, int color)
+		{
+			RectangleStruct bounds = DSurface::Temp->GetRect();
+			Point2D pos { p.X + 6, p.Y - 6 };
+			DSurface::Temp->DrawText(text, &bounds, &pos, color, 0, TextPrintType::NoShadow);
+		};
+
+		const int slotColor = Drawing::RGB_To_Int(0, 255, 0);
+		const int facingColor = Drawing::RGB_To_Int(0, 200, 120);
+		const int hullColor = Drawing::RGB_To_Int(255, 255, 255);
+		const int takeoffColor = Drawing::RGB_To_Int(0, 220, 255);
+		const int landingColor = Drawing::RGB_To_Int(255, 80, 255);
+
+		// The real parking positions used by UpdateCarrierPayload. If they do
+		// not land on the art's painted parking boxes, the DockingOffset data
+		// (or the art frame) is wrong, not the aircraft controller.
+		const size_t slotCount = std::min<size_t>(
+			std::max<size_t>(pState->CarrierPayloads.size(),
+				pTypeExt->AircraftCarrier_DockingOffsets.size()), 32);
+
+		for (size_t i = 0; i < slotCount; ++i)
+		{
+			const auto slot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, i);
+			const auto slotPoint = toClient(slot);
+
+			int calibrationSlot = -1;
+			const bool selected = calibratingThis
+				&& IsDeckCalSlotPhase(pTypeExt, s_deckCalPhase, calibrationSlot)
+				&& calibrationSlot == static_cast<int>(i);
+
+			drawCross(slotPoint, selected ? 12 : 6, slotColor);
+
+			wchar_t label[32];
+			_snwprintf_s(label, _countof(label), _TRUNCATE, L"%u", static_cast<unsigned>(i));
+			drawText(label, slotPoint, slotColor);
+
+			if (selected)
+			{
+				const int markerColor = Drawing::RGB_To_Int(255, 255, 0);
+				drawBox(slotPoint, 16, markerColor);
+			}
+
+			const DirStruct facing = GetCarrierSlotFacing(pCarrier, pTypeExt, i);
+			const double rad = facing.Raw * (Math::TwoPi / 65536.0);
+
+			CoordStruct tip = slot;
+			tip.X += static_cast<int>(std::lround(std::sin(rad) * 768.0));
+			tip.Y += static_cast<int>(std::lround(-std::cos(rad) * 768.0));
+
+			drawWorldLine(slot, tip, facingColor);
+		}
+
+		// Runway geometry as the controller sees it. Read-only markers.
+		auto const drawRunways = [&](bool landing, int color, const wchar_t* prefix)
+		{
+			const int count = GetCarrierRunwayCount(pTypeExt, landing);
+
+			for (int i = 0; i < count; ++i)
+			{
+				CoordStruct start {};
+				CoordStruct end {};
+
+				if (!GetCarrierRunwayPoints(pCarrier, pTypeExt, landing, i, start, end))
+					continue;
+
+				drawWorldLine(start, end, color);
+
+				const auto startPoint = toClient(start);
+				const auto endPoint = toClient(end);
+				drawCross(startPoint, 8, color);
+				drawCross(endPoint, 8, color);
+
+				if (calibratingThis)
+				{
+					DeckCalPhaseInfo calInfo;
+
+					if (GetDeckCalPhaseInfo(pTypeExt, s_deckCalPhase, calInfo)
+						&& calInfo.Index == i)
+					{
+						const bool isA = calInfo.Kind == (landing
+							? DeckCalKind::LandingA : DeckCalKind::TakeoffA);
+						const bool isZ = calInfo.Kind == (landing
+							? DeckCalKind::LandingZ : DeckCalKind::TakeoffZ);
+
+						if (isA || isZ)
+							drawBox(isA ? startPoint : endPoint, 14,
+								Drawing::RGB_To_Int(255, 255, 0));
+					}
+				}
+
+				wchar_t label[32];
+				_snwprintf_s(label, _countof(label), _TRUNCATE, L"%s%dA", prefix, i);
+				drawText(label, startPoint, color);
+
+				_snwprintf_s(label, _countof(label), _TRUNCATE, L"%s%dZ", prefix, i);
+				drawText(label, endPoint, color);
+			}
+		};
+
+		drawRunways(false, takeoffColor, L"T");
+		drawRunways(true, landingColor, L"L");
+
+		// Hull anchor used by every deck-local -> world conversion.
+		const auto hullPoint = toClient(pCarrier->GetRenderCoords());
+		drawCross(hullPoint, 10, hullColor);
+		drawText(L"HULL", hullPoint, hullColor);
+
+		if (calibratingThis)
+		{
+			const int bucket = GetDeckCalibrationBucket(pCarrier);
+			const int textColor = Drawing::RGB_To_Int(255, 255, 255);
+			const int warnColor = Drawing::RGB_To_Int(255, 255, 0);
+
+			RectangleStruct background { 6, 6, 700, 120 };
+			DSurface::Temp->FillRect(&background, Drawing::RGB_To_Int(0, 0, 0));
+
+			auto const drawAt = [&](const wchar_t* text, int x, int y, int color)
+			{
+				RectangleStruct bounds = DSurface::Temp->GetRect();
+				Point2D pos { x, y };
+				DSurface::Temp->DrawText(text, &bounds, &pos, color, 0, TextPrintType::NoShadow);
+			};
+
+			wchar_t line[256];
+			_snwprintf_s(line, _countof(line), _TRUNCATE,
+				L"CARRIER DECK CAL: %hs   bucket %d/8   target %d/%d",
+				pCarrier->GetTechnoType()->ID, bucket,
+				s_deckCalPhase + 1, static_cast<int>(GetDeckCalPhaseCount(pTypeExt)));
+			drawAt(line, 10, 10, warnColor);
+
+			DeckCalPhaseInfo info;
+			CoordStruct current {};
+			bool haveValue = false;
+			const wchar_t* targetName = L"?";
+
+			if (GetDeckCalPhaseInfo(pTypeExt, s_deckCalPhase, info))
+			{
+				switch (info.Kind)
+				{
+				case DeckCalKind::Slot:
+				{
+					targetName = L"parking slot";
+					const auto& table = pTypeExt->AircraftCarrier_DockingOffsetsByFacing;
+					const auto& mask = pTypeExt->AircraftCarrier_DockingOffsetsByFacingMask;
+					current = GetCarrierDockOffset(pTypeExt, info.Index);
+
+					if (static_cast<size_t>(info.Index) < table.size()
+						&& static_cast<size_t>(info.Index) < mask.size()
+						&& mask[info.Index][bucket])
+					{
+						current = table[info.Index][bucket];
+						haveValue = true;
+					}
+
+					_snwprintf_s(line, _countof(line), _TRUNCATE,
+						L"%s %d   F=%d  L=%d%s", targetName, info.Index,
+						current.X, current.Y, haveValue ? L"" : L"  (fixed)");
+					break;
+				}
+				case DeckCalKind::TakeoffA:
+				case DeckCalKind::TakeoffZ:
+				case DeckCalKind::LandingA:
+				case DeckCalKind::LandingZ:
+				{
+					const bool landing = info.Kind == DeckCalKind::LandingA
+						|| info.Kind == DeckCalKind::LandingZ;
+					const bool isA = info.Kind == DeckCalKind::TakeoffA
+						|| info.Kind == DeckCalKind::LandingA;
+					const auto& a = landing
+						? pTypeExt->AircraftCarrier_LandingRunwayA
+						: pTypeExt->AircraftCarrier_TakeoffRunwayA;
+					const auto& z = landing
+						? pTypeExt->AircraftCarrier_LandingRunwayZ
+						: pTypeExt->AircraftCarrier_TakeoffRunwayZ;
+
+					if (static_cast<size_t>(info.Index) < std::min(a.size(), z.size()))
+					{
+						current = isA ? a[info.Index] : z[info.Index];
+						haveValue = true;
+					}
+
+					_snwprintf_s(line, _countof(line), _TRUNCATE,
+						L"runway %s%d%c   F=%d  L=%d", landing ? L"L" : L"T",
+						info.Index, isA ? L'A' : L'Z', current.X, current.Y);
+					break;
+				}
+				}
+			}
+
+			drawAt(line, 10, 28, textColor);
+
+			if (s_deckCalEditing)
+			{
+				_snwprintf_s(line, _countof(line), _TRUNCATE,
+					L"INPUT: %s_    [Enter/Insert/F2] apply    [Esc] cancel",
+					s_deckCalInput);
+				drawAt(line, 10, 50, warnColor);
+			}
+			else
+			{
+				drawAt(L"F2/Insert = type F,L    LMB = place (stays on this target)    RMB = next target",
+					10, 50, textColor);
+			}
+
+			drawAt(L"Slots: rotate the carrier and calibrate each 45-degree bucket separately.",
+				10, 70, textColor);
+			drawAt(L"Runways: global; click the painted A/Z.    Ctrl+Alt+K / MMB = exit.",
+				10, 90, textColor);
+		}
+	}
+}
+
 bool Footprint::IsCarrierPayloadParked(TechnoClass* pPayload)
 {
 	if (!pPayload || pPayload->WhatAmI() != AbstractType::Aircraft)
@@ -3173,6 +5722,49 @@ bool Footprint::IsCarrierPayloadParked(TechnoClass* pPayload)
 
 	return index < pState->CarrierPayloadDocked.size()
 		&& pState->CarrierPayloadDocked[index] == 1;
+}
+
+void Footprint::RecordParkedPayloadAttackClick(TechnoClass* pTarget)
+{
+	if (!pTarget || !IsCarrierPayloadParked(pTarget))
+		return;
+
+	auto const pAircraft = static_cast<AircraftClass*>(pTarget);
+	const bool forceAttack = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+
+	for (int i = 0; i < ObjectClass::CurrentObjects.Count; ++i)
+	{
+		auto const pAttacker = abstract_cast<TechnoClass*>(ObjectClass::CurrentObjects.GetItem(i));
+
+		if (!pAttacker || !pAttacker->IsAlive || !pAttacker->Owner
+			|| !pAttacker->Owner->IsControlledByHuman())
+		{
+			continue;
+		}
+
+		const bool hostile = pAircraft->Owner
+			&& !pAttacker->Owner->IsAlliedWith(pAircraft->Owner);
+
+		if (hostile || forceAttack)
+			s_forcedParkedTargets[pAttacker] = pAircraft;
+	}
+}
+
+bool Footprint::IsForcedParkedPayloadTarget(TechnoClass* pAttacker, ObjectClass* pTarget)
+{
+	auto const it = s_forcedParkedTargets.find(pAttacker);
+
+	if (it == s_forcedParkedTargets.end())
+		return false;
+
+	// The order is only valid while the attacker still holds this exact target.
+	if (it->second != pTarget || pAttacker->Target != pTarget)
+	{
+		s_forcedParkedTargets.erase(it);
+		return false;
+	}
+
+	return true;
 }
 
 bool Footprint::IsCarrierPayloadDeckControlled(TechnoClass* pPayload)
@@ -3207,6 +5799,7 @@ bool Footprint::IsCarrierPayloadDeckControlled(TechnoClass* pPayload)
 	return state >= 1 && state <= 8;
 }
 
+
 void Footprint::NotifyDestinationAssigned(TechnoClass* pThis, AbstractClass* pDest)
 {
 	if (!pThis || !pDest || pThis->WhatAmI() != AbstractType::Aircraft)
@@ -3230,22 +5823,138 @@ void Footprint::NotifyDestinationAssigned(TechnoClass* pThis, AbstractClass* pDe
 
 	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
 
-	if (index >= pState->CarrierPayloadDocked.size() || pState->CarrierPayloadDocked[index] != 1)
+	if (index >= pState->CarrierPayloadDocked.size())
 		return;
 
-	// Do NOT turn this into a launch request. AssignDestination is also used
-	// by the engine for selection/return/landing bookkeeping; doing so made a
-	// parked aircraft take off just because it was selected. Launch requests
-	// are captured only from real player clicks (CaptureClickDestination /
-	// CaptureAttackClick).
-	const auto destCoords = pDest->GetCoords();
+	const unsigned char payloadState = pState->CarrierPayloadDocked[index];
 
-	Debug::CarrierLog("[CarrierCmd] AssignDest slot=%d selected=%d state=%d mission=%d destCell=(%d,%d,%d) plane=(%d,%d,%d)\n",
-		static_cast<int>(index), pAircraft->IsSelected ? 1 : 0,
-		static_cast<int>(pState->CarrierPayloadDocked[index]),
-		static_cast<int>(pAircraft->GetCurrentMission()),
-		destCoords.X, destCoords.Y, destCoords.Z,
-		pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
+	// AircraftCarrier.DockRadius: an airborne payload's player move order that
+	// lands outside the allowed radius is not rejected here (rewriting the
+	// AssignDestination argument is unsafe). Snapshot the pre-order state and
+	// let UpdateCarrierPayload undo the assignment in the same frame, so the
+	// aircraft keeps its previous mission instead of hovering.
+	if (payloadState == 0 && pDest && pDest->WhatAmI() == AbstractType::Cell
+		&& pAircraft->IsSelected && IsCommandClickRecent()
+		&& pCarrier->Owner && pCarrier->Owner->IsControlledByHuman())
+	{
+		const auto moveDest = pDest->GetCoords();
+		auto const pDockTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+		if (pDockTypeExt
+			&& moveDest.DistanceFrom(pCarrier->GetCoords()) > 512.0
+			&& CellClass::Coord2Cell(moveDest) != CellClass::Coord2Cell(pAircraft->Location)
+			&& IsOutsideCarrierDockRadius(pCarrier, pDockTypeExt, index, moveDest))
+		{
+			// Do not overwrite a snapshot that was taken from an earlier
+			// assignment in the same frame: the second call would record the
+			// already-rejected destination as the "old" one.
+			auto const recordIt = s_rejectedMove.find(pAircraft);
+
+			if (recordIt == s_rejectedMove.end()
+				|| Unsorted::CurrentFrame - recordIt->second.Frame > 2)
+			{
+				auto& record = s_rejectedMove[pAircraft];
+				record.Destination = pAircraft->Destination;
+				record.MegaDestination = pAircraft->MegaDestination;
+				record.MegaTarget = pAircraft->MegaTarget;
+				record.Target = pAircraft->Target;
+				record.ArchiveTarget = pAircraft->ArchiveTarget;
+				record.CurrentMission = static_cast<int>(pAircraft->CurrentMission);
+				record.QueuedMission = static_cast<int>(pAircraft->QueuedMission);
+				record.MissionStatus = pAircraft->MissionStatus;
+				record.Frame = Unsorted::CurrentFrame;
+			}
+		}
+	}
+
+	if (payloadState != 1)
+		return;
+
+	// Do NOT turn every assignment into a launch request: AssignDestination is
+	// also used by the engine for selection/return/landing bookkeeping. Only a
+	// destination assigned in the few frames after a real command click counts
+	// as a player order. This is the reliable fallback for the cases where the
+	// click-capture window in DisplayClass::ProcessClickCoords was missed.
+	const auto destCoords = pDest->GetCoords();
+	const auto destCell = CellClass::Coord2Cell(destCoords);
+
+	// The engine re-assigns a destination to parked payloads very frequently.
+	// Logging every call produced >100k lines per session, so keep a single
+	// rate-limited diagnostic per 30 frames instead.
+	static TechnoClass* s_lastAssignLog = nullptr;
+	static int s_lastAssignLogFrame = -1;
+
+	if ((s_lastAssignLog != pAircraft || s_lastAssignLogFrame != Unsorted::CurrentFrame)
+		&& Unsorted::CurrentFrame % 30 == 0)
+	{
+		s_lastAssignLog = pAircraft;
+		s_lastAssignLogFrame = Unsorted::CurrentFrame;
+
+		Debug::CarrierLog("[CarrierCmd] AssignDest slot=%d selected=%d state=%d mission=%d destCell=(%d,%d,%d) plane=(%d,%d,%d)\n",
+			static_cast<int>(index), pAircraft->IsSelected ? 1 : 0,
+			static_cast<int>(pState->CarrierPayloadDocked[index]),
+			static_cast<int>(pAircraft->GetCurrentMission()),
+			destCoords.X, destCoords.Y, destCoords.Z,
+			pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
+	}
+
+	if (!pAircraft->IsSelected || !IsCommandClickRecent())
+		return;
+
+	// AI-owned carriers issue real Move/Attack orders without a click; the
+	// state-1 handler captures those from the mission itself.
+	if (!pCarrier->Owner || !pCarrier->Owner->IsControlledByHuman())
+		return;
+
+	if (destCell.X < 0 || destCell.Y < 0)
+		return;
+
+	const auto ignored = index < pState->CarrierPayloadIgnoredDest.size()
+		? pState->CarrierPayloadIgnoredDest[index]
+		: CellStruct { -1, -1 };
+
+	if (destCell == ignored)
+		return;
+
+	// A destination on/next to the carrier is a return/selection order, not a
+	// launch. The engine's own cell assigned during selection also lands here.
+	if (destCoords.DistanceFrom(pCarrier->GetCoords()) <= 512.0)
+		return;
+
+	if (destCell == CellClass::Coord2Cell(pAircraft->Location))
+		return;
+
+	if (auto const pCell = MapClass::Instance.TryGetCellAt(destCell))
+	{
+		if (IsOwnCell(pCarrier, pCell, false) || IsOwnCell(pCarrier, pCell, true))
+			return;
+	}
+
+	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+	if (!pTypeExt || !HasRunwayMode(pTypeExt, false))
+		return;
+
+	// AircraftCarrier.DockRadius: a fallback launch order beyond the allowed
+	// radius is ignored, so the payload stays parked.
+	if (IsOutsideCarrierDockRadius(pCarrier, pTypeExt, index, destCell))
+		return;
+
+	// A move order must not inherit a stale attack target.
+	pAircraft->SetTarget(nullptr);
+	pAircraft->SetArchiveTarget(nullptr);
+
+	// 2 = click-authorized queue entry (survives deselection).
+	if (index < pState->CarrierPayloadLaunchRequest.size())
+		pState->CarrierPayloadLaunchRequest[index] = 2;
+
+	if (index < pState->CarrierPayloadRequestedDest.size())
+		pState->CarrierPayloadRequestedDest[index] = destCell;
+
+	QueueCarrierTakeoffIntent(pAircraft, pCarrier);
+
+	Debug::CarrierLog("[CarrierCmd] click fallback launch slot=%d dest=(%d,%d)\n",
+		static_cast<int>(index), destCell.X, destCell.Y);
 }
 
 void Footprint::LogPayloadCommand(const char* tag, TechnoClass* pThis, AbstractClass* pTarget)
@@ -3339,6 +6048,12 @@ void Footprint::RememberRunwayCommandDestination(TechnoClass* pThis, AbstractCla
 
 	auto& runway = pState->TakeoffRunways[runwayIndex];
 	const CellStruct destCell = CellClass::Coord2Cell(pDest->GetCoords());
+
+	// The engine's idle bookkeeping keeps assigning the aircraft's own cell
+	// as a destination after a landing. That is not a command and must never
+	// replace the player's takeoff destination.
+	if (destCell == CellClass::Coord2Cell(pAircraft->Location))
+		return;
 
 	if (state == 8)
 	{
@@ -3534,10 +6249,117 @@ CellStruct Footprint::GetLastMouseCell()
 	return s_lastMouseCell;
 }
 
+// AircraftCarrier.DockStricted=no: take a foreign aircraft into a genuinely
+// empty deck slot. Slots waiting for AircraftCarrier.AllowRestore are reserved
+// and must never be preempted. Returns false when the carrier is full or the
+// aircraft already belongs to another carrier.
+static bool TryAdoptForeignCarrierPayload(UnitClass* pCarrier, AircraftClass* pAircraft, size_t* pSlot = nullptr)
+{
+	if (!pCarrier || !pAircraft || !pCarrier->IsAlive || pCarrier->InLimbo || pCarrier->IsSinking)
+		return false;
+
+	if (!pAircraft->IsAlive || pAircraft->InLimbo
+		|| pAircraft->WhatAmI() != AbstractType::Aircraft)
+	{
+		return false;
+	}
+
+	// Never hand an aircraft to another house's carrier.
+	if (!pCarrier->Owner || !pAircraft->Owner || pCarrier->Owner != pAircraft->Owner)
+		return false;
+
+	if (Footprint::GetCarrierPayloadOwner(pAircraft))
+		return false;
+
+	const auto pType = pCarrier->GetTechnoType();
+	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pType);
+
+	if (!pTypeExt || !TechnoTypeExt::IsAircraftCarrier(pType)
+		|| pTypeExt->AircraftCarrier_DockStricted)
+	{
+		return false;
+	}
+
+	const auto pState = Footprint::GetState(pCarrier);
+
+	if (!pState || !pState->CarrierPayloadsInitialized)
+		return false;
+
+	const size_t count = pState->CarrierPayloads.size();
+
+	if (count == 0)
+		return false;
+
+	auto ensureSize = [count](auto& vec, auto value)
+	{
+		if (vec.size() < count)
+			vec.resize(count, value);
+	};
+
+	ensureSize(pState->CarrierPayloadDocked, static_cast<unsigned char>(1));
+	ensureSize(pState->CarrierPayloadLastCoords, CoordStruct::Empty);
+	ensureSize(pState->CarrierPayloadReloadTimer, 0);
+	ensureSize(pState->CarrierPayloadLaunchRequest, static_cast<unsigned char>(0));
+	ensureSize(pState->CarrierPayloadLandingTimer, 0);
+	ensureSize(pState->CarrierPayloadRequestedDest, CellStruct { -1, -1 });
+	ensureSize(pState->CarrierPayloadReturnCell, CellStruct { -1, -1 });
+	ensureSize(pState->CarrierPayloadIgnoredDest, CellStruct { -1, -1 });
+	ensureSize(pState->CarrierPayloadLanding, CarrierLandingProgress {});
+	ensureSize(pState->CarrierPayloadRestoreTimer, 0);
+
+	for (size_t i = 0; i < count; ++i)
+	{
+		if (pState->CarrierPayloads[i])
+			continue;
+
+		// Reserved for respawn: never preempt.
+		if (pState->CarrierPayloadDocked[i] == 9)
+			continue;
+
+		if (pState->CarrierPayloadRestoreTimer[i] > 0)
+			continue;
+
+		pState->CarrierPayloads[i] = pAircraft;
+		pState->CarrierPayloadDocked[i] = 0;
+		pState->CarrierPayloadLastCoords[i] = pAircraft->Location;
+		pState->CarrierPayloadReloadTimer[i] = 0;
+		pState->CarrierPayloadLaunchRequest[i] = 0;
+		pState->CarrierPayloadLandingTimer[i] = 0;
+		pState->CarrierPayloadRequestedDest[i] = CellStruct { -1, -1 };
+		pState->CarrierPayloadReturnCell[i] = CellStruct { -1, -1 };
+		pState->CarrierPayloadIgnoredDest[i] = CellStruct { -1, -1 };
+		pState->CarrierPayloadLanding[i] = CarrierLandingProgress {};
+		pState->CarrierPayloadRestoreTimer[i] = 0;
+
+		s_carrierPayloads[pAircraft] = pCarrier;
+
+		pAircraft->DockNowHeadingTo = nullptr;
+		pAircraft->SetTarget(nullptr);
+		pAircraft->SetArchiveTarget(nullptr);
+		pAircraft->SetDestination(nullptr, true);
+		pAircraft->InAir = true;
+		pAircraft->QueueMission(Mission::Sleep, true);
+
+		if (pSlot)
+			*pSlot = i;
+
+		Debug::CarrierLog("[AircraftCarrier] %s adopted foreign aircraft %s into slot %u\n",
+			pType ? pType->ID : "?",
+			pAircraft->Type ? pAircraft->Type->ID : "?",
+			static_cast<unsigned>(i));
+
+		return true;
+	}
+
+	return false;
+}
+
 void Footprint::CaptureClickDestination(const CellStruct& cell)
 {
 	if (cell.X < 0 || cell.Y < 0)
 		return;
+
+	s_lastCommandClickFrame = Unsorted::CurrentFrame;
 
 	Debug::CarrierLog("[DiagClick] CaptureClickDestination f=%d cell=(%d,%d) selected=%d\n",
 		Unsorted::CurrentFrame, cell.X, cell.Y, ObjectClass::CurrentObjects.Count);
@@ -3548,6 +6370,62 @@ void Footprint::CaptureClickDestination(const CellStruct& cell)
 
 		if (!pTechno)
 			continue;
+
+		// AircraftCarrier.DockStricted=no: a selected aircraft that does not
+		// belong to any carrier may be adopted by a carrier under the clicked
+		// cell, provided that carrier has a genuinely free deck slot.
+		if (pTechno->WhatAmI() == AbstractType::Aircraft
+			&& !GetCarrierPayloadOwner(pTechno))
+		{
+			auto const pAircraft = static_cast<AircraftClass*>(pTechno);
+
+			if (pAircraft->IsAlive && pAircraft->IsSelected)
+			{
+				for (auto const pCandidate : UnitClass::Array)
+				{
+					if (!pCandidate || !pCandidate->IsAlive || pCandidate->InLimbo)
+						continue;
+
+					const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pCandidate->GetTechnoType());
+
+					if (!pTypeExt || !TechnoTypeExt::IsAircraftCarrier(pCandidate->GetTechnoType())
+						|| pTypeExt->AircraftCarrier_DockStricted)
+					{
+						continue;
+					}
+
+					const auto pState = GetState(pCandidate);
+
+					if (!pState || !pState->Initialized)
+						continue;
+
+					const int runway = FindLandingRunwayAtCell(pCandidate, pTypeExt, cell);
+					bool ownCell = false;
+
+					if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+					{
+						ownCell = IsOwnCell(pCandidate, pCell, pState->Alt)
+							|| IsOwnCell(pCandidate, pCell, !pState->Alt);
+					}
+
+					if (!ownCell && runway < 0)
+						continue;
+
+					if (!TryAdoptForeignCarrierPayload(pCandidate, pAircraft))
+						continue;
+
+					if (HasRunwayMode(pTypeExt, true))
+					{
+						Footprint::QueueCarrierLandingIntent(pAircraft, pCandidate,
+							runway, runway >= 0, false);
+					}
+
+					break;
+				}
+			}
+
+			continue;
+		}
 
 		const auto pCarrier = GetCarrierPayloadOwner(pTechno);
 
@@ -3614,8 +6492,19 @@ void Footprint::CaptureClickDestination(const CellStruct& cell)
 				continue;
 		}
 
+		// AircraftCarrier.DockRadius: a launch order beyond the allowed radius
+		// is ignored, so the payload stays parked.
+		if (IsOutsideCarrierDockRadius(pCarrier, pTypeExt, index, cell))
+			continue;
+
+		// A move order must not inherit a stale attack target.
+		pAircraft->SetTarget(nullptr);
+		pAircraft->SetArchiveTarget(nullptr);
+
+		// 2 = click-authorized queue entry: keep it even if the player
+		// deselects the aircraft while it is still waiting for a free runway.
 		if (pState->CarrierPayloadLaunchRequest.size() > index)
-			pState->CarrierPayloadLaunchRequest[index] = 1;
+			pState->CarrierPayloadLaunchRequest[index] = 2;
 
 		if (pState->CarrierPayloadRequestedDest.size() > index)
 			pState->CarrierPayloadRequestedDest[index] = cell;
@@ -3646,9 +6535,14 @@ void Footprint::CaptureAttackClick(TechnoClass* pTarget)
 		if (pTarget == pCarrier)
 			continue;
 
-		// Clicking a friendly unit/building is selection, not an attack order.
-		if (!pTarget->Owner || pTarget->Owner == pTechno->Owner
-			|| pTarget->Owner->IsAlliedWith(pTechno->Owner))
+		// Clicking a friendly unit/building is selection, not an attack order,
+		// unless the player is force-attacking (Ctrl). Parked aircraft must be
+		// able to receive the same force-attack order as a normal unit.
+		const bool forceAttack = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+
+		if (!forceAttack
+			&& (!pTarget->Owner || pTarget->Owner == pTechno->Owner
+				|| pTarget->Owner->IsAlliedWith(pTechno->Owner)))
 		{
 			continue;
 		}
@@ -3669,7 +6563,13 @@ void Footprint::CaptureAttackClick(TechnoClass* pTarget)
 		if (index < pState->CarrierPayloadDocked.size() && pState->CarrierPayloadDocked[index] == 1
 			&& pState->CarrierPayloadLaunchRequest.size() > index)
 		{
-			pState->CarrierPayloadLaunchRequest[index] = 1;
+			// 3 = click-authorized queued attack (survives deselection).
+			pState->CarrierPayloadLaunchRequest[index] = 3;
+
+			// An attack order replaces any still-queued move destination.
+			if (pState->CarrierPayloadRequestedDest.size() > index)
+				pState->CarrierPayloadRequestedDest[index] = CellStruct { -1, -1 };
+
 			pAircraft->SetTarget(pTarget);
 			pAircraft->SetArchiveTarget(pTarget);
 
@@ -3758,6 +6658,18 @@ bool Footprint::ShouldSuppressCarrierMission(TechnoClass* pPayload, Mission miss
 
 	const unsigned char payloadState = pState->CarrierPayloadDocked[index];
 
+	// Capture an explicit "go home / stop" order for an airborne payload before
+	// the engine can overwrite the mission. The state-0 handler consumes this
+	// stamp for a short window, so a Stop/Enter command cannot be lost between
+	// this mission call and AircraftClass::Update.
+	if (payloadState == 0
+		&& (mission == Mission::Enter || mission == Mission::Return
+			|| mission == Mission::Stop
+			|| (mission == Mission::Guard && pAircraft->IsSelected)))
+	{
+		s_manualReturnRequest[pAircraft] = Unsorted::CurrentFrame;
+	}
+
 	// The runway controller owns every order while the aircraft is taxiing,
 	// rolling, departing or on the landing runway. Let only Sleep through.
 	if (payloadState == 6 || payloadState == 7 || payloadState == 8)
@@ -3819,7 +6731,43 @@ bool Footprint::CaptureCarrierReturnClick(TechnoClass* pTarget)
 
 		const auto pCarrier = GetCarrierPayloadOwner(pTechno);
 
-		if (!pCarrier || pCarrier != pTarget || !pCarrier->IsAlive)
+		if (!pCarrier)
+		{
+			// DockStricted=no: a selected foreign aircraft clicking a carrier
+			// is a landing request. It can only be accepted into a genuinely
+			// free slot (never into one waiting for respawn).
+			auto const pCarrierTarget = abstract_cast<UnitClass*>(pTarget);
+
+			if (!pCarrierTarget)
+				continue;
+
+			const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrierTarget->GetTechnoType());
+
+			if (!pTypeExt || !TechnoTypeExt::IsAircraftCarrier(pCarrierTarget->GetTechnoType())
+				|| pTypeExt->AircraftCarrier_DockStricted)
+			{
+				continue;
+			}
+
+			auto const pAircraft = static_cast<AircraftClass*>(pTechno);
+
+			if (!pAircraft->IsAlive || !pAircraft->IsSelected)
+				continue;
+
+			if (!TryAdoptForeignCarrierPayload(pCarrierTarget, pAircraft))
+				continue;
+
+			if (HasRunwayMode(pTypeExt, true))
+			{
+				Footprint::QueueCarrierLandingIntent(pAircraft, pCarrierTarget,
+					-1, false, false);
+				handled = true;
+			}
+
+			continue;
+		}
+
+		if (pCarrier != pTarget || !pCarrier->IsAlive)
 			continue;
 
 		const auto pState = GetState(pCarrier);
@@ -3875,9 +6823,20 @@ bool Footprint::IsMouseOverCarrierHull(TechnoClass* pCarrier)
 	WWMouseClass::Instance->GetCoords(&mouse);
 
 	const auto screen = TacticalClass::CoordsToScreen(pCarrier->GetRenderCoords());
-	const int frame = std::clamp(
-		static_cast<int>(pCarrier->PrimaryFacing.Current().GetFacing<64>()),
-		0, static_cast<int>(pImage->Frames) - 1);
+
+	// Use the body frame the engine actually drew last frame. It is captured by
+	// the UnitClass::DrawAsSHP hook into CarrierIslandFrame. Recomputing it from
+	// the facing here was wrong for carriers whose art has 128 facings:
+	// GetFacing<64>() ignores both the 45 degree SHP frame offset and the
+	// facings/32 scale, so the hit rectangle could be a completely different
+	// rotation (for example the 1441 px horizontal frame while the hull was
+	// drawn vertical), making bow/stern clicks miss or empty water click.
+	int frame = 0;
+
+	if (auto const pState = GetState(pCarrier))
+		frame = pState->CarrierIslandFrame;
+
+	frame = std::clamp(frame, 0, static_cast<int>(pImage->Frames) - 1);
 	const auto bounds = pImage->GetFrameBounds(frame);
 
 	const int halfW = std::max(1, (bounds.Width > 0 ? bounds.Width : pImage->Width) / 2);
@@ -3950,6 +6909,19 @@ void Footprint::QueueCarrierLandingIntent(AircraftClass* pAircraft, UnitClass* p
 	if (!pAircraft || !pCarrier || !pAircraft->IsAlive || !pCarrier->IsAlive)
 		return;
 
+	if (GetCarrierPayloadOwner(pAircraft) != pCarrier)
+	{
+		// DockStricted=yes rejects outsiders. When it is off, a genuinely free
+		// slot may accept the aircraft; a slot waiting for respawn never can.
+		const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+
+		if (!pTypeExt || pTypeExt->AircraftCarrier_DockStricted
+			|| !TryAdoptForeignCarrierPayload(pCarrier, pAircraft))
+		{
+			return;
+		}
+	}
+
 	if (!s_carrierLandingIntentAircraft.insert(pAircraft).second)
 	{
 		// A pending intent may already exist (carrier click + clicked runway
@@ -4011,6 +6983,10 @@ void Footprint::QueueCarrierTakeoffIntent(AircraftClass* pAircraft, UnitClass* p
 
 void Footprint::ProcessCarrierIntents()
 {
+	// Refresh the per-frame deck delta before any payload AI. Landed
+	// aircraft use it to stay glued to a moving carrier.
+	UpdateCarrierDeckMotion();
+
 	if (!s_carrierLandingIntents.empty() || !s_carrierTakeoffIntents.empty()
 		|| !s_carrierTakeoffHandoffs.empty())
 	{
@@ -4188,12 +7164,14 @@ void Footprint::ProcessCarrierIntents()
 			if (!pTypeExt)
 				continue;
 
-			// No landing runway configured: fall back to the legacy manual
-			// slot descent (state 3/4/5). This is still controller-driven and
-			// does not use Mission::Enter/Return.
+			// No landing runway configured: enter the native return state.
+			// The state-2 controller below flies the aircraft to a
+			// standoff/approach point with the engine's own Move mission and
+			// only hands over to the manual final approach once it is close.
 			if (!HasRunwayMode(pTypeExt, true))
 			{
-				pState->CarrierPayloadDocked[index] = 3;
+				const auto slot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+				pState->CarrierPayloadDocked[index] = 2;
 				pAircraft->Destination = nullptr;
 				pAircraft->SetTarget(nullptr);
 				pAircraft->SetArchiveTarget(nullptr);
@@ -4203,7 +7181,10 @@ void Footprint::ProcessCarrierIntents()
 				if (index < pState->CarrierPayloadLandingTimer.size())
 					pState->CarrierPayloadLandingTimer[index] = 0;
 
-				Debug::CarrierLog("[AircraftCarrier] %s no landing runway, legacy slot descent slot=%u\n",
+				if (index < pState->CarrierPayloadLastCoords.size())
+					pState->CarrierPayloadLastCoords[index] = slot;
+
+				Debug::CarrierLog("[AircraftCarrier] %s no landing runway, native return approach slot=%u\n",
 					pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<unsigned>(index));
 				continue;
 			}
@@ -4396,6 +7377,11 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 	if (it == pState->CarrierPayloads.end())
 		return;
 
+	// Dying payloads must not be pinned or have their target/mission cleared;
+	// AircraftClass::Update needs to finish the crash/death path.
+	if (!pAircraft->IsAlive || pAircraft->Health <= 0)
+		return;
+
 	const size_t index = static_cast<size_t>(std::distance(pState->CarrierPayloads.begin(), it));
 
 	if (index >= pState->CarrierPayloadDocked.size())
@@ -4408,8 +7394,44 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 	if (runwayState == 2)
 	{
-		// State 2 is the manual return/orbit. Pin it before the engine's
-		// movement update, but let a real player order survive so
+		// The long return leg to the runway approach point is flown by the
+		// engine's own Move mission. The early lock runs before that mission
+		// AI, so it must not erase the Destination / mission / InAir state or
+		// the aircraft freezes in mid-air. Only the manual phases (orbit,
+		// join, descent, taxi) are pinned here.
+		const CarrierLandingProgress* pProgress =
+			index < pState->CarrierPayloadLanding.size()
+				? &pState->CarrierPayloadLanding[index]
+				: nullptr;
+
+		// Legacy vertical-takeoff/landing has no CarrierLandingProgress entry;
+		// its long return leg is flagged by CarrierPayloadNativeReturn. That
+		// leg must be flown by the engine's Move mission. Freezing it here made
+		// a "Stop" order leave the aircraft hovering in place forever.
+		const bool legacyEngineReturn =
+			index < pState->CarrierPayloadNativeReturn.size()
+			&& pState->CarrierPayloadNativeReturn[index] != 0;
+
+		if ((pProgress && pProgress->Phase == CarrierLandingPhase::ReturnToApproach)
+			|| legacyEngineReturn)
+		{
+			pAircraft->DockNowHeadingTo = nullptr;
+
+			if (Unsorted::CurrentFrame % 30 == 0)
+			{
+				Debug::CarrierLog("[DiagLock] engineReturn skip slot=%u mission=%d dest=%p inAir=%d loc=(%d,%d,%d)\n",
+					static_cast<unsigned>(index),
+					static_cast<int>(pAircraft->GetCurrentMission()),
+					static_cast<void*>(pAircraft->Destination),
+					pAircraft->InAir ? 1 : 0,
+					pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
+			}
+
+			return;
+		}
+
+		// State 2 manual phases are pinned before the engine's movement
+		// update, but a real player order must survive so
 		// UpdateCarrierPayload can cancel the landing.
 		const auto mission = pAircraft->GetCurrentMission();
 		// Guard is also set by the engine's idle/auto-acquire code; treating it
@@ -4437,7 +7459,9 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			// after it applies this frame's movement.
 			pAircraft->InAir = false;
 			pAircraft->SetSpeedPercentage(0.0);
-			pAircraft->PrimaryFacing.SetDesired(pAircraft->PrimaryFacing.Current());
+			// Do not freeze the facing here: the manual controller drives it
+			// (and a stationary turn must use the aircraft's own ROT, not a
+			// per-frame snap). Only the engine's orders are cleared.
 			pAircraft->Target = nullptr;
 			pAircraft->ArchiveTarget = nullptr;
 			ForceCarrierSleep(pAircraft);
@@ -4460,6 +7484,10 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		pAircraft->Destination = nullptr;
 		pAircraft->SetTarget(nullptr);
 		pAircraft->SetArchiveTarget(nullptr);
+		// Idle-order leftovers from the landing must not keep re-issuing a
+		// self-cell destination behind the runway controller's back.
+		pAircraft->MegaDestination = nullptr;
+		pAircraft->MegaTarget = nullptr;
 
 		// Runway rollout/taxi must stay on the deck. In particular, state 6
 		// must not be allowed to lift vertically when a player/engine order
@@ -4471,6 +7499,15 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			// A stale flight altitude here is why the parked aircraft visibly
 			// floats above the deck with the shadow left on the deck.
 			pAircraft->SetHeight(0);
+
+			// A landed aircraft can still have a live fly-locomotor flight
+			// update (its idle return keeps re-assigning a destination). That
+			// update turns the nose toward the stale destination / PoseDir
+			// every tick and fights the manual taxi turn, which looked like a
+			// plane stuck and vibrating on the deck. Stop it here as well; the
+			// takeoff taxi, roll and departure all move the aircraft manually.
+			if (auto const pLoco = pAircraft->Locomotor)
+				pLoco->Stop_Moving();
 		}
 
 		if (runwayState == 7)
@@ -4505,8 +7542,12 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 		pAircraft->SetSpeedPercentage(speedPercentage);
 
-		// Freeze engine facing; the state machine rotates manually.
-		pAircraft->PrimaryFacing.SetDesired(pAircraft->PrimaryFacing.Current());
+		// Do not freeze the facing here. The runway controller owns it and
+		// must be able to start a native ROT rotation (SetDesired) that the
+		// engine's FacingClass interpolates over several frames. Forcing
+		// Desired = Current every tick made every turn an instant snap.
+		// If an engine path still replaces the desired facing, the controller
+		// restores it without restarting the rotation timer.
 
 		// QueueMission alone is not enough: the engine re-queues Move/Enter
 		// on some aircraft every frame. Pin both current and queued mission
@@ -4529,6 +7570,16 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 	const auto pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
 	const auto mission = pAircraft->GetCurrentMission();
 	const bool aiOwner = pCarrier->Owner && !pCarrier->Owner->IsControlledByHuman();
+
+	// A player attack order arrives as Mission::Attack with a target. Capture it
+	// before the parked pin below clears the target, so the state-1 handler can
+	// launch the aircraft and the engine mission survives the pin.
+	const bool humanAttackOrder = !aiOwner && pAircraft->IsSelected
+		&& (mission == Mission::Attack || mission == Mission::AttackMove)
+		&& pAircraft->Target;
+
+	if (humanAttackOrder && index < pState->CarrierPayloadLaunchRequest.size())
+		pState->CarrierPayloadLaunchRequest[index] = 3;
 
 	// AI carriers have no click hook. Capture a real AI Move/Attack order here,
 	// before the parked pin below erases it, and feed it into the runway queue.
@@ -4555,10 +7606,26 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 	// Runs before the engine's mission AI. A stale engine destination or a
 	// leftover Enter/Move mission would otherwise start a takeoff before the
 	// normal parked-state handler gets a chance to run.
+	const unsigned char queuedLaunchValue =
+		index < pState->CarrierPayloadLaunchRequest.size()
+			? pState->CarrierPayloadLaunchRequest[index] : 0;
+	const bool hasQueuedAttack = queuedLaunchValue == 3;
+
 	pAircraft->DockNowHeadingTo = nullptr;
 	pAircraft->Destination = nullptr;
-	pAircraft->SetTarget(nullptr);
-	pAircraft->SetArchiveTarget(nullptr);
+	pAircraft->MegaDestination = nullptr;
+	pAircraft->MegaTarget = nullptr;
+
+	// A queued attack still needs its target when a runway becomes free; the
+	// parked pin must not erase it before RequestRunwayTakeoff copies it.
+	// Queued move orders (2) explicitly clear the target when issued, so a
+	// stale attack target cannot leak into them.
+	if (!hasQueuedAttack)
+	{
+		pAircraft->SetTarget(nullptr);
+		pAircraft->SetArchiveTarget(nullptr);
+	}
+
 	pAircraft->InAir = false;
 	pAircraft->SetHeight(0);
 
@@ -4624,6 +7691,8 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		pAircraft->SetArchiveTarget(nullptr);
 		pAircraft->Destination = nullptr;
 		pAircraft->DockNowHeadingTo = nullptr;
+		pAircraft->MegaDestination = nullptr;
+		pAircraft->MegaTarget = nullptr;
 		pAircraft->InAir = false;
 		pAircraft->SetHeight(0);
 		pAircraft->SetSpeedPercentage(0.0);
@@ -4631,17 +7700,25 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		ResetCarrierFlightState(pAircraft);
 
 		const DirStruct slotFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
-		pAircraft->PrimaryFacing.SetCurrent(slotFacing);
-		pAircraft->PrimaryFacing.SetDesired(slotFacing);
+		SetCarrierPayloadFacing(pAircraft, slotFacing);
 
 		if (auto const pLoco = pAircraft->Locomotor)
 			pLoco->Stop_Moving();
+
+		// Same as the takeoff start: SetHeight(0)/Stop_Moving can drop the
+		// airframe to the cell floor. Re-assert the deck slot and heading as
+		// the last write so parking does not render one frame at water level.
+		pAircraft->SetLocation(slot);
+		SetCarrierPayloadFacing(pAircraft, slotFacing);
 
 		if (index < pState->CarrierPayloadLaunchRequest.size())
 			pState->CarrierPayloadLaunchRequest[index] = 0;
 
 		if (index < pState->CarrierPayloadRequestedDest.size())
 			pState->CarrierPayloadRequestedDest[index] = CellStruct { -1, -1 };
+
+		if (index < pState->CarrierPayloadIgnoredDest.size())
+			pState->CarrierPayloadIgnoredDest[index] = CellStruct { -1, -1 };
 
 		if (index < pState->CarrierPayloadReturnCell.size())
 			pState->CarrierPayloadReturnCell[index] = CellStruct { -1, -1 };
@@ -4656,10 +7733,13 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		s_landingWatch.erase(pAircraft);
 		s_taxiWatch.erase(pAircraft);
 		s_landingRunwayExplicit.erase(pAircraft);
+		s_landingQueueOrder.erase(pAircraft);
+		s_landingCruiseSpeed.erase(pAircraft);
 
-		Debug::CarrierLog("[AircraftCarrier] %s parked in slot %u (%s)\n",
+		Debug::CarrierLog("[AircraftCarrier] %s parked in slot %u (%s) loc=(%d,%d,%d)\n",
 			pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<unsigned>(index),
-			reason ? reason : "runway");
+			reason ? reason : "runway",
+			pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
 	}
 
 	void CancelRunwayTakeoff(UnitClass* pCarrier, AircraftClass* pAircraft, size_t index,
@@ -4727,6 +7807,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		runway.Path.clear();
 		runway.PathIndex = 0;
 		runway.TrailEnabled = false;
+		runway.TurnAccumRaw = -1;
 
 		if (index < pState->CarrierPayloadLaunchRequest.size())
 			pState->CarrierPayloadLaunchRequest[index] = 0;
@@ -4786,17 +7867,43 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		runway.Path = BuildRunwayTaxiPath(pCarrier, pState, pAircraft, runway.StartCoords);
 
 		runway.Timer = runway.Path.empty() ? 0 : 1;
+		runway.TurnAccumRaw = -1;
+		runway.AlignDone = false;
+		// Start the taxi with an in-place turn toward the first path segment
+		// instead of moving while the nose still faces the parking direction.
+		// Seed the owned turn angle from the parking facing, not from
+		// PrimaryFacing.Current(): the engine resets the current facing every
+		// frame, so starting from it would snap the nose to north on the first
+		// turn frame.
+		runway.TaxiTurnTimer = runway.Path.empty() ? 0 : 1;
+		runway.TaxiTurnRaw = runway.TaxiTurnTimer > 0
+			? GetCarrierSlotFacing(pCarrier, pTypeExt, index).Raw
+			: -1;
 
 		pAircraft->DockNowHeadingTo = nullptr;
 		pAircraft->InAir = false;
 		pAircraft->Destination = nullptr;
 		pAircraft->Target = nullptr;
 		pAircraft->ArchiveTarget = nullptr;
+		// After a landing the engine can leave idle-order bookkeeping behind
+		// (MegaDestination/MegaTarget). It is not a player command and would
+		// keep re-assigning the aircraft's own cell as a destination while the
+		// runway controller owns the aircraft.
+		pAircraft->MegaDestination = nullptr;
+		pAircraft->MegaTarget = nullptr;
 		ForceCarrierSleep(pAircraft);
 		pAircraft->SetSpeedPercentage(0.0);
 
 		if (auto const pLoco = pAircraft->Locomotor)
 			pLoco->Stop_Moving();
+
+		// The engine helpers above (SetHeight/Stop_Moving) can put a landed
+		// airframe back on the cell floor (Z=0). Re-assert the deck position
+		// last so the transition frame does not render one frame at water
+		// level (the visible one-frame dip when a new aircraft is picked).
+		pAircraft->SetLocation(slotCoords);
+		const DirStruct slotFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
+		SetCarrierPayloadFacing(pAircraft, slotFacing);
 
 		if (index < pState->CarrierPayloadLaunchRequest.size())
 			pState->CarrierPayloadLaunchRequest[index] = 0;
@@ -4804,9 +7911,10 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		if (index < pState->CarrierPayloadRequestedDest.size())
 			pState->CarrierPayloadRequestedDest[index] = CellStruct { -1, -1 };
 
-		Debug::CarrierLog("[AircraftCarrier] %s runway takeoff starts slot %u runway=%d path=%u\n",
+		Debug::CarrierLog("[AircraftCarrier] %s runway takeoff starts slot %u runway=%d path=%u loc=(%d,%d,%d)\n",
 			pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<unsigned>(index),
-			runwayIndex, static_cast<unsigned>(runway.Path.size()));
+			runwayIndex, static_cast<unsigned>(runway.Path.size()),
+			pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
 	}
 
 	void RequestRunwayTakeoff(UnitClass* pCarrier, AircraftClass* pAircraft, size_t index,
@@ -4891,42 +7999,24 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			}
 			else
 			{
-				if (index < pState->CarrierPayloadLaunchRequest.size())
-					pState->CarrierPayloadLaunchRequest[index] = 0;
-
-				if (index < pState->CarrierPayloadRequestedDest.size())
-					pState->CarrierPayloadRequestedDest[index] = CellStruct { -1, -1 };
+				// Every runway has an occupant and a waiting aircraft. Keep
+				// this order intact: the parked-state handler retries every
+				// frame and takes the next runway slot that becomes free.
+				// Dropping the request here is what left four of eight aircraft
+				// standing on the deck after a single order.
+				if (Unsorted::CurrentFrame % 60 == 0)
+				{
+					Debug::CarrierLog("[AircraftCarrier] %s queued for a free runway (slot %u)\n",
+						pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<unsigned>(index));
+				}
 			}
 
 			return;
 		}
 
-		if (!IsCarrierStopped(pCarrier))
-		{
-			runway.TakeoffRequest = pAircraft;
-			runway.TakeoffRequestSlot = static_cast<int>(index);
-			runway.PendingDestination = commandDest;
-			runway.PendingTarget = commandTarget;
-			runway.PendingMission = commandMission;
-			state = 6;
-			pAircraft->DockNowHeadingTo = nullptr;
-			pAircraft->InAir = false;
-			pAircraft->Destination = nullptr;
-			pAircraft->SetTarget(nullptr);
-			pAircraft->SetArchiveTarget(nullptr);
-			pAircraft->QueueMission(Mission::Sleep, true);
-
-			if (auto const pLoco = pAircraft->Locomotor)
-				pLoco->Stop_Moving();
-
-			if (index < pState->CarrierPayloadRequestedDest.size())
-				pState->CarrierPayloadRequestedDest[index] = CellStruct { -1, -1 };
-
-			Debug::CarrierLog("[AircraftCarrier] %s waiting for carrier stop\n",
-				pAircraft->Type ? pAircraft->Type->ID : "?");
-			return;
-		}
-
+		// The carrier may still be moving. Start taxiing to the takeoff point
+		// anyway: the aircraft follows the moving deck (like the landing taxi)
+		// and only the takeoff roll waits for the carrier to be truly stopped.
 		runway.CommandDestination = commandDest;
 		runway.CommandTarget = commandTarget;
 		runway.CommandMission = commandMission;
@@ -5135,10 +8225,20 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		if (runway.TakeoffRequest == pAircraft)
 		{
 			const auto slot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+			const auto slotFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
 			pAircraft->SetLocation(slot);
 			pAircraft->InAir = false;
 			pAircraft->DockNowHeadingTo = nullptr;
-			pAircraft->PrimaryFacing.SetDesired(GetCarrierSlotFacing(pCarrier, pTypeExt, index));
+
+			// While waiting, the engine keeps assigning the aircraft's own cell
+			// as a Destination. That stale destination survives into the
+			// takeoff taxi/roll and makes the engine rotate the nose back to
+			// the parking facing (the "flies/rolls backwards" bug). Drop it and
+			// freeze the parking facing every frame.
+			pAircraft->Destination = nullptr;
+			pAircraft->MegaDestination = nullptr;
+			pAircraft->MegaTarget = nullptr;
+			SetCarrierPayloadFacing(pAircraft, slotFacing);
 
 			if (pAircraft->GetCurrentMission() != Mission::Sleep)
 				pAircraft->QueueMission(Mission::Sleep, true);
@@ -5146,7 +8246,10 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			if (auto const pLoco = pAircraft->Locomotor)
 				pLoco->Stop_Moving();
 
-			if (!runway.Occupant && IsCarrierStopped(pCarrier))
+			// Start taxiing as soon as the runway is free. The aircraft will
+			// follow the moving deck to the takeoff point; only the roll waits
+			// for the carrier to be truly stopped.
+			if (!runway.Occupant)
 			{
 				runway.TakeoffRequest = nullptr;
 				runway.TakeoffRequestSlot = -1;
@@ -5169,7 +8272,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 			if (Unsorted::CurrentFrame % 15 == 0)
 			{
-				Debug::CarrierLog("[RunwayTakeoff] %s phase=%d path=%u/%u loc=(%d,%d,%d) start=(%d,%d,%d) end=(%d,%d,%d) last=(%d,%d,%d) speed=%.2f timer=%d dest=%p mission=%d target=%p reload=%d\n",
+				Debug::CarrierLog("[RunwayTakeoff] %s phase=%d path=%u/%u loc=(%d,%d,%d) start=(%d,%d,%d) end=(%d,%d,%d) last=(%d,%d,%d) speed=%.2f timer=%d align=%d facing=%u accum=%d step=%d dest=%p mission=%d target=%p reload=%d\n",
 					pAircraft->Type ? pAircraft->Type->ID : "?",
 					static_cast<int>(runway.Phase),
 					static_cast<unsigned>(runway.PathIndex),
@@ -5178,23 +8281,70 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 					runway.StartCoords.X, runway.StartCoords.Y, runway.StartCoords.Z,
 					runway.EndCoords.X, runway.EndCoords.Y, runway.EndCoords.Z,
 					runway.LastCoords.X, runway.LastCoords.Y, runway.LastCoords.Z,
-					runway.Speed, runway.Timer, static_cast<void*>(pAircraft->Destination),
+					runway.Speed, runway.Timer, runway.AlignDone ? 1 : 0,
+					static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
+					runway.TurnAccumRaw,
+					GetCarrierTurnStep(pAircraft),
+					static_cast<void*>(pAircraft->Destination),
 					static_cast<int>(pAircraft->GetCurrentMission()),
 					static_cast<void*>(pAircraft->Target),
 					(index < pState->CarrierPayloadReloadTimer.size()
 						? pState->CarrierPayloadReloadTimer[index] : 0));
 			}
 
-			// The carrier must not move once the aircraft is on the runway.
-			// Takeoff roll may finish using the cached line if the ship moves
-			// after the roll has started.
-			if (!IsCarrierStopped(pCarrier)
-				&& runway.Phase != CarrierRunwayPhase::TakeoffRoll
-				&& runway.Phase != CarrierRunwayPhase::TakeoffDeparture)
+			// The carrier's custom locomotor moves one cell at a time and
+			// pauses between steps. Before the takeoff roll the aircraft keeps
+			// taxiing to the takeoff point with the moving deck, exactly like
+			// the landing taxi. Only the roll itself waits for the carrier to
+			// be truly stopped (handled in AlignAtA).
+			const bool onDeckPhase = runway.Phase == CarrierRunwayPhase::TaxiToStaging
+				|| runway.Phase == CarrierRunwayPhase::TaxiToA
+				|| runway.Phase == CarrierRunwayPhase::AlignAtA;
+
+			CarrierDeckMotion deckMotion;
+
+			if (onDeckPhase && GetCarrierDeckMotion(pCarrier, deckMotion))
 			{
-				CancelRunwayTakeoff(pCarrier, pAircraft, index, pState, pTypeExt, state,
-					"carrier moved before takeoff");
-				return;
+				pAircraft->SetLocation(CarryDeckPoint(deckMotion, pAircraft->Location));
+
+				const auto carriedFacing = CarryDeckFacing(deckMotion,
+					pAircraft->PrimaryFacing.Current());
+				pAircraft->PrimaryFacing.SetCurrent(carriedFacing);
+				pAircraft->PrimaryFacing.SetDesired(carriedFacing);
+
+				for (auto& point : runway.Path)
+					point = CarryDeckPoint(deckMotion, point);
+
+				if (runway.StartCoords != CoordStruct::Empty)
+					runway.StartCoords = CarryDeckPoint(deckMotion, runway.StartCoords);
+
+				if (runway.EndCoords != CoordStruct::Empty)
+					runway.EndCoords = CarryDeckPoint(deckMotion, runway.EndCoords);
+
+				if (runway.LastCoords != CoordStruct::Empty)
+					runway.LastCoords = CarryDeckPoint(deckMotion, runway.LastCoords);
+
+				if (runway.TaxiTurnRaw >= 0)
+					runway.TaxiTurnRaw = static_cast<unsigned short>(
+						static_cast<unsigned short>(runway.TaxiTurnRaw)
+						+ static_cast<unsigned short>(deckMotion.FacingDeltaRaw));
+
+				if (runway.TurnAccumRaw >= 0)
+					runway.TurnAccumRaw = static_cast<unsigned short>(
+						static_cast<unsigned short>(runway.TurnAccumRaw)
+						+ static_cast<unsigned short>(deckMotion.FacingDeltaRaw));
+
+				if (Unsorted::CurrentFrame % 30 == 0)
+				{
+					Debug::CarrierLog("[CarrierDeckCarry] %s takeoff phase=%d move=(%d,%d,%d) faceDelta=%d loc=(%d,%d,%d)\n",
+						pAircraft->Type ? pAircraft->Type->ID : "?",
+						static_cast<int>(runway.Phase),
+						deckMotion.ToCoords.X - deckMotion.FromCoords.X,
+						deckMotion.ToCoords.Y - deckMotion.FromCoords.Y,
+						deckMotion.ToCoords.Z - deckMotion.FromCoords.Z,
+						static_cast<int>(deckMotion.FacingDeltaRaw),
+						pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
+				}
 			}
 
 			switch (runway.Phase)
@@ -5202,6 +8352,19 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			case CarrierRunwayPhase::TaxiToStaging:
 			case CarrierRunwayPhase::TaxiToA:
 			{
+				// Resolve the runway points from the current hull transform so
+				// the taxi follows the moving deck and always heads for the
+				// live takeoff point.
+				CoordStruct liveStart {};
+				CoordStruct liveEnd {};
+
+				if (GetCarrierRunwayPoints(pCarrier, pTypeExt, false, runway.RunwayIndex,
+					liveStart, liveEnd))
+				{
+					runway.StartCoords = liveStart;
+					runway.EndCoords = liveEnd;
+				}
+
 				const bool staging = runway.Phase == CarrierRunwayPhase::TaxiToStaging;
 				const auto pathTarget = staging ? runway.LastCoords : runway.StartCoords;
 
@@ -5209,6 +8372,10 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				{
 					runway.Path = BuildRunwayTaxiPath(pCarrier, pState, pAircraft, pathTarget);
 					runway.PathIndex = 0;
+					runway.Timer = 1;
+					runway.TurnAccumRaw = -1;
+					runway.TaxiTurnTimer = runway.Path.empty() ? 0 : 1;
+					runway.TaxiTurnRaw = -1;
 
 					if (runway.Path.empty())
 					{
@@ -5225,6 +8392,12 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				if (runway.PathIndex >= runway.Path.size())
 				{
 					pAircraft->SetLocation(pathTarget);
+					pAircraft->Destination = nullptr;
+					pAircraft->MegaDestination = nullptr;
+					pAircraft->MegaTarget = nullptr;
+					runway.TurnAccumRaw = -1;
+					runway.TaxiTurnTimer = 0;
+					runway.TaxiTurnRaw = -1;
 
 					if (staging)
 					{
@@ -5233,6 +8406,9 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 						runway.Path = BuildRunwayTaxiPath(pCarrier, pState, pAircraft, runway.StartCoords);
 						runway.PathIndex = 0;
 						runway.Timer = 1;
+						runway.TurnAccumRaw = -1;
+						runway.TaxiTurnTimer = runway.Path.empty() ? 0 : 1;
+						runway.TaxiTurnRaw = -1;
 
 						Debug::CarrierLog("[AircraftCarrier] %s aligned with runway Y, heading to A\n",
 							pAircraft->Type ? pAircraft->Type->ID : "?");
@@ -5242,6 +8418,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 					runway.Phase = CarrierRunwayPhase::AlignAtA;
 					runway.Timer = 0;
 					runway.TrailEnabled = false;
+					runway.AlignDone = false;
 
 					Debug::CarrierLog("[AircraftCarrier] %s reached runway A, aligning\n",
 						pAircraft->Type ? pAircraft->Type->ID : "?");
@@ -5252,52 +8429,107 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				auto const target = runway.Path[runway.PathIndex];
 				const double distance = HorizontalDistance(current, target);
 
-				// Vehicle-like turn at every waypoint: stop, rotate in place,
-				// then start the next segment. Keep the aircraft on the deck
-				// during the turn; if the engine lifted it before the deferred
-				// takeoff started, the old code turned forever at altitude.
-				if (runway.Timer > 0)
-				{
-					current.Z = target.Z;
-					const auto desired = GetRunwayDirection(current, target);
-					TurnAircraftToward(pAircraft, desired, GetRunwayTurnRate(pTypeExt));
-					pAircraft->SetLocation(current);
-					pAircraft->InAir = false;
-
-					const int diff = std::abs(static_cast<short>(
-						desired.Raw - pAircraft->PrimaryFacing.Current().Raw));
-					++runway.Timer;
-
-					// The engine's facing can be restored every tick by its
-					// own locomotor. Break the deadlock after a short grace
-					// period and snap to the path direction.
-					if (diff <= 256 || runway.Timer > 180)
-					{
-						pAircraft->PrimaryFacing.SetCurrent(desired);
-						pAircraft->PrimaryFacing.SetDesired(desired);
-						runway.Timer = 0;
-					}
-
-					return;
-				}
-
 				if (Unsorted::CurrentFrame % 30 == 0)
 				{
-					Debug::CarrierLog("[AircraftCarrier] %s taxi f=%d idx=%u/%u loc=(%d,%d,%d) target=(%d,%d,%d) dist=%.1f speed=%.1f\n",
+					Debug::CarrierLog("[AircraftCarrier] %s taxi f=%d idx=%u/%u loc=(%d,%d,%d) target=(%d,%d,%d) dist=%.1f speed=%.1f facing=%u step=%d turn=%d dest=%p\n",
 						pAircraft->Type ? pAircraft->Type->ID : "?", Unsorted::CurrentFrame,
 						static_cast<unsigned>(runway.PathIndex), static_cast<unsigned>(runway.Path.size()),
 						current.X, current.Y, current.Z, target.X, target.Y, target.Z,
-						distance, taxiSpeed);
+						distance, taxiSpeed,
+						static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
+						GetCarrierTurnStep(pAircraft), runway.TaxiTurnTimer,
+						static_cast<void*>(pAircraft->Destination));
+				}
+
+				// Stop-and-rotate before each segment (the chosen taxi style).
+				// This is what keeps a 180-degree parking heading from turning
+				// into "translate/roll while still facing the old direction".
+				// The turn angle is owned by the controller so an engine facing
+				// restore cannot stall it.
+				if (runway.TaxiTurnTimer > 0)
+				{
+					const auto desired = GetRunwayDirection(current, target);
+
+					if (runway.TaxiTurnRaw < 0)
+					{
+						const int startDiff = static_cast<short>(
+							desired.Raw - pAircraft->PrimaryFacing.Current().Raw);
+
+						// A collinear path node needs no pause. Only real
+						// direction changes stop and rotate in place.
+						if (std::abs(startDiff) <= 512)
+							runway.TaxiTurnTimer = 0;
+						else
+							runway.TaxiTurnRaw = pAircraft->PrimaryFacing.Current().Raw;
+					}
+
+					if (runway.TaxiTurnTimer > 0)
+					{
+						const int diff = static_cast<short>(
+							desired.Raw - static_cast<unsigned short>(runway.TaxiTurnRaw));
+
+						if (std::abs(diff) <= 256 || runway.TaxiTurnTimer >= 180)
+						{
+							// The engine resets a landed aircraft's Z to the
+							// cell floor every frame; pinning the held position
+							// without re-asserting the deck Z made the aircraft
+							// bob between water level and the deck while it
+							// rotated in place.
+							current.Z = target.Z;
+							pAircraft->SetLocation(current);
+							pAircraft->InAir = false;
+							pAircraft->Destination = nullptr;
+							pAircraft->MegaDestination = nullptr;
+							pAircraft->MegaTarget = nullptr;
+							pAircraft->PrimaryFacing.SetCurrent(desired);
+							pAircraft->PrimaryFacing.SetDesired(desired);
+
+							if (auto const pLoco = pAircraft->Locomotor)
+								pLoco->Stop_Moving();
+
+							runway.TaxiTurnTimer = 0;
+							runway.TaxiTurnRaw = -1;
+						}
+						else
+						{
+							const int step = GetCarrierTurnStep(pAircraft);
+							runway.TaxiTurnRaw = static_cast<unsigned short>(
+								static_cast<unsigned short>(runway.TaxiTurnRaw)
+								+ std::clamp(diff, -step, step));
+
+							// Keep the deck altitude while rotating in place;
+							// see the completion branch above.
+							current.Z = target.Z;
+							pAircraft->SetLocation(current);
+							pAircraft->InAir = false;
+							pAircraft->Destination = nullptr;
+							pAircraft->MegaDestination = nullptr;
+							pAircraft->MegaTarget = nullptr;
+
+							const DirStruct accumulated(static_cast<int>(runway.TaxiTurnRaw));
+							pAircraft->PrimaryFacing.SetCurrent(accumulated);
+							pAircraft->PrimaryFacing.SetDesired(accumulated);
+							++runway.TaxiTurnTimer;
+						}
+
+						return;
+					}
 				}
 
 				if (distance <= std::max(1.0, taxiSpeed))
 				{
+					const auto travelDir = GetRunwayDirection(current, target);
 					pAircraft->SetLocation(target);
+					pAircraft->Destination = nullptr;
+					pAircraft->MegaDestination = nullptr;
+					pAircraft->MegaTarget = nullptr;
+					pAircraft->PrimaryFacing.SetCurrent(travelDir);
+					pAircraft->PrimaryFacing.SetDesired(travelDir);
 					++runway.PathIndex;
-
-					if (runway.PathIndex < runway.Path.size())
-						runway.Timer = 1;
-
+					runway.TurnAccumRaw = -1;
+					runway.TaxiTurnRaw = travelDir.Raw;
+					runway.TaxiTurnTimer =
+						runway.PathIndex < runway.Path.size() ? 1 : 0;
 					return;
 				}
 
@@ -5322,6 +8554,23 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 					runway.EndCoords = liveEnd;
 				}
 
+				// The carrier may have moved while this aircraft was held in
+				// place during the alignment. If the new runway point is far
+				// from the held position, taxi there instead of snapping
+				// across the deck.
+				if (HorizontalDistance(pAircraft->Location, runway.StartCoords) > 128.0)
+				{
+					runway.Phase = CarrierRunwayPhase::TaxiToA;
+					runway.Path.clear();
+					runway.PathIndex = 0;
+					runway.Timer = 1;
+					runway.TurnAccumRaw = -1;
+					runway.TaxiTurnTimer = 0;
+					runway.TaxiTurnRaw = -1;
+					runway.AlignDone = false;
+					return;
+				}
+
 				pAircraft->SetLocation(runway.StartCoords);
 				pAircraft->InAir = false;
 
@@ -5329,43 +8578,84 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 					pLoco->Stop_Moving();
 
 				const auto desired = GetRunwayDirection(runway.StartCoords, runway.EndCoords);
-				const int rawDiff = std::abs(static_cast<short>(
-					desired.Raw - pAircraft->PrimaryFacing.Current().Raw));
 
-				if (rawDiff <= 512)
+				// Align using an owned angle advanced at the aircraft's own
+				// ROT. Unlike reading PrimaryFacing.Current() every frame this
+				// converges even if an engine path keeps restoring a stale
+				// facing, so a takeoff that starts right after a landing can
+				// no longer sit at A for 180 frames before rolling.
+				if (!runway.AlignDone)
 				{
-					pAircraft->PrimaryFacing.SetCurrent(desired);
-					pAircraft->PrimaryFacing.SetDesired(desired);
-					runway.TrailEnabled = false;
-					++runway.Timer;
+					if (runway.TurnAccumRaw < 0)
+						runway.TurnAccumRaw = pAircraft->PrimaryFacing.Current().Raw;
 
-					if (runway.Timer >= GetRunwayTakeoffDelay(pTypeExt))
+					const int diff = static_cast<short>(
+						desired.Raw - static_cast<unsigned short>(runway.TurnAccumRaw));
+
+					if (std::abs(diff) <= 512)
 					{
-						runway.Phase = CarrierRunwayPhase::TakeoffRoll;
-						runway.Timer = 0;
+						runway.AlignDone = true;
+						runway.TurnAccumRaw = -1;
+					}
+					else
+					{
+						const int step = GetCarrierTurnStep(pAircraft);
+						runway.TurnAccumRaw = static_cast<unsigned short>(
+							static_cast<unsigned short>(runway.TurnAccumRaw)
+							+ std::clamp(diff, -step, step));
 
-						if (runway.MaxSpeed <= 0.0)
-						{
-							runway.MaxSpeed = GetAircraftFlightSpeed(pAircraft);
-							runway.Speed = runway.MaxSpeed;
-						}
-
-						// First roll frame must emit the trailer immediately;
-						// the normal top-of-update emitter runs before this
-						// phase transition.
-						runway.TrailEnabled = true;
-						SpawnCarrierRunwayTrail(pAircraft, true);
-
-						Debug::CarrierLog("[AircraftCarrier] %s takeoff roll begins slot %u speed=%.1f trailer=%p\n",
-							pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<unsigned>(index),
-							runway.Speed,
-							pAircraft->Type ? static_cast<void*>(pAircraft->Type->Trailer) : nullptr);
+						const DirStruct accumulated(static_cast<int>(runway.TurnAccumRaw));
+						pAircraft->PrimaryFacing.SetCurrent(accumulated);
+						pAircraft->PrimaryFacing.SetDesired(accumulated);
+						runway.TrailEnabled = false;
+						return;
 					}
 				}
-				else
+
+				// Aligned: re-assert the runway heading every frame so an
+				// engine-side facing restore cannot send us back into the turn
+				// branch or delay the roll.
+				pAircraft->PrimaryFacing.SetCurrent(desired);
+				pAircraft->PrimaryFacing.SetDesired(desired);
+
+				// The aircraft may keep taxiing/aligning with a moving deck,
+				// but the takeoff roll must wait until the carrier has really
+				// finished its movement order. The custom locomotor's pause
+				// between two cells is not a stop.
+				if (!IsCarrierTrulyStopped(pCarrier))
 				{
-					TurnAircraftToward(pAircraft, desired, GetRunwayTurnRate(pTypeExt));
+					runway.Timer = 0;
 					runway.TrailEnabled = false;
+					return;
+				}
+
+				if (runway.Timer < 0)
+					runway.Timer = 0;
+
+				runway.TrailEnabled = false;
+				++runway.Timer;
+
+				if (runway.Timer >= GetRunwayTakeoffDelay(pTypeExt))
+				{
+					runway.Phase = CarrierRunwayPhase::TakeoffRoll;
+					runway.Timer = 0;
+
+					if (runway.MaxSpeed <= 0.0)
+					{
+						runway.MaxSpeed = GetAircraftFlightSpeed(pAircraft);
+						runway.Speed = runway.MaxSpeed;
+					}
+
+					// First roll frame must emit the trailer immediately;
+					// the normal top-of-update emitter runs before this
+					// phase transition.
+					runway.TrailEnabled = true;
+					SpawnCarrierRunwayTrail(pAircraft, true);
+
+					Debug::CarrierLog("[AircraftCarrier] %s takeoff roll begins slot %u speed=%.1f trailer=%p\n",
+						pAircraft->Type ? pAircraft->Type->ID : "?", static_cast<unsigned>(index),
+						runway.Speed,
+						pAircraft->Type ? static_cast<void*>(pAircraft->Type->Trailer) : nullptr);
 				}
 
 				return;
@@ -5387,9 +8677,6 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				const double step = std::min(speed, remaining);
 				const auto direction = GetRunwayDirection(runway.StartCoords, end);
 
-				pAircraft->PrimaryFacing.SetCurrent(direction);
-				pAircraft->PrimaryFacing.SetDesired(direction);
-
 				if (remaining > 0.5)
 				{
 					const double dx = static_cast<double>(end.X - runway.StartCoords.X);
@@ -5406,6 +8693,15 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 					pAircraft->SetLocation(current);
 				}
 
+				// SetLocation can inject the aircraft's own cell as a
+				// Destination and rotate the nose back to the parking facing.
+				// Clear it and write the runway heading only afterwards.
+				pAircraft->Destination = nullptr;
+				pAircraft->MegaDestination = nullptr;
+				pAircraft->MegaTarget = nullptr;
+				pAircraft->PrimaryFacing.SetCurrent(direction);
+				pAircraft->PrimaryFacing.SetDesired(direction);
+
 				runway.TrailEnabled = true;
 
 				if (remaining <= 0.5 || step >= remaining)
@@ -5414,6 +8710,10 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 					pAircraft->InAir = true;
 					pAircraft->DockNowHeadingTo = nullptr;
 					pAircraft->Destination = nullptr;
+					pAircraft->MegaDestination = nullptr;
+					pAircraft->MegaTarget = nullptr;
+					pAircraft->PrimaryFacing.SetCurrent(direction);
+					pAircraft->PrimaryFacing.SetDesired(direction);
 					pAircraft->Target = nullptr;
 					pAircraft->ArchiveTarget = nullptr;
 					ForceCarrierSleep(pAircraft);
@@ -5824,9 +9124,6 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		const double speed = std::max(1.0, task.Speed);
 		const auto direction = GetRunwayDirection(start, end);
 
-		pAircraft->PrimaryFacing.SetCurrent(direction);
-		pAircraft->PrimaryFacing.SetDesired(direction);
-
 		if (length > 0.001)
 		{
 			current.X += static_cast<int>(std::lround(dx / length * speed));
@@ -5841,6 +9138,15 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		pAircraft->SetLocation(current);
 		pAircraft->InAir = true;
 		pAircraft->DockNowHeadingTo = nullptr;
+
+		// SetLocation may inject an own-cell Destination and rotate the nose
+		// back to the parking direction; clear it and re-assert the runway
+		// heading afterwards.
+		pAircraft->Destination = nullptr;
+		pAircraft->MegaDestination = nullptr;
+		pAircraft->MegaTarget = nullptr;
+		pAircraft->PrimaryFacing.SetCurrent(direction);
+		pAircraft->PrimaryFacing.SetDesired(direction);
 
 		if (auto const pFly = locomotion_cast<FlyLocomotionClass*>(pAircraft->Locomotor))
 		{
@@ -6181,6 +9487,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		progress.TaxiPath.clear();
 		progress.TaxiPathIndex = 0;
 		progress.TaxiTurnTimer = 0;
+		progress.TaxiTurnRaw = -1;
 		state = 2;
 
 		Debug::CarrierLog("[AircraftCarrier] %s landing go-around (%s) slot=%u failures=%d\n",
@@ -6191,6 +9498,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 	void UpdateCarrierLandingRunway(UnitClass* pCarrier, AircraftClass* pAircraft, size_t index,
 		FootprintState* pState, TechnoTypeExt::ExtData* pTypeExt, unsigned char& state);
 
+
 	void UpdateCarrierLandingReturn(UnitClass* pCarrier, AircraftClass* pAircraft, size_t index,
 		FootprintState* pState, TechnoTypeExt::ExtData* pTypeExt, unsigned char& state)
 	{
@@ -6199,8 +9507,17 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		const int flightLevel = pAircraft->Type ? pAircraft->Type->GetFlightLevel() : 0;
 		const int climbStep = std::clamp(
 			pAircraft->Type ? pAircraft->Type->Speed / 2 : 6, 3, 12);
-		const double cruiseSpeed = GetAircraftFlightSpeed(pAircraft);
+		const double cruiseSpeed = GetLandingCruiseSpeed(pAircraft,
+			progress.Speed > 0.0 ? progress.Speed : GetAircraftFlightSpeed(pAircraft));
 		const int turnStep = GetCarrierTurnStep(pAircraft);
+
+		// The engine can zero Location.Z for one frame while the deck lock is
+		// active. Never interpret that as a real descent below the deck.
+		auto repairAltitude = [&progress](CoordStruct& coords)
+		{
+			if (coords.Z < progress.TouchdownPoint.Z)
+				coords.Z = std::max(progress.LastPos.Z, progress.TouchdownPoint.Z);
+		};
 
 		if (Unsorted::CurrentFrame % 5 == 0)
 			LogLandingProgress("ReturnUpdate", pAircraft, pState, index);
@@ -6222,28 +9539,92 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				progress.PhaseTimer, progress.FailedAttempts);
 		}
 
-		// The engine must never own movement in this state.
-		pAircraft->Destination = nullptr;
+		// The engine owns movement only during the long return leg. Every
+		// other landing phase is flown manually.
+		const bool engineReturn = progress.Phase == CarrierLandingPhase::ReturnToApproach;
+
+		// Keep the captured cruise speed fresh while the engine is still
+		// flying; after the hand-off the engine speed is zeroed and
+		// GetAircraftFlightSpeed can decay.
+		if (engineReturn)
+			s_landingCruiseSpeed[pAircraft] = GetAircraftFlightSpeed(pAircraft);
+
 		pAircraft->SetTarget(nullptr);
 		pAircraft->SetArchiveTarget(nullptr);
 		pAircraft->DockNowHeadingTo = nullptr;
 		pAircraft->InAir = true;
-		pAircraft->SetSpeedPercentage(0.0);
 
-		if (pAircraft->GetCurrentMission() != Mission::Sleep)
-			pAircraft->QueueMission(Mission::Sleep, true);
+		if (!engineReturn)
+		{
+			pAircraft->Destination = nullptr;
+			pAircraft->SetSpeedPercentage(0.0);
 
-		if (auto const pLoco = pAircraft->Locomotor)
-			pLoco->Stop_Moving();
+			if (pAircraft->GetCurrentMission() != Mission::Sleep)
+				pAircraft->QueueMission(Mission::Sleep, true);
+
+			if (auto const pLoco = pAircraft->Locomotor)
+				pLoco->Stop_Moving();
+		}
 
 		if (!IsCarrierStopped(pCarrier))
 		{
-			CancelCarrierLanding(pCarrier, pAircraft, index, pState, state, "carrier moved");
-			return;
+			// A manual go-home request must not be dropped just because the
+			// ship is still moving. Orbit until it stops; only the final
+			// landing phases (handled by UpdateCarrierLandingRunway) abort.
+			if (progress.Phase == CarrierLandingPhase::OrbitWait
+				|| progress.Phase == CarrierLandingPhase::ReturnToApproach
+				|| progress.Phase == CarrierLandingPhase::GoAround)
+			{
+				progress.Phase = CarrierLandingPhase::OrbitWait;
+				progress.Reserved = false;
+				progress.PhaseTimer = 0;
+				progress.StuckTimer = 0;
+				progress.LastPos = pAircraft->Location;
+
+				// The engine may still be flying the return leg; hand the
+				// aircraft over to the manual orbit cleanly.
+				if (pAircraft->Destination)
+					pAircraft->SetDestination(nullptr, true);
+
+				pAircraft->SetSpeedPercentage(0.0);
+
+				if (pAircraft->GetCurrentMission() != Mission::Sleep)
+					pAircraft->QueueMission(Mission::Sleep, true);
+
+				if (auto const pLoco = pAircraft->Locomotor)
+					pLoco->Stop_Moving();
+			}
+			else if (progress.Phase == CarrierLandingPhase::FinalApproach)
+			{
+				// Too late to keep chasing a moving deck: climb away and
+				// re-approach once the ship is stationary again.
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"carrier moved during final");
+				return;
+			}
+			else if (progress.Phase != CarrierLandingPhase::TaxiToSlot
+				&& progress.Phase != CarrierLandingPhase::LandingRoll
+				&& progress.Phase != CarrierLandingPhase::Touchdown)
+			{
+				CancelCarrierLanding(pCarrier, pAircraft, index, pState, state,
+					"carrier moved");
+				return;
+			}
+
+			// LandingRoll / Touchdown / TaxiToSlot: the phase handler below
+			// carries the aircraft with the deck, so it keeps rolling and
+			// taxiing instead of freezing or cancelling the landing.
 		}
 
-		// Refresh all runway geometry from the current ship transform.
-		if (progress.RunwayIndex >= 0)
+		// Refresh all runway geometry from the current ship transform only
+		// while the aircraft is still flying to/around the carrier. Once it is
+		// lined up the cached centreline is used, so a tiny ship transform
+		// jitter cannot move the descent point or make the altitude jump.
+		const bool refreshGeometry = progress.Phase == CarrierLandingPhase::OrbitWait
+			|| progress.Phase == CarrierLandingPhase::ReturnToApproach
+			|| progress.TouchdownPoint == CoordStruct::Empty;
+
+		if (progress.RunwayIndex >= 0 && refreshGeometry)
 		{
 			CoordStruct start {};
 			CoordStruct end {};
@@ -6259,9 +9640,13 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				progress.TouchdownPoint = start;
 				progress.RollEndPoint = end;
 
-				progress.ApproachPoint = GetRunwayApproachStart(start, end,
-					GetRunwayApproachDistance(pTypeExt));
-				progress.LineupPoint = progress.ApproachPoint;
+				const int descentDistance = GetRunwayDescentDistance(pTypeExt);
+				const int approachDistance = GetRunwayApproachDistance(pTypeExt);
+				const int alignGate = std::max(descentDistance, approachDistance)
+					+ static_cast<int>(kLandingAlignLead);
+
+				progress.ApproachPoint = GetRunwayApproachStart(start, end, descentDistance);
+				progress.LineupPoint = GetRunwayApproachStart(start, end, alignGate);
 				progress.RunwayFacingRaw = GetRunwayDirection(start, end).Raw;
 				progress.CruiseZ = MapClass::Instance.GetCellFloorHeight(start) + flightLevel;
 			}
@@ -6273,10 +9658,38 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		if (progress.Phase == CarrierLandingPhase::None)
 			progress.Phase = CarrierLandingPhase::OrbitWait;
 
-		if (progress.RunwayIndex >= 0
-			&& progress.Phase != CarrierLandingPhase::OrbitWait
-			&& progress.Phase != CarrierLandingPhase::GoAround)
+		// The engine return leg may have been aborted above (missing runway /
+		// geometry). Hand the aircraft back to the manual controller cleanly.
+		if (engineReturn && progress.Phase != CarrierLandingPhase::ReturnToApproach)
 		{
+			if (pAircraft->Destination)
+				pAircraft->SetDestination(nullptr, true);
+
+			pAircraft->SetSpeedPercentage(0.0);
+
+			if (pAircraft->GetCurrentMission() != Mission::Sleep)
+				pAircraft->QueueMission(Mission::Sleep, true);
+
+			if (auto const pLoco = pAircraft->Locomotor)
+				pLoco->Stop_Moving();
+		}
+
+		// Only the phases that are still flying toward the runway may claim
+		// it. After touchdown the runway is released for the next aircraft;
+		// re-claiming it here would make the taxiing aircraft block the deck
+		// again for its whole taxi.
+		const bool approachPhase = progress.Phase == CarrierLandingPhase::ReturnToApproach
+			|| progress.Phase == CarrierLandingPhase::Lineup
+			|| progress.Phase == CarrierLandingPhase::FinalApproach;
+
+		if (approachPhase
+			&& progress.RunwayIndex >= 0
+			&& !IsLandingRunwayReserved(pState, progress.RunwayIndex, pAircraft))
+		{
+			// Do not claim the runway just because this aircraft is in an
+			// approach phase. With several payloads returning at once this
+			// unconditionally set Reserved on every one of them, so they all
+			// believed they owned the runway and all flew the manual approach.
 			progress.Reserved = true;
 		}
 
@@ -6284,11 +9697,14 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		{
 			const auto center = pCarrier->GetCoords();
 			auto current = pAircraft->Location;
+			repairAltitude(current);
 			const double dx = static_cast<double>(current.X - center.X);
 			const double dy = static_cast<double>(current.Y - center.Y);
 			const double distance = std::sqrt(dx * dx + dy * dy);
+			const double orbitSpeed = std::max(cruiseSpeed, 32.0);
+			const double angleStep = std::clamp(orbitSpeed / 2048.0, 0.008, 0.03);
 			const double angle = distance > 64.0
-				? std::atan2(dy, dx) + 0.025
+				? std::atan2(dy, dx) + angleStep
 				: 0.0;
 
 			CoordStruct target
@@ -6298,7 +9714,12 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				progress.CruiseZ > 0 ? progress.CruiseZ : current.Z
 			};
 
-			MoveCarrierDirect(pAircraft, current, target, cruiseSpeed, turnStep);
+			// Fly the hold with the same "move along the nose" model as native
+			// flight. MoveCarrierDirect moved along the vector to the target
+			// while only the visual facing turned, which is what made the
+			// waiting aircraft appear to slide/rotate in place instead of
+			// banking around the carrier.
+			MoveCarrierAutopilot(pAircraft, current, target, orbitSpeed, turnStep, false);
 
 			if (current.Z < target.Z)
 				current.Z = std::min(target.Z, current.Z + climbStep);
@@ -6347,28 +9768,82 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 		if (progress.Phase == CarrierLandingPhase::GoAround)
 		{
-			auto current = pAircraft->Location;
-			// Climb away from A back toward the approach point (reverse of the
-			// landing direction), not across the deck.
-			const auto dir = GetRunwayDirection(progress.TouchdownPoint, progress.ApproachPoint);
-			const double rad = static_cast<double>(dir.Raw) * (kPi * 2.0 / 65536.0);
+			// Without valid runway geometry there is nothing to fly out to;
+			// fall back to the holding orbit instead of steering at (0,0).
+			if (progress.ApproachPoint == CoordStruct::Empty
+				|| progress.TouchdownPoint == CoordStruct::Empty)
+			{
+				const int cruiseZ = progress.CruiseZ;
+				ClearCarrierLandingProgress(pState, pAircraft, index, true);
+				auto& reset = EnsureLandingProgress(pState, index);
+				reset.Phase = CarrierLandingPhase::OrbitWait;
+				reset.CruiseZ = cruiseZ;
+				reset.LastPos = pAircraft->Location;
+				return;
+			}
 
-			current.X += static_cast<int>(std::lround(std::sin(rad) * cruiseSpeed));
-			current.Y -= static_cast<int>(std::lround(std::cos(rad) * cruiseSpeed));
+			auto current = pAircraft->Location;
+			repairAltitude(current);
+
+			// Fly out along the extended runway centreline, away from A, and
+			// climb back to cruise altitude before handing the aircraft back
+			// to the engine return leg. The old code only stepped while it was
+			// still climbing, so a go-around that started at cruise altitude
+			// never moved at all: the aircraft was handed straight back to
+			// ReturnToApproach from the same unusable position and looped.
+			const auto outboundDir = GetRunwayDirection(
+				progress.TouchdownPoint, progress.ApproachPoint);
+			const double outRad = static_cast<double>(outboundDir.Raw)
+				* (kPi * 2.0 / 65536.0);
+
+			// Base the outbound point on the alignment gate, not on the
+			// descent point: otherwise the go-around ends exactly on the gate
+			// and the re-approach has no room to turn back in.
+			const CoordStruct& outboundBase = progress.LineupPoint != CoordStruct::Empty
+				? progress.LineupPoint
+				: progress.ApproachPoint;
+
+			CoordStruct outbound
+			{
+				outboundBase.X + static_cast<int>(std::lround(
+					std::sin(outRad) * kLandingGoAroundOutbound)),
+				outboundBase.Y + static_cast<int>(std::lround(
+					-std::cos(outRad) * kLandingGoAroundOutbound)),
+				progress.CruiseZ
+			};
+
+			MoveCarrierJoinStep(pAircraft, current, outbound, cruiseSpeed, turnStep);
 
 			if (current.Z < progress.CruiseZ)
 				current.Z = std::min(progress.CruiseZ, current.Z + climbStep);
 			else
 				current.Z = progress.CruiseZ;
 
-			pAircraft->PrimaryFacing.SetCurrent(dir);
-			pAircraft->PrimaryFacing.SetDesired(dir);
 			pAircraft->SetLocation(current);
 			pAircraft->InAir = true;
 			UpdateCarrierFlightLevel(pAircraft, current);
 
-			if (current.Z < progress.CruiseZ)
+			const double toOutbound = HorizontalDistance(current, outbound);
+
+			++progress.PhaseTimer;
+
+			// Give up flying out after a long time (unreachable outbound
+			// point) instead of flying at it forever.
+			const bool reachedOutbound = toOutbound <= kLandingGoAroundCapture
+				&& current.Z >= progress.CruiseZ;
+
+			if (!reachedOutbound && progress.PhaseTimer < 1800)
+			{
+				if (Unsorted::CurrentFrame % 30 == 0)
+				{
+					Debug::CarrierLog("[CarrierGoAround] %s slot=%u toOutbound=%.0f z=%d cruiseZ=%d failed=%d timer=%d\n",
+						pAircraft->Type ? pAircraft->Type->ID : "?",
+						static_cast<unsigned>(index), toOutbound, current.Z,
+						progress.CruiseZ, progress.FailedAttempts, progress.PhaseTimer);
+				}
+
 				return;
+			}
 
 			++progress.FailedAttempts;
 			const int failedAttempts = progress.FailedAttempts;
@@ -6410,125 +9885,288 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				progress.Reserved = false;
 				progress.PhaseTimer = 0;
 				progress.StuckTimer = 0;
+
+				if (pAircraft->Destination)
+					pAircraft->SetDestination(nullptr, true);
+
+				pAircraft->SetSpeedPercentage(0.0);
+
+				if (pAircraft->GetCurrentMission() != Mission::Sleep)
+					pAircraft->QueueMission(Mission::Sleep, true);
+
+				if (auto const pLoco = pAircraft->Locomotor)
+					pLoco->Stop_Moving();
+
 				return;
 			}
 
-			auto current = pAircraft->Location;
-
-			if (current.Z < progress.CruiseZ)
-				current.Z = std::min(progress.CruiseZ, current.Z + climbStep);
-			else if (current.Z > progress.CruiseZ)
-				current.Z = std::max(progress.CruiseZ, current.Z - climbStep);
-
-			const double distance = HorizontalDistance(current, progress.ApproachPoint);
-
-			if (distance <= 2048.0
-				&& progress.RunwayIndex >= 0
-				&& !IsLandingRunwayReserved(pState, progress.RunwayIndex, pAircraft))
+			if (progress.TouchdownPoint == CoordStruct::Empty
+				|| progress.ApproachPoint == CoordStruct::Empty
+				|| HorizontalDistance(progress.ApproachPoint, progress.TouchdownPoint) < 16.0)
 			{
-				auto& runway = pState->LandingRunways[progress.RunwayIndex];
-				runway.Occupant = pAircraft;
-				runway.OccupantSlot = static_cast<int>(index);
-				runway.RunwayIndex = progress.RunwayIndex;
-				runway.StartCoords = progress.TouchdownPoint;
-				runway.EndCoords = progress.RollEndPoint;
-				runway.Phase = CarrierRunwayPhase::LandingApproach;
-				runway.Timer = 0;
-				runway.Speed = 0.0;
-				runway.Path.clear();
-				runway.PathIndex = 0;
-				runway.TrailEnabled = false;
-
-				// Do not snap the facing here. Line up with the landing
-				// runway direction (A -> Z) first; the descent starts only
-				// when the aircraft is actually aligned.
-				progress.Phase = CarrierLandingPhase::Lineup;
+				progress.Phase = CarrierLandingPhase::OrbitWait;
 				progress.PhaseTimer = 0;
 				progress.StuckTimer = 0;
-				progress.LastPos = current;
-				progress.Speed = std::max(8.0, std::min(cruiseSpeed, 32.0));
 
-				pAircraft->SetLocation(current);
-				UpdateCarrierFlightLevel(pAircraft, current);
-				Debug::CarrierLog("[AircraftCarrier] %s lineup at approach slot=%u runway=%d facing=%u target=%u\n",
-					pAircraft->Type ? pAircraft->Type->ID : "?",
-					static_cast<unsigned>(index), progress.RunwayIndex,
-					static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
-					static_cast<unsigned>(progress.RunwayFacingRaw));
+				if (pAircraft->Destination)
+					pAircraft->SetDestination(nullptr, true);
+
+				pAircraft->SetSpeedPercentage(0.0);
+
+				if (pAircraft->GetCurrentMission() != Mission::Sleep)
+					pAircraft->QueueMission(Mission::Sleep, true);
+
+				if (auto const pLoco = pAircraft->Locomotor)
+					pLoco->Stop_Moving();
+
 				return;
 			}
 
-			MoveCarrierDirect(pAircraft, current, progress.ApproachPoint,
-				cruiseSpeed, turnStep);
-			pAircraft->SetLocation(current);
-			pAircraft->InAir = true;
-			UpdateCarrierFlightLevel(pAircraft, current);
+			// The long return leg is flown by the engine's own aircraft AI.
+			// Keep a native Move order to the alignment gate on the extended
+			// centreline; the manual controller takes over once the aircraft
+			// reaches the gate, well before the configured descent point.
+			auto const gateCell = CellClass::Coord2Cell(progress.LineupPoint);
 
-			if (UpdateLandingWatchdog(progress, current, 240))
-				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
-					"return approach stuck");
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(gateCell))
+			{
+				if (pAircraft->Destination != pCell
+					|| pAircraft->GetCurrentMission() != Mission::Move)
+				{
+					pAircraft->Destination = pCell;
+					pAircraft->QueueMission(Mission::Move, true);
+				}
+
+				if (index < pState->CarrierPayloadReturnCell.size())
+					pState->CarrierPayloadReturnCell[index] = gateCell;
+
+				pAircraft->SetSpeedPercentage(1.0);
+				pAircraft->InAir = true;
+
+				if (progress.Speed <= 0.0)
+					progress.Speed = cruiseSpeed;
+
+				const double toGate = HorizontalDistance(
+					pAircraft->Location, progress.LineupPoint);
+
+				// Hand over only inside the gate capture radius. The old
+				// alongGate >= kLandingAlignLead shortcut handed the aircraft to
+				// the manual controller up to 13k leptons away and from the
+				// wrong side of the approach; the pure-pursuit join then flew a
+				// tight circle ("turning in place") and went around, and every
+				// waiting aircraft repeated that every 60 frames. Keeping the
+				// native Move order until the aircraft is actually at the gate
+				// makes the engine fly the turn/teardrop with its own ROT.
+				if (toGate <= kLandingHandoffDistance)
+				{
+					// Hand over to the manual controller. The aircraft keeps
+					// its current course and speed for one frame; the Lineup
+					// phase turns it onto the centreline using its own ROT.
+					if (pAircraft->Destination)
+						pAircraft->SetDestination(nullptr, true);
+
+					if (auto const pLoco = pAircraft->Locomotor)
+						pLoco->Stop_Moving();
+
+					if (pAircraft->GetCurrentMission() != Mission::Sleep)
+						pAircraft->QueueMission(Mission::Sleep, true);
+
+					pAircraft->SetSpeedPercentage(0.0);
+
+					progress.Phase = CarrierLandingPhase::Lineup;
+					progress.PhaseTimer = 0;
+					progress.StuckTimer = 0;
+					progress.LastPos = pAircraft->Location;
+
+					if (progress.Speed <= 0.0)
+						progress.Speed = cruiseSpeed;
+
+					Debug::CarrierLog("[AircraftCarrier] %s manual landing takeover slot=%u runway=%d toGate=%.0f loc=(%d,%d,%d) facing=%u target=%u\n",
+						pAircraft->Type ? pAircraft->Type->ID : "?",
+						static_cast<unsigned>(index), progress.RunwayIndex,
+						toGate, pAircraft->Location.X, pAircraft->Location.Y,
+						pAircraft->Location.Z,
+						static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
+						static_cast<unsigned>(progress.RunwayFacingRaw));
+				}
+			}
+			else
+			{
+				progress.Phase = CarrierLandingPhase::OrbitWait;
+				progress.PhaseTimer = 0;
+				progress.StuckTimer = 0;
+
+				if (pAircraft->Destination)
+					pAircraft->SetDestination(nullptr, true);
+
+				pAircraft->SetSpeedPercentage(0.0);
+
+				if (pAircraft->GetCurrentMission() != Mission::Sleep)
+					pAircraft->QueueMission(Mission::Sleep, true);
+
+				if (auto const pLoco = pAircraft->Locomotor)
+					pLoco->Stop_Moving();
+			}
 
 			return;
 		}
 
 		if (progress.Phase == CarrierLandingPhase::Lineup)
 		{
+			if (progress.TouchdownPoint == CoordStruct::Empty
+				|| progress.ApproachPoint == CoordStruct::Empty
+				|| progress.LineupPoint == CoordStruct::Empty)
+			{
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"lineup geometry missing");
+				return;
+			}
+
+			// Level-flight alignment segment. The aircraft flies down the
+			// extended centreline at cruise altitude and turns onto the runway
+			// heading at its own ROT. Nothing is snapped, and it never dives
+			// for A early: the descent only starts when the aircraft reaches
+			// RunwayDescentDistance, so it is already lined up by then.
 			auto current = pAircraft->Location;
+			repairAltitude(current);
 
 			if (current.Z < progress.CruiseZ)
 				current.Z = std::min(progress.CruiseZ, current.Z + climbStep);
 			else if (current.Z > progress.CruiseZ)
 				current.Z = std::max(progress.CruiseZ, current.Z - climbStep);
 
-			const auto desired = DirStruct(progress.RunwayFacingRaw);
-			const int diff = std::abs(static_cast<short>(
-				desired.Raw - pAircraft->PrimaryFacing.Current().Raw));
+			const auto runwayDir = GetRunwayDirection(
+				progress.TouchdownPoint, progress.RollEndPoint);
+			const double rad = static_cast<double>(runwayDir.Raw) * (kPi * 2.0 / 65536.0);
+			const double dirX = std::sin(rad);
+			const double dirY = -std::cos(rad);
+			const double approachLen = std::max(1.0,
+				HorizontalDistance(progress.ApproachPoint, progress.TouchdownPoint));
+			const double altitude = std::max(1.0, static_cast<double>(
+				progress.CruiseZ - progress.TouchdownPoint.Z));
 
-			if (diff > 512)
+			const double dx = static_cast<double>(current.X - progress.ApproachPoint.X);
+			const double dy = static_cast<double>(current.Y - progress.ApproachPoint.Y);
+			const double along = dx * dirX + dy * dirY;
+
+			// Aim a fixed lead ahead on the centreline. Before the descent
+			// point this keeps the aircraft flying straight down the extended
+			// centreline instead of chasing a point behind it. The lead is
+			// widened for slow-turning aircraft so they do not spiral around
+			// a point inside their own turn radius.
+			const double turnRadians = std::max(0.0001,
+				static_cast<double>(turnStep) * (kPi * 2.0 / 65536.0));
+			const double joinLead = std::max(kLandingJoinLead,
+				cruiseSpeed / turnRadians * 1.5);
+			const double targetAlong = std::clamp(along + joinLead,
+				-kLandingAlignLead, approachLen);
+
+			CoordStruct target
 			{
-				// Turn toward the runway heading at the approach point. This
-				// replaces the old one-frame SetCurrent snap; the higher rate
-				// keeps the lineup from looking like a long stationary spin.
-				TurnAircraftToward(pAircraft, desired, std::max(turnStep, 4096));
+				progress.ApproachPoint.X + static_cast<int>(std::lround(dirX * targetAlong)),
+				progress.ApproachPoint.Y + static_cast<int>(std::lround(dirY * targetAlong)),
+				progress.CruiseZ
+			};
 
-				// Keep closing on the approach point while turning instead of
-				// hovering in place and rotating.
-				const double toApproach = HorizontalDistance(current, progress.ApproachPoint);
+			// Level alignment keeps the arrival (cruise) speed. Slowing down
+			// here to some glide speed is what made the approach feel like it
+			// had dropped to taxi speed before the descent even started.
+			double targetSpeed = std::max(kLandingFinalMinSpeed, cruiseSpeed);
+			double speed = progress.Speed > 0.0 ? progress.Speed : cruiseSpeed;
 
-				if (toApproach > 16.0)
+			if (speed > targetSpeed)
+				speed = std::max(targetSpeed, speed - kLandingSpeedAccel);
+			else
+				speed = std::min(targetSpeed, speed + kLandingSpeedAccel);
+
+			speed = std::max(speed, kLandingFinalMinSpeed);
+			progress.Speed = speed;
+
+			MoveCarrierJoinStep(pAircraft, current, target, speed, turnStep);
+
+			pAircraft->SetLocation(current);
+			pAircraft->InAir = true;
+			UpdateCarrierFlightLevel(pAircraft, current);
+
+			const double ndx = static_cast<double>(current.X - progress.ApproachPoint.X);
+			const double ndy = static_cast<double>(current.Y - progress.ApproachPoint.Y);
+			const double alongNow = ndx * dirX + ndy * dirY;
+			const double crossTrack = std::abs(-ndx * dirY + ndy * dirX);
+			const int headingError = std::abs(static_cast<short>(
+				runwayDir.Raw - pAircraft->PrimaryFacing.Current().Raw));
+			const double remainingNow = approachLen - alongNow;
+			const double minDescent = std::max(kLandingFinalMinRunway,
+				altitude * kLandingFinalMinSpeed / kLandingMaxDescentRate);
+			const bool aligned = headingError <= kLandingAlignHeadingRaw
+				&& crossTrack <= kLandingAlignCrossTrack;
+
+			if (Unsorted::CurrentFrame % 30 == 0)
+			{
+				Debug::CarrierLog("[CarrierJoin] %s slot=%u mode=level along=%.0f cross=%.0f headingErr=%d remaining=%.0f minDescent=%.0f speed=%.1f target=%.1f facing=%u runway=%u\n",
+					pAircraft->Type ? pAircraft->Type->ID : "?",
+					static_cast<unsigned>(index), alongNow, crossTrack, headingError,
+					remainingNow, minDescent, speed, targetSpeed,
+					static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
+					static_cast<unsigned>(runwayDir.Raw));
+			}
+
+			// At or past the descent point and lined up: start the descent.
+			if (aligned && alongNow >= 0.0 && remainingNow > 0.0)
+			{
+				if (progress.RunwayIndex >= 0
+					&& progress.RunwayIndex < static_cast<int>(pState->LandingRunways.size()))
 				{
-					const double dx = static_cast<double>(progress.ApproachPoint.X - current.X);
-					const double dy = static_cast<double>(progress.ApproachPoint.Y - current.Y);
-					const double step = std::min(std::max(8.0, cruiseSpeed * 0.6), toApproach);
-					current.X += static_cast<int>(std::lround(dx / toApproach * step));
-					current.Y += static_cast<int>(std::lround(dy / toApproach * step));
+					auto& runway = pState->LandingRunways[progress.RunwayIndex];
+					runway.Occupant = pAircraft;
+					runway.OccupantSlot = static_cast<int>(index);
+					runway.RunwayIndex = progress.RunwayIndex;
+					runway.StartCoords = progress.TouchdownPoint;
+					runway.EndCoords = progress.RollEndPoint;
+					runway.Phase = CarrierRunwayPhase::LandingApproach;
+					runway.Timer = 0;
+					runway.Speed = 0.0;
+					runway.Path.clear();
+					runway.PathIndex = 0;
+					runway.TrailEnabled = false;
 				}
 
-				pAircraft->SetLocation(current);
-				pAircraft->InAir = true;
-				UpdateCarrierFlightLevel(pAircraft, current);
+				progress.Phase = CarrierLandingPhase::FinalApproach;
+				progress.PhaseTimer = 0;
+				progress.StuckTimer = 0;
+				progress.LastPos = current;
 
-				if (UpdateLandingWatchdog(progress, current, 240))
-				{
-					StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
-						"lineup stuck");
-				}
+				Debug::CarrierLog("[AircraftCarrier] %s descent begins slot=%u runway=%d along=%.0f/%.0f cross=%.0f headingErr=%d facing=%u target=%u z=%d speed=%.1f\n",
+					pAircraft->Type ? pAircraft->Type->ID : "?",
+					static_cast<unsigned>(index), progress.RunwayIndex,
+					alongNow, approachLen, crossTrack, headingError,
+					static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw),
+					static_cast<unsigned>(runwayDir.Raw), current.Z, speed);
 
 				return;
 			}
 
-			pAircraft->PrimaryFacing.SetCurrent(desired);
-			pAircraft->PrimaryFacing.SetDesired(desired);
-			progress.Phase = CarrierLandingPhase::FinalApproach;
-			progress.PhaseTimer = 0;
-			progress.StuckTimer = 0;
-			progress.LastPos = current;
-			progress.Speed = std::max(8.0, std::min(cruiseSpeed, 32.0));
+			// Passed the point where a safe descent could still begin without
+			// being lined up: climb away and try again rather than dropping
+			// onto the deck from an arbitrary heading.
+			if (alongNow > 0.0 && !aligned && remainingNow < minDescent)
+			{
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"lineup too late to descend");
+				return;
+			}
 
-			Debug::CarrierLog("[AircraftCarrier] %s landing descent begins slot=%u runway=%d facing=%u\n",
-				pAircraft->Type ? pAircraft->Type->ID : "?",
-				static_cast<unsigned>(index), progress.RunwayIndex,
-				static_cast<unsigned>(pAircraft->PrimaryFacing.Current().Raw));
+			if (alongNow >= approachLen)
+			{
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"lineup overshoot");
+				return;
+			}
+
+			if (UpdateLandingWatchdog(progress, current, 360))
+			{
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"lineup stuck");
+			}
 
 			return;
 		}
@@ -6565,6 +10203,56 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 		auto& runway = pState->LandingRunways[progress.RunwayIndex];
 
+		// A landed aircraft stays glued to the deck. The carrier may be ordered
+		// to move while the aircraft is still rolling out or taxiing back to
+		// its slot; transform the aircraft and every cached deck point by the
+		// hull's frame delta so it follows the ship instead of freezing in
+		// world space. Only the on-deck phases use this; an airborne approach
+		// still aborts/goes around when the deck moves.
+		CarrierDeckMotion deckMotion;
+		const bool onDeckPhase = progress.Phase == CarrierLandingPhase::Touchdown
+			|| progress.Phase == CarrierLandingPhase::LandingRoll
+			|| progress.Phase == CarrierLandingPhase::TaxiToSlot;
+
+		if (onDeckPhase && GetCarrierDeckMotion(pCarrier, deckMotion))
+		{
+			pAircraft->SetLocation(CarryDeckPoint(deckMotion, pAircraft->Location));
+
+			const auto carriedFacing = CarryDeckFacing(deckMotion,
+				pAircraft->PrimaryFacing.Current());
+			pAircraft->PrimaryFacing.SetCurrent(carriedFacing);
+			pAircraft->PrimaryFacing.SetDesired(carriedFacing);
+
+			if (progress.TouchdownPoint != CoordStruct::Empty)
+				progress.TouchdownPoint = CarryDeckPoint(deckMotion, progress.TouchdownPoint);
+
+			if (progress.RollEndPoint != CoordStruct::Empty)
+				progress.RollEndPoint = CarryDeckPoint(deckMotion, progress.RollEndPoint);
+
+			if (progress.LastPos != CoordStruct::Empty)
+				progress.LastPos = CarryDeckPoint(deckMotion, progress.LastPos);
+
+			for (auto& point : progress.TaxiPath)
+				point = CarryDeckPoint(deckMotion, point);
+
+			if (progress.TaxiTurnRaw >= 0)
+				progress.TaxiTurnRaw = static_cast<unsigned short>(
+					static_cast<unsigned short>(progress.TaxiTurnRaw)
+					+ static_cast<unsigned short>(deckMotion.FacingDeltaRaw));
+
+			if (Unsorted::CurrentFrame % 30 == 0)
+			{
+				Debug::CarrierLog("[CarrierDeckCarry] %s phase=%u move=(%d,%d,%d) faceDelta=%d loc=(%d,%d,%d)\n",
+					pAircraft->Type ? pAircraft->Type->ID : "?",
+					static_cast<unsigned>(progress.Phase),
+					deckMotion.ToCoords.X - deckMotion.FromCoords.X,
+					deckMotion.ToCoords.Y - deckMotion.FromCoords.Y,
+					deckMotion.ToCoords.Z - deckMotion.FromCoords.Z,
+					static_cast<int>(deckMotion.FacingDeltaRaw),
+					pAircraft->Location.X, pAircraft->Location.Y, pAircraft->Location.Z);
+			}
+		}
+
 		if (Unsorted::CurrentFrame % 15 == 0)
 		{
 			const double toA = HorizontalDistance(pAircraft->Location, progress.TouchdownPoint);
@@ -6585,7 +10273,15 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				static_cast<unsigned>(progress.TaxiPath.size()));
 		}
 
-		if (runway.Occupant != pAircraft)
+		// Re-assert ownership only while this aircraft is still flying the
+		// approach. After touchdown ReleaseCarrierLandingRunway frees the
+		// runway immediately; re-claiming it here would make the taxiing
+		// aircraft block the next landing for its whole taxi.
+		const bool ownsRunway = progress.Reserved
+			&& progress.RunwayIndex >= 0
+			&& progress.RunwayIndex < static_cast<int>(pState->LandingRunways.size());
+
+		if (ownsRunway && runway.Occupant != pAircraft)
 		{
 			Debug::CarrierLog("[DiagLanding] runway occupant mismatch slot=%u rw=%d old=%p new=%p\n",
 				static_cast<unsigned>(index), progress.RunwayIndex,
@@ -6595,8 +10291,8 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			runway.RunwayIndex = progress.RunwayIndex;
 		}
 
-		const double cruiseSpeed = GetAircraftFlightSpeed(pAircraft);
-		const int turnStep = GetCarrierTurnStep(pAircraft);
+		const double cruiseSpeed = GetLandingCruiseSpeed(pAircraft,
+			progress.Speed > 0.0 ? progress.Speed : GetAircraftFlightSpeed(pAircraft));
 
 		pAircraft->Destination = nullptr;
 		pAircraft->SetTarget(nullptr);
@@ -6612,85 +10308,218 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 		if (!IsCarrierStopped(pCarrier))
 		{
-			CancelCarrierLanding(pCarrier, pAircraft, index, pState, state, "carrier moved");
-			return;
+			// A carrier that starts moving during the short final can no
+			// longer be reached safely: climb away and try again. Once the
+			// aircraft has touched down it is carried with the deck instead,
+			// so the rollout/taxi keeps running on the moving ship.
+			if (progress.Phase == CarrierLandingPhase::FinalApproach)
+			{
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"carrier moved during final");
+				return;
+			}
+
+			if (progress.Phase != CarrierLandingPhase::TaxiToSlot
+				&& progress.Phase != CarrierLandingPhase::LandingRoll
+				&& progress.Phase != CarrierLandingPhase::Touchdown)
+			{
+				CancelCarrierLanding(pCarrier, pAircraft, index, pState, state,
+					"carrier moved");
+				return;
+			}
 		}
 
 		switch (progress.Phase)
 		{
 		case CarrierLandingPhase::Lineup:
 		{
-			// Legacy save phase. The new controller goes straight from the
-			// return flight to the descent; no separate lineup is needed.
+			// Legacy save phase. The new controller aligns in level flight
+			// before the descent point; an aircraft restored here re-enters
+			// the descent using the same glide formula as a fresh approach.
 			progress.Phase = CarrierLandingPhase::FinalApproach;
 			progress.PhaseTimer = 0;
 			progress.StuckTimer = 0;
 			progress.LastPos = pAircraft->Location;
-			progress.Speed = std::max(8.0, std::min(cruiseSpeed, 32.0));
+			progress.Speed = std::max(kLandingFinalMinSpeed, std::min(cruiseSpeed, 64.0));
 			return;
 		}
 
 		case CarrierLandingPhase::FinalApproach:
 		{
-			// Reverse of takeoff departure: fly from beyond Z back toward A
-			// while the altitude interpolates from cruise level down to the
-			// deck. It touches down exactly at A.
-			auto current = pAircraft->Location;
-			const auto start = progress.ApproachPoint;
-			const auto end = progress.TouchdownPoint;
-			const double total = std::max(1.0, HorizontalDistance(start, end));
-			const double speed = std::max(1.0,
-				progress.Speed > 0.0 ? progress.Speed : cruiseSpeed);
-
-			MoveCarrierDirect(pAircraft, current, end, speed, turnStep);
-
-			const double remainingAfter = HorizontalDistance(current, end);
-			const double ratio = std::clamp(remainingAfter / total, 0.0, 1.0);
-			const int cruiseZ = progress.CruiseZ;
-			current.Z = end.Z + static_cast<int>(std::lround(
-				static_cast<double>(cruiseZ - end.Z) * ratio));
-
-			const auto runwayDir = DirStruct(progress.RunwayFacingRaw);
-			TurnAircraftToward(pAircraft, runwayDir, turnStep);
-			const int alignDiff = std::abs(static_cast<short>(
-				runwayDir.Raw - pAircraft->PrimaryFacing.Current().Raw));
-
-			pAircraft->SetLocation(current);
-			pAircraft->InAir = true;
-			UpdateCarrierFlightLevel(pAircraft, current);
-
-			if (alignDiff <= 512
-				&& (remainingAfter <= std::max(16.0, speed) || current.Z <= end.Z + 8))
+			if (progress.TouchdownPoint == CoordStruct::Empty
+				|| progress.ApproachPoint == CoordStruct::Empty)
 			{
-				pAircraft->SetLocation(end);
-				pAircraft->InAir = false;
-				UpdateCarrierFlightLevel(pAircraft, end);
-				progress.Phase = CarrierLandingPhase::Touchdown;
-				progress.PhaseTimer = 0;
-				progress.StuckTimer = 0;
-				progress.LastPos = end;
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"final approach geometry missing");
 				return;
 			}
 
-			if (UpdateLandingWatchdog(progress, current, 360))
+			auto current = pAircraft->Location;
+			const auto touchdown = progress.TouchdownPoint;
+			const auto rollEnd = progress.RollEndPoint;
+			const double approachLen = std::max(1.0,
+				HorizontalDistance(progress.ApproachPoint, touchdown));
+
+			// Runway axis and progress along the exact centreline.
+			const auto runwayDir = GetRunwayDirection(touchdown, rollEnd);
+			const double rad = static_cast<double>(runwayDir.Raw) * (kPi * 2.0 / 65536.0);
+			const double dirX = std::sin(rad);
+			const double dirY = -std::cos(rad);
+			double along =
+				(static_cast<double>(current.X - progress.ApproachPoint.X) * dirX)
+				+ (static_cast<double>(current.Y - progress.ApproachPoint.Y) * dirY);
+			along = std::clamp(along, 0.0, approachLen);
+
+			// Never jump vertically. The engine's idle/altitude helpers can
+			// reset the aircraft's raw Z for one frame while the deck lock is
+			// active, so use the last commanded position as the reference
+			// instead of trusting the freshly reset Location.Z.
+			int referenceZ = progress.LastPos.Z;
+
+			if (referenceZ <= touchdown.Z)
+				referenceZ = current.Z;
+
+			if (referenceZ <= touchdown.Z)
+				referenceZ = progress.CruiseZ;
+
+			const int heightLeft = std::max(1, referenceZ - touchdown.Z);
+			const double remaining = std::max(1.0, approachLen - along);
+			const double touchdownCap = GetLandingTouchdownSpeedCap(
+				touchdown, rollEnd, pTypeExt);
+
+			// Keep the arrival speed. Only the touchdown speed is limited, by
+			// what the runway can brake away, and that reduction is eased in
+			// during the descent instead of before it (which used to make the
+			// whole approach look like taxi speed).
+			double targetSpeed = std::max(kLandingFinalMinSpeed,
+				std::min(cruiseSpeed, touchdownCap));
+
+			// Safety cap for very short, very high approaches.
+			const double maxSpeedForRate = kLandingMaxDescentRate * remaining
+				/ static_cast<double>(heightLeft);
+
+			if (maxSpeedForRate < kLandingFinalMinSpeed && remaining > 256.0)
+			{
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"final approach too steep");
+				return;
+			}
+
+			targetSpeed = std::min(targetSpeed, maxSpeedForRate);
+
+			double speed = progress.Speed > 0.0 ? progress.Speed : cruiseSpeed;
+
+			// Same limited rate as the alignment segment, so the transition
+			// into the descent is seamless.
+			if (speed > targetSpeed)
+				speed = std::max(targetSpeed, speed - kLandingSpeedAccel);
+			else
+				speed = std::min(targetSpeed, speed + kLandingSpeedAccel);
+
+			speed = std::max(speed, kLandingFinalMinSpeed);
+			progress.Speed = speed;
+
+			along = std::min(approachLen, along + speed);
+
+			CoordStruct position
+			{
+				progress.ApproachPoint.X + static_cast<int>(std::lround(dirX * along)),
+				progress.ApproachPoint.Y + static_cast<int>(std::lround(dirY * along)),
+				0
+			};
+
+			// Same ratio as the horizontal step: the glide path stays straight
+			// and both reach zero at A.
+			const double descentStep = static_cast<double>(heightLeft) * speed / remaining;
+			int targetZ = referenceZ - static_cast<int>(std::lround(descentStep));
+
+			if (targetZ < touchdown.Z)
+				targetZ = touchdown.Z;
+
+			position.Z = targetZ;
+
+			// The join gate allows a few degrees of heading error; rotate the
+			// last degrees away at the aircraft's own ROT instead of snapping
+			// the nose onto the centreline in one frame.
+			TurnAircraftToward(pAircraft, runwayDir, GetCarrierTurnStep(pAircraft));
+			pAircraft->SetLocation(position);
+			pAircraft->InAir = true;
+			UpdateCarrierFlightLevel(pAircraft, position);
+
+			const bool reachedThreshold = along >= approachLen - 1.0
+				|| position.Z <= touchdown.Z + 8;
+
+			// Never drop the aircraft onto the deck from altitude: if the glide
+			// path did not converge (for example a save restored mid-descent)
+			// go around instead of teleporting down to A.
+			if (reachedThreshold && position.Z > touchdown.Z + 32)
+			{
+				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
+					"final approach high at threshold");
+				return;
+			}
+
+			if (reachedThreshold)
+			{
+				// Do not spend a separate frame in Touchdown: set every
+				// altitude flag before the final location so the body and
+				// shadow cannot pop for one frame.
+				pAircraft->InAir = false;
+				pAircraft->SetHeight(0);
+				pAircraft->SetSpeedPercentage(0.0);
+				pAircraft->SetLocation(touchdown);
+				UpdateCarrierFlightLevel(pAircraft, touchdown);
+
+				progress.Phase = CarrierLandingPhase::LandingRoll;
+				progress.PhaseTimer = 0;
+				progress.StuckTimer = 0;
+				progress.LastPos = touchdown;
+				progress.Speed = speed;
+
+				runway.Phase = CarrierRunwayPhase::LandingRoll;
+				runway.Timer = 0;
+				runway.Speed = speed;
+				runway.StartCoords = touchdown;
+				runway.EndCoords = rollEnd;
+
+				// Touchdown frees the runway immediately. The aircraft is on
+				// the deck now and keeps rolling/taxiing with its own progress
+				// data, so the next aircraft may start its approach.
+				ReleaseCarrierLandingRunway(pState, pAircraft, index, "touchdown");
+
+				Debug::CarrierLog("[AircraftCarrier] %s touchdown slot=%u runway=%d along=%.0f/%.0f z=%d speed=%.1f\n",
+					pAircraft->Type ? pAircraft->Type->ID : "?",
+					static_cast<unsigned>(index), progress.RunwayIndex,
+					along, approachLen, touchdown.Z, speed);
+				return;
+			}
+
+			if (UpdateLandingWatchdog(progress, position, 360))
+			{
 				StartLandingGoAround(pCarrier, pAircraft, index, pState, state,
 					"final approach stuck");
+				return;
+			}
 
+			progress.LastPos = position;
 			return;
 		}
 
 		case CarrierLandingPhase::Touchdown:
 		{
-			pAircraft->SetLocation(progress.TouchdownPoint);
+			// Legacy saves / restored phases. Finish the touchdown in this
+			// frame; the next update is already the landing roll.
 			pAircraft->InAir = false;
 			pAircraft->SetHeight(0);
+			pAircraft->SetSpeedPercentage(0.0);
+			pAircraft->SetLocation(progress.TouchdownPoint);
 			UpdateCarrierFlightLevel(pAircraft, progress.TouchdownPoint);
+
 			progress.Phase = CarrierLandingPhase::LandingRoll;
 			progress.PhaseTimer = 0;
 			progress.StuckTimer = 0;
 			progress.LastPos = progress.TouchdownPoint;
-			// Start the roll at the approach speed; do not accelerate at
-			// touchdown. The roll then applies negative acceleration.
+
 			if (progress.Speed <= 0.0)
 				progress.Speed = GetAircraftFlightSpeed(pAircraft);
 
@@ -6699,11 +10528,16 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			runway.Speed = progress.Speed;
 			runway.StartCoords = progress.TouchdownPoint;
 			runway.EndCoords = progress.RollEndPoint;
+
+			ReleaseCarrierLandingRunway(pState, pAircraft, index, "touchdown");
 			return;
 		}
 
 		case CarrierLandingPhase::LandingRoll:
 		{
+			// Backward compatibility: a save written before touchdown released
+			// the runway may still hold it in this phase.
+			ReleaseCarrierLandingRunway(pState, pAircraft, index, "landing roll");
 			auto current = pAircraft->Location;
 			const auto start = progress.TouchdownPoint;
 			const auto end = progress.RollEndPoint;
@@ -6735,6 +10569,10 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			pAircraft->PrimaryFacing.SetDesired(direction);
 			pAircraft->InAir = false;
 			runway.TrailEnabled = true;
+			// The engine trailer hook lives inside AircraftClass::Update,
+			// which is skipped for the manual landing controller, so emit the
+			// landing-roll trailer here as well.
+			SpawnCarrierRunwayTrail(pAircraft);
 
 			if (speed <= 0.75 || along >= stopAlong)
 			{
@@ -6746,6 +10584,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				progress.TaxiPath.clear();
 				progress.TaxiPathIndex = 0;
 				progress.TaxiTurnTimer = 0;
+				progress.TaxiTurnRaw = -1;
 				progress.TaxiSpeed = GetRunwayTaxiSpeed(pTypeExt);
 				return;
 			}
@@ -6767,6 +10606,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				progress.TaxiPath.clear();
 				progress.TaxiPathIndex = 0;
 				progress.TaxiTurnTimer = 0;
+				progress.TaxiTurnRaw = -1;
 				progress.TaxiSpeed = GetRunwayTaxiSpeed(pTypeExt);
 			}
 
@@ -6775,16 +10615,19 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 
 		case CarrierLandingPhase::TaxiToSlot:
 		{
+			// Backward compatibility: a save written before touchdown released
+			// the runway may still hold it in this phase.
+			ReleaseCarrierLandingRunway(pState, pAircraft, index, "taxi to slot");
 			const auto slot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
 			auto current = pAircraft->Location;
 
-			if (progress.TaxiPath.empty())
+			if (progress.TaxiPath.empty() && progress.TaxiTurnTimer <= 0)
 			{
 				progress.TaxiPath = BuildRunwayTaxiPath(pCarrier, pState, pAircraft, slot);
 				progress.TaxiPathIndex = 0;
-				// Move continuously. The old stop-at-every-waypoint turn made
-				// the landing taxi feel much slower than the takeoff taxi.
-				progress.TaxiTurnTimer = 0;
+				progress.TaxiTurnRaw = -1;
+				// Keep the slightly higher landing taxi speed; the in-place
+				// turns below add the time back.
 				progress.TaxiSpeed = std::min(64.0,
 					GetRunwayTaxiSpeed(pTypeExt) * 1.5);
 
@@ -6803,12 +10646,56 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 					pAircraft->InAir = false;
 					return;
 				}
+
+				// The first segment also starts with a stop-and-turn.
+				progress.TaxiTurnTimer = 1;
+				progress.TaxiTurnRaw = -1;
 			}
 
+			// Reached the parking slot: turn in place to the parking direction
+			// before parking. The old code snapped the facing on the last taxi
+			// frame, which looked like the aircraft parked sideways.
 			if (progress.TaxiPathIndex >= progress.TaxiPath.size())
 			{
-				ParkCarrierPayloadAtSlot(pCarrier, pAircraft, index, pState,
-					pTypeExt, state, "landing taxi done");
+				if (progress.TaxiTurnTimer <= 0)
+				{
+					progress.TaxiTurnTimer = 1;
+					progress.TaxiTurnRaw = -1;
+					progress.PhaseTimer = 0;
+					progress.StuckTimer = 0;
+					progress.LastPos = current;
+				}
+
+				pAircraft->SetLocation(slot);
+				pAircraft->InAir = false;
+				UpdateCarrierFlightLevel(pAircraft, slot);
+
+				const auto slotFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
+
+				if (progress.TaxiTurnRaw < 0)
+					progress.TaxiTurnRaw = pAircraft->PrimaryFacing.Current().Raw;
+
+				const int diff = static_cast<short>(
+					slotFacing.Raw - static_cast<unsigned short>(progress.TaxiTurnRaw));
+
+				if (std::abs(diff) <= 256
+					|| UpdateLandingWatchdog(progress, current, 300))
+				{
+					SetCarrierPayloadFacing(pAircraft, slotFacing);
+					ParkCarrierPayloadAtSlot(pCarrier, pAircraft, index, pState,
+						pTypeExt, state, std::abs(diff) <= 256
+							? "landing taxi done" : "landing taxi turn timeout");
+					return;
+				}
+
+				const int step = GetCarrierTurnStep(pAircraft);
+				progress.TaxiTurnRaw = static_cast<unsigned short>(
+					static_cast<unsigned short>(progress.TaxiTurnRaw)
+					+ std::clamp(diff, -step, step));
+
+				const DirStruct accumulated(static_cast<int>(progress.TaxiTurnRaw));
+				pAircraft->PrimaryFacing.SetCurrent(accumulated);
+				pAircraft->PrimaryFacing.SetDesired(accumulated);
 				return;
 			}
 
@@ -6816,31 +10703,43 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 			const double distance = HorizontalDistance(current, target);
 			const double speed = std::max(1.0, progress.TaxiSpeed);
 
+			// Stop before each segment, rotate in place at the aircraft's own
+			// ROT, then move. Advancing an owned angle by ROT per frame keeps
+			// the native angular speed and cannot be stalled by an engine that
+			// keeps restoring a stale facing.
 			if (progress.TaxiTurnTimer > 0)
 			{
 				const auto desired = GetRunwayDirection(current, target);
-				TurnAircraftToward(pAircraft, desired, GetRunwayTurnRate(pTypeExt));
-				pAircraft->SetLocation(current);
-				pAircraft->InAir = false;
-				UpdateCarrierFlightLevel(pAircraft, current);
 
-				const int diff = std::abs(static_cast<short>(
-					desired.Raw - pAircraft->PrimaryFacing.Current().Raw));
+				if (progress.TaxiTurnRaw < 0)
+					progress.TaxiTurnRaw = pAircraft->PrimaryFacing.Current().Raw;
 
-				if (diff <= 256)
+				const int diff = static_cast<short>(
+					desired.Raw - static_cast<unsigned short>(progress.TaxiTurnRaw));
+
+				if (std::abs(diff) <= 256 || progress.TaxiTurnTimer >= 300)
 				{
 					pAircraft->PrimaryFacing.SetCurrent(desired);
 					pAircraft->PrimaryFacing.SetDesired(desired);
 					progress.TaxiTurnTimer = 0;
+					progress.TaxiTurnRaw = -1;
 				}
-
-				if (UpdateLandingWatchdog(progress, current, 300))
+				else
 				{
-					progress.TaxiPath.clear();
-					progress.TaxiPathIndex = 0;
-					progress.TaxiTurnTimer = 0;
+					const int step = GetCarrierTurnStep(pAircraft);
+					progress.TaxiTurnRaw = static_cast<unsigned short>(
+						static_cast<unsigned short>(progress.TaxiTurnRaw)
+						+ std::clamp(diff, -step, step));
+
+					const DirStruct accumulated(static_cast<int>(progress.TaxiTurnRaw));
+					pAircraft->PrimaryFacing.SetCurrent(accumulated);
+					pAircraft->PrimaryFacing.SetDesired(accumulated);
+					++progress.TaxiTurnTimer;
 				}
 
+				pAircraft->SetLocation(current);
+				pAircraft->InAir = false;
+				UpdateCarrierFlightLevel(pAircraft, current);
 				return;
 			}
 
@@ -6851,6 +10750,20 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				++progress.TaxiPathIndex;
 				progress.StuckTimer = 0;
 				progress.LastPos = target;
+				progress.TaxiTurnRaw = -1;
+
+				// Rotate in place before the next segment, or hand over to the
+				// final parking turn.
+				progress.TaxiTurnTimer =
+					progress.TaxiPathIndex < progress.TaxiPath.size() ? 1 : 0;
+
+				if (progress.TaxiPathIndex >= progress.TaxiPath.size())
+				{
+					progress.PhaseTimer = 0;
+					progress.StuckTimer = 0;
+					progress.LastPos = target;
+				}
+
 				return;
 			}
 
@@ -6862,6 +10775,7 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 				progress.TaxiPath.clear();
 				progress.TaxiPathIndex = 0;
 				progress.TaxiTurnTimer = 0;
+				progress.TaxiTurnRaw = -1;
 			}
 
 			return;
@@ -6879,9 +10793,93 @@ void Footprint::LockParkedCarrierPayload(TechnoClass* pPayload)
 		}
 	}
 
+void Footprint::HandleDyingCarrierPayload(AircraftClass* pAircraft)
+{
+	if (!pAircraft || !IsLiveAircraft(pAircraft))
+		return;
+
+	// Queue the removal once. A dying payload must not run the engine's crash
+	// state (that is the visible deck spin) and must not be deleted from its
+	// own update; ProcessPendingCarrierRemovals handles it before the next AI
+	// pass, where it can explode and UnInit safely.
+	if (!s_pendingCarrierRemovals.insert(pAircraft).second)
+		return;
+
+	// Detach the slot now. The restore timer (AircraftCarrier.Restore) then
+	// starts from the carrier AI tick, exactly like a normal lost payload.
+	if (auto const pCarrier = GetCarrierPayloadOwner(pAircraft))
+	{
+		if (auto const pState = GetState(pCarrier))
+		{
+			auto const it = std::find(pState->CarrierPayloads.begin(),
+				pState->CarrierPayloads.end(), pAircraft);
+
+			if (it != pState->CarrierPayloads.end())
+			{
+				const size_t index = static_cast<size_t>(
+					std::distance(pState->CarrierPayloads.begin(), it));
+
+				pState->CarrierPayloads[index] = nullptr;
+
+				if (index < pState->CarrierPayloadDocked.size())
+					pState->CarrierPayloadDocked[index] = 9;
+
+				if (index < pState->CarrierPayloadRestoreTimer.size())
+					pState->CarrierPayloadRestoreTimer[index] = 0;
+			}
+		}
+	}
+
+	s_carrierPayloads.erase(pAircraft);
+}
+
+void Footprint::ProcessPendingCarrierRemovals()
+{
+	if (s_pendingCarrierRemovals.empty())
+		return;
+
+	auto pending = std::move(s_pendingCarrierRemovals);
+	s_pendingCarrierRemovals.clear();
+
+	for (auto const pAircraft : pending)
+	{
+		// The pointer may have been invalidated between queueing and this
+		// global tick. Validate membership before touching any field.
+		if (!IsLiveAircraft(pAircraft))
+			continue;
+
+		// Spawn the type's death explosion immediately instead of letting the
+		// aircraft spin through a crash animation while parked on the deck.
+		auto const pType = pAircraft->GetTechnoType();
+
+		if (pType)
+		{
+			std::vector<AnimTypeClass*> explosionAnims;
+			explosionAnims.reserve(pType->Explosion.Count);
+
+			for (int i = 0; i < pType->Explosion.Count; ++i)
+			{
+				if (auto const pAnim = pType->Explosion[i])
+					explosionAnims.push_back(pAnim);
+			}
+
+			if (!explosionAnims.empty())
+				AnimExt::CreateRandomAnim(explosionAnims, pAircraft->GetCoords(), pAircraft, pAircraft->Owner);
+		}
+
+		s_carrierPayloads.erase(pAircraft);
+		pAircraft->UnInit();
+	}
+}
+
 void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 {
 	if (!pAircraft || !pAircraft->IsAlive)
+		return;
+
+	// Dying payloads are released to AircraftClass::Update so the crash,
+	// death animation and removal can complete.
+	if (pAircraft->Health <= 0)
 		return;
 
 	if (s_carrierPayloadUpdateDepth > 0)
@@ -6959,6 +10957,26 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 	// to go home, and there is no native dock to satisfy it any more.
 	unsigned char& state = pState->CarrierPayloadDocked[index];
 
+	// Undo a rejected DockRadius move order: restore the mission, destination
+	// and targets the aircraft had before the out-of-range click, so the click
+	// is simply ignored and the aircraft keeps its previous behaviour.
+	if (auto const rejectedIt = s_rejectedMove.find(pAircraft); rejectedIt != s_rejectedMove.end())
+	{
+		if (Unsorted::CurrentFrame - rejectedIt->second.Frame <= 2)
+		{
+			pAircraft->Destination = rejectedIt->second.Destination;
+			pAircraft->MegaDestination = rejectedIt->second.MegaDestination;
+			pAircraft->MegaTarget = rejectedIt->second.MegaTarget;
+			pAircraft->Target = rejectedIt->second.Target;
+			pAircraft->ArchiveTarget = rejectedIt->second.ArchiveTarget;
+			pAircraft->CurrentMission = static_cast<Mission>(rejectedIt->second.CurrentMission);
+			pAircraft->QueuedMission = static_cast<Mission>(rejectedIt->second.QueuedMission);
+			pAircraft->MissionStatus = rejectedIt->second.MissionStatus;
+		}
+
+		s_rejectedMove.erase(rejectedIt);
+	}
+
 	if (state == 2 || state == 7 || Unsorted::CurrentFrame % 30 == 0)
 		LogLandingProgress("UpdateCarrierPayload", pAircraft, pState, index);
 
@@ -6970,9 +10988,17 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 
 		if (runwayIndex >= 0)
 		{
-			RunwayStateGuard guard(pState->TakeoffRunways[runwayIndex], pState->Runway);
-			UpdateCarrierRunwayPayload(pCarrier, pAircraft, index, pState, pTypeExt, state,
-				pState->Runway);
+			{
+				RunwayStateGuard guard(pState->TakeoffRunways[runwayIndex], pState->Runway);
+				UpdateCarrierRunwayPayload(pCarrier, pAircraft, index, pState, pTypeExt, state,
+					pState->Runway);
+			}
+
+			if (Unsorted::CurrentFrame % 30 == 0)
+			{
+				LogTakeoffControlState("Takeoff", pAircraft, pState, index,
+					pState->TakeoffRunways[runwayIndex]);
+			}
 		}
 		else
 		{
@@ -6996,8 +11022,16 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 
 		if (runwayIndex >= 0)
 		{
-			RunwayStateGuard guard(pState->TakeoffRunways[runwayIndex], pState->Runway);
-			UpdateRunwayDeparture(pCarrier, pAircraft, index, pState, state);
+			{
+				RunwayStateGuard guard(pState->TakeoffRunways[runwayIndex], pState->Runway);
+				UpdateRunwayDeparture(pCarrier, pAircraft, index, pState, state);
+			}
+
+			if (Unsorted::CurrentFrame % 30 == 0)
+			{
+				LogTakeoffControlState("Departure", pAircraft, pState, index,
+					pState->TakeoffRunways[runwayIndex]);
+			}
 		}
 		else
 		{
@@ -7026,7 +11060,8 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		pAircraft->DockNowHeadingTo = nullptr;
 		pAircraft->InAir = false;
 		pAircraft->QueueMission(Mission::Sleep, true);
-		pAircraft->PrimaryFacing.SetDesired(GetCarrierSlotFacing(pCarrier, pTypeExt, index));
+		const DirStruct slotFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
+		SetCarrierPayloadFacing(pAircraft, slotFacing);
 
 		if (auto const pLoco = pAircraft->Locomotor)
 		{
@@ -7112,6 +11147,7 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 				auto const& progress = pState->CarrierPayloadLanding[index];
 
 				if (HorizontalDistance(destCoords, progress.ApproachPoint) < 512.0
+					|| HorizontalDistance(destCoords, progress.LineupPoint) < 512.0
 					|| HorizontalDistance(destCoords, progress.TouchdownPoint) < 512.0
 					|| HorizontalDistance(destCoords, progress.RollEndPoint) < 512.0)
 				{
@@ -7161,25 +11197,32 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 
 			pAircraft->InAir = false;
 			pAircraft->QueueMission(Mission::Sleep, true);
+
+			// FootClass_Update runs before this handler and drops a grounded
+			// aircraft back to the cell floor. The grace period must still pin
+			// the deck slot at the end of the frame, otherwise a freshly
+			// created/restored payload sits at the hull's waterline for the
+			// whole 60-frame grace period before snapping onto the deck.
+			const auto graceSlot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+			const int graceDx = std::abs(pAircraft->Location.X - graceSlot.X);
+			const int graceDy = std::abs(pAircraft->Location.Y - graceSlot.Y);
+			const int graceDz = std::abs(pAircraft->Location.Z - graceSlot.Z);
+
+			if (graceDx > 2 || graceDy > 2 || graceDz > 2)
+				pAircraft->SetLocation(graceSlot);
+
+			SetCarrierPayloadFacing(pAircraft, GetCarrierSlotFacing(pCarrier, pTypeExt, index));
 			return;
 		}
 
-		bool newPlayerDestination = false;
+		const unsigned char launchRequestValue =
+			index < pState->CarrierPayloadLaunchRequest.size()
+				? pState->CarrierPayloadLaunchRequest[index] : 0;
 
-		if (pAircraft->IsSelected && pAircraft->Destination)
-		{
-			const auto destCoords = pAircraft->Destination->GetCoords();
-			const auto destCell = CellClass::Coord2Cell(destCoords);
-			const auto ignored = index < pState->CarrierPayloadIgnoredDest.size()
-				? pState->CarrierPayloadIgnoredDest[index]
-				: CellStruct { -1, -1 };
-
-			newPlayerDestination = destCell != ignored
-				&& destCoords.DistanceFrom(pCarrier->GetCoords()) > 512.0;
-		}
-
-		const bool launchRequested = index < pState->CarrierPayloadLaunchRequest.size()
-			&& pState->CarrierPayloadLaunchRequest[index] != 0;
+		// 1 = one-shot request (must still be selected), 2 = queued click
+		// order that keeps waiting for a runway even after deselection.
+		const bool launchRequested = launchRequestValue != 0;
+		const bool launchQueued = launchRequestValue >= 2;
 
 		const bool aiMoveOrder = (mission == Mission::Move || mission == Mission::QMove)
 			&& pAircraft->Destination
@@ -7191,8 +11234,10 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 			&& (aiMoveOrder || aiAttackOrder);
 
 		// A request left over from the landing phase or from an engine
-		// destination must not launch an unselected parked aircraft.
-		if (launchRequested && !pAircraft->IsSelected
+		// destination must not launch an unselected parked aircraft. A queued
+		// click order is different: the player already gave it, so it keeps
+		// waiting for a runway even if the aircraft is deselected meanwhile.
+		if (launchRequested && !launchQueued && !pAircraft->IsSelected
 			&& index < pState->CarrierPayloadLaunchRequest.size())
 		{
 			pState->CarrierPayloadLaunchRequest[index] = 0;
@@ -7201,7 +11246,20 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		// Only a click-generated request on a selected aircraft launches, or
 		// an AI carrier's real Move/Attack order. Engine auto-acquire and the
 		// leftover Move must never take a parked aircraft off the deck.
-		const bool ordered = (launchRequested && pAircraft->IsSelected) || aiRunwayOrder;
+		const bool ordered = (launchRequested && (pAircraft->IsSelected || launchQueued))
+			|| aiRunwayOrder;
+
+		if (index != 0 && (launchRequested || ordered) && Unsorted::CurrentFrame % 30 == 0)
+		{
+			const auto requested = index < pState->CarrierPayloadRequestedDest.size()
+				? pState->CarrierPayloadRequestedDest[index]
+				: CellStruct { -1, -1 };
+			Debug::CarrierLog("[DiagQueue] slot=%u req=%d queued=%d sel=%d ordered=%d requestedCell=(%d,%d) mission=%d\n",
+				static_cast<unsigned>(index), launchRequested ? 1 : 0,
+				launchQueued ? 1 : 0, pAircraft->IsSelected ? 1 : 0,
+				ordered ? 1 : 0, requested.X, requested.Y,
+				static_cast<int>(mission));
+		}
 
 		// Enter is the engine's "go home" request, not a player order. Replace
 		// it (start_mission=true) so Mission_Enter stops running; there is no
@@ -7221,6 +11279,32 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		const bool canLaunch = launchRequested
 			|| aiRunwayOrder
 			|| TechnoExt::HasAnyWeaponAmmo(pAircraft);
+
+		// The launch branch below returns before the normal deck pin. A parked
+		// payload that is ordered but still waiting for a runway would then
+		// leave this frame with whatever Z/facing the engine's FootClass_Update
+		// restored (cell floor / PoseDir). Pin the deck slot here as the last
+		// write of the frame; this is what caused the one-frame twitch of the
+		// waiting aircraft at the moment a runway was freed.
+		{
+			const auto pinnedSlot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
+			const int pinDx = std::abs(pAircraft->Location.X - pinnedSlot.X);
+			const int pinDy = std::abs(pAircraft->Location.Y - pinnedSlot.Y);
+			const int pinDz = std::abs(pAircraft->Location.Z - pinnedSlot.Z);
+
+			if (pinDx > 2 || pinDy > 2 || pinDz > 2)
+				pAircraft->SetLocation(pinnedSlot);
+
+			pAircraft->InAir = false;
+
+			const auto pinnedFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
+
+			if (pAircraft->PrimaryFacing.Current() != pinnedFacing)
+				pAircraft->PrimaryFacing.SetCurrent(pinnedFacing);
+
+			if (pAircraft->PrimaryFacing.Desired() != pinnedFacing)
+				pAircraft->PrimaryFacing.SetDesired(pinnedFacing);
+		}
 
 		if (HasRunwayMode(pTypeExt, false) && ordered && canLaunch)
 		{
@@ -7271,6 +11355,16 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 				}
 
 				pState->CarrierPayloadRequestedDest[index] = CellStruct { -1, -1 };
+			}
+
+			// A player attack order captured by the parked pin: keep the
+			// target and hand the aircraft back to the engine attack mission.
+			if (launchRequestValue == 3 && pAircraft->Target)
+			{
+				auto const pAttackTarget = pAircraft->Target;
+				pAircraft->SetTarget(pAttackTarget);
+				pAircraft->SetArchiveTarget(pAttackTarget);
+				pAircraft->QueueMission(Mission::Attack, true);
 			}
 
 			pState->CarrierPayloadReloadTimer[index] = 0;
@@ -7330,28 +11424,23 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 
 		pAircraft->InAir = false;
 
-		// Snap once inside tolerance. Continuously requesting a desired facing
-		// while the engine/transform jitters by a few raw units makes parked
-		// aircraft rotate back and forth forever.
+		// Parked aircraft are locked to the deck exactly like a vanilla
+		// airfield dock: current and desired facing are both the carrier's
+		// hull facing plus AircraftDockingDirN. This also removes the startup
+		// lag where a sleeping aircraft rotated at its own ROT after the
+		// carrier's scenario facing had been applied.
 		const DirStruct facing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
-		const int facingDiff = std::abs(static_cast<short>(
-			facing.Raw - pAircraft->PrimaryFacing.Current().Raw));
 
-		if (facingDiff > 256)
-		{
-			pAircraft->PrimaryFacing.SetDesired(facing);
-		}
-		else
-		{
-			pAircraft->PrimaryFacing.SetCurrent(facing);
-			pAircraft->PrimaryFacing.SetDesired(facing);
-		}
+		SetCarrierPayloadFacing(pAircraft, facing);
 
 		return;
 	}
 
-	// Fully manual return/approach. A real player order cancels the landing
-	// and returns control immediately; the engine never drives movement here.
+	// State 2 has two different controllers:
+	// - runway mode uses the manual CarrierLandingProgress controller;
+	// - vertical-takeoff/landing has no runway progress and must fall through
+	//   to the native return block below, which flies the aircraft to a
+	//   standoff/approach point with the engine's own Move mission.
 	if (state == 2)
 	{
 		if (hasPlayerOrder())
@@ -7361,8 +11450,11 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 			return;
 		}
 
-		UpdateCarrierLandingReturn(pCarrier, pAircraft, index, pState, pTypeExt, state);
-		return;
+		if (HasRunwayMode(pTypeExt, true))
+		{
+			UpdateCarrierLandingReturn(pCarrier, pAircraft, index, pState, pTypeExt, state);
+			return;
+		}
 	}
 
 	// Returning aircraft can be recalled by the player with a new order.
@@ -7391,7 +11483,7 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 	// The carrier must be stopped before states 3/4 are allowed. State 2 uses
 	// the native Move mission so turning and speed stay vanilla. States 3/4
 	// take over manually for the short final alignment and vertical descent.
-	if (state == 2 || state == 3 || state == 4)
+	if (state == 2 || state == 3 || state == 4 || state == 5)
 	{
 		const auto slot = GetCarrierDockSlotCoords(pCarrier, pTypeExt, index);
 		const bool carrierStopped = IsCarrierStopped(pCarrier);
@@ -7416,6 +11508,12 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		// ---- state 2: native return flight to a hold cell ----------------
 		if (state == 2)
 		{
+			// Clear the transient native-return flag first. Only the standoff
+			// section below turns it back on; the orbit/manual paths must keep
+			// the engine's FootClass AI disabled.
+			if (index < pState->CarrierPayloadNativeReturn.size())
+				pState->CarrierPayloadNativeReturn[index] = 0;
+
 			// The engine owns movement, turning and speed here. Do not call
 			// SetLocation / Stop_Moving / change locomotor speeds.
 			pAircraft->DockNowHeadingTo = nullptr;
@@ -7576,6 +11674,10 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 			if (index < pState->CarrierPayloadReturnCell.size())
 				pState->CarrierPayloadReturnCell[index] = targetCell;
 
+			// The engine's native Move leg is active again this frame.
+			if (index < pState->CarrierPayloadNativeReturn.size())
+				pState->CarrierPayloadNativeReturn[index] = 1;
+
 			auto const pTargetCell = MapClass::Instance.TryGetCellAt(targetCell);
 
 			if (pTargetCell
@@ -7649,31 +11751,15 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		}
 
 		// ---- states 3/4/5: final approach and vertical descent -------------
-		// Once the final approach starts, a transient carrierStopped flicker
-		// must not send the aircraft back to the circling state. Only a real
-		// slot displacement (>512) aborts; small hull jitter is followed.
-		if (index < pState->CarrierPayloadLastCoords.size()
-			&& pState->CarrierPayloadLastCoords[index].DistanceFrom(slot) > 128.0)
-		{
-			state = 2;
-			timer = 0;
-
-			if (index < pState->CarrierPayloadLandingTimer.size())
-				pState->CarrierPayloadLandingTimer[index] = 0;
-
-			if (index < pState->CarrierPayloadReturnCell.size())
-				pState->CarrierPayloadReturnCell[index] = CellStruct { -1, -1 };
-
-			s_returnProgressRef.erase(pAircraft);
-			s_returnStuckChecks.erase(pAircraft);
-
-			Debug::CarrierLog("[AircraftCarrier] %s carrier moved, aborting final approach\n",
-				pAircraft->Type ? pAircraft->Type->ID : "?");
-
-			return;
-		}
+		// States 3/4/5 are the legacy vertical-takeoff/landing controller.
+		// They follow the current slot every frame, so carrier movement must
+		// not abort them back into the engine-flown state 2.
 
 		// ---- state 3: native Move_To final approach ------------------------
+		// The engine flies this leg. FootClass AI is left enabled for state 3
+		// by IsCarrierPayloadEngineReturning(), so Move_To actually moves the
+		// aircraft instead of freezing it. Manual control starts only at
+		// state 4 (vertical descent).
 		if (state == 3)
 		{
 			const CoordStruct target { slot.X, slot.Y, cruiseZ };
@@ -7873,6 +11959,13 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 				pAircraft->DockNowHeadingTo = nullptr;
 				pAircraft->InAir = true;
 
+				if (auto const pFly = locomotion_cast<FlyLocomotionClass*>(pAircraft->Locomotor))
+				{
+					pFly->IsLanding = false;
+					pFly->IsTakingOff = false;
+					pFly->IsElevating = false;
+				}
+
 				timer = 1;
 
 				if (index < pState->CarrierPayloadLandingTimer.size())
@@ -7972,7 +12065,24 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 			pFly->FlightLevel = current.Z
 				- MapClass::Instance.GetCellFloorHeight(current);
 
-		pAircraft->PrimaryFacing.SetDesired(GetCarrierSlotFacing(pCarrier, pTypeExt, index));
+		// The engine's AircraftClass::Update is skipped for the whole landing
+		// sequence, so FacingClass never interpolates the aircraft's actual
+		// heading and writing Current directly snapped the nose to the deck
+		// heading in one frame. Rotate at the aircraft's own ROT instead so the
+		// descent shows a real turn and still ends aligned with the hull. The
+		// visual heading is driven by both facing channels, so mirror the same
+		// step into SecondaryFacing as well.
+		const DirStruct descentFacing = GetCarrierSlotFacing(pCarrier, pTypeExt, index);
+		TurnAircraftToward(pAircraft, descentFacing, GetCarrierTurnStep(pAircraft));
+
+		const DirStruct turnedFacing = pAircraft->PrimaryFacing.Current();
+
+		if (pAircraft->SecondaryFacing.Current() != turnedFacing)
+			pAircraft->SecondaryFacing.SetCurrent(turnedFacing);
+
+		if (pAircraft->SecondaryFacing.Desired() != turnedFacing)
+			pAircraft->SecondaryFacing.SetDesired(turnedFacing);
+
 		pAircraft->SetLocation(current);
 
 		++timer;
@@ -7996,10 +12106,20 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		// The Stop hotkey puts a selected aircraft into Guard. A scripted or
 		// AI Guard must not send the aircraft home.
 		const bool stopped = mission == Mission::Guard && pAircraft->IsSelected;
+
+		// A return command captured by ShouldSuppressCarrierMission before the
+		// engine replaced the mission. Without this, a Stop/Enter order that is
+		// consumed or overwritten in the same tick never reaches the mission
+		// check above and the aircraft keeps flying.
+		auto const requestIt = s_manualReturnRequest.find(pAircraft);
+		const bool returnRequested = requestIt != s_manualReturnRequest.end()
+			&& Unsorted::CurrentFrame - requestIt->second <= 30;
+
 		const bool manualReturn = mission == Mission::Enter
 			|| mission == Mission::Return
 			|| mission == Mission::Stop
-			|| stopped;
+			|| stopped
+			|| returnRequested;
 
 		auto const suppressIt = s_returnSuppressUntil.find(pAircraft);
 		const bool suppressed = suppressIt != s_returnSuppressUntil.end()
@@ -8021,6 +12141,33 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 		if (!wantsReturn)
 			return;
 
+		const bool attached = pTypeExt->AircraftCarrier_Attached;
+
+		if (!attached)
+		{
+			// AircraftCarrier.Attached=no: the engine may send this payload to
+			// a normal building airfield. FindDock is not blocked for it, so a
+			// non-null DockNowHeadingTo means an airfield was selected; leave
+			// that landing alone. An aircraft already parked on one is left
+			// alone as well.
+			if (pAircraft->DockNowHeadingTo)
+				return;
+
+			if (TechnoExt::IsAtAirfield(pAircraft))
+				return;
+		}
+		else
+		{
+			// Attached payloads must never keep a building dock target.
+			pAircraft->DockNowHeadingTo = nullptr;
+
+			// If it already slipped onto an airfield (for example a save made
+			// before the flag was enabled), make it airborne again so the
+			// carrier return below can take it home.
+			if (TechnoExt::IsAtAirfield(pAircraft))
+				pAircraft->InAir = true;
+		}
+
 		// Never change the aircraft state from inside its own Update. Queue a
 		// deferred intent; ProcessCarrierIntents handles it before the next
 		// object AI tick.
@@ -8029,6 +12176,8 @@ void Footprint::UpdateCarrierPayload(AircraftClass* pAircraft)
 
 		Footprint::QueueCarrierLandingIntent(pAircraft, pCarrier, -1, false,
 			!manualReturn);
+
+		s_manualReturnRequest.erase(pAircraft);
 
 		// Suppress the engine's Enter/Return handling for this frame. The
 		// intent owns the transition on the next global tick.
@@ -8569,11 +12718,14 @@ void Footprint::ClearAll()
 	// process or a scenario restart must not leave entries from the previous
 	// game behind; a reused address would otherwise point at unrelated state.
 	s_pendingKills.clear();
+	s_carrierArtDiag.clear();
 	s_carrierMoveRef.clear();
 	s_carrierLastMoveFrame.clear();
 	s_carrierLastFacing.clear();
+	s_carrierDeckMotion.clear();
 	s_returnSuppressUntil.clear();
 	s_carrierReturnSpeed.clear();
+	s_landingCruiseSpeed.clear();
 	s_returnProgressRef.clear();
 	s_returnStuckChecks.clear();
 	s_carrierSinkStartFrame.clear();
@@ -8584,6 +12736,9 @@ void Footprint::ClearAll()
 	s_taxiWatch.clear();
 	s_pendingCarrierLanding.clear();
 	s_landingRunwayExplicit.clear();
+	s_landingQueueOrder.clear();
+	s_nextLandingQueueOrder = 1;
+	s_lastCommandClickFrame = -1000000;
 	s_carrierLandingIntents.clear();
 	s_carrierLandingIntentAircraft.clear();
 	s_carrierTakeoffIntents.clear();
@@ -8764,6 +12919,30 @@ int Footprint::GetYSort(TechnoClass* pThis)
 	return base + (maxY - pState->Anchor.Y) * Unsorted::LeptonsPerCell;
 }
 
+int Footprint::GetCarrierPayloadYSort(TechnoClass* pPayload)
+{
+	if (!pPayload)
+		return 0;
+
+	const auto pCarrier = GetCarrierPayloadOwner(pPayload);
+
+	if (!pCarrier)
+		return pPayload->ObjectClass::GetYSort();
+
+	const int carrierSort = GetYSort(pCarrier);
+
+	// A payload that has left the deck is above the superstructure. Give it a
+	// sort key larger than every deck-bound payload (carrierSort + 1) so the
+	// island repaint that follows a parked aircraft can never cover a flying
+	// one. InAir can be reset for a frame by the engine/deck controller, so
+	// the real altitude over the deck is checked as well.
+	const int deckZ = GetCarrierPayloadDeckZ(pPayload);
+	const bool aboveDeck = deckZ >= 0 && pPayload->Location.Z > deckZ + 128;
+	const bool airborne = pPayload->InAir || aboveDeck;
+
+	return carrierSort + (airborne ? 0x1000 : 1);
+}
+
 void Footprint::ReconcileFacing(UnitClass* pThis)
 {
 	if (!pThis || !IsMultiCell(pThis))
@@ -8900,6 +13079,145 @@ void Footprint::ReconcileFacing(UnitClass* pThis)
 	}
 }
 
+// Read-only diagnostic for the carrier hull position jump at the turn/move
+// boundary. This never writes any unit field; it only records what the engine
+// and the custom locomotor are doing when Location changes by a large amount
+// between two logic frames.
+void Footprint::BeginCarrierArtDiag(UnitClass* pThis, const char* reason)
+{
+	if (!Debug::CarrierArtDiag || !pThis || !IsMultiCell(pThis))
+		return;
+
+	auto& diag = s_carrierArtDiag[pThis];
+	diag.FramesRemaining = std::max(diag.FramesRemaining, 360);
+
+	Debug::CarrierArtLog("[CarrierDiag] begin f=%d unit=%s reason=%s\n",
+		Unsorted::CurrentFrame,
+		pThis->GetTechnoType() ? pThis->GetTechnoType()->ID : "?",
+		reason ? reason : "?");
+
+	LogCarrierArtDiag(pThis, "Begin");
+}
+
+void Footprint::LogCarrierArtDiag(UnitClass* pThis, const char* tag)
+{
+	if (!Debug::CarrierArtDiag || !pThis)
+		return;
+
+	auto const it = s_carrierArtDiag.find(pThis);
+
+	if (it == s_carrierArtDiag.end() || it->second.FramesRemaining <= 0)
+		return;
+
+	auto const pState = GetState(pThis);
+	auto const pLoco = locomotion_cast<FootprintLocomotionClass*>(pThis->Locomotor);
+	const CoordStruct loc = pThis->Location;
+	const CellStruct mapCoords = pThis->GetMapCoords();
+	const CellStruct anchor = pState && pState->Initialized
+		? pState->Anchor
+		: CellStruct { -1, -1 };
+
+	// Do not dereference Destination here: this is a read-only diagnostic and
+	// must be safe even if the engine is in the middle of clearing it.
+	Debug::CarrierArtLog("[CarrierDiag] %s f=%d %s loc=(%d,%d,%d) map=(%d,%d) anchor=(%d,%d) bucket=%d init=%d lock=%d trans=%d face=%u/%u dest=%p\n",
+		tag ? tag : "?", Unsorted::CurrentFrame,
+		pThis->GetTechnoType() ? pThis->GetTechnoType()->ID : "?",
+		loc.X, loc.Y, loc.Z, mapCoords.X, mapCoords.Y,
+		anchor.X, anchor.Y,
+		pState ? pState->Bucket : -1,
+		pState && pState->Initialized ? 1 : 0,
+		pState && pState->Locked ? 1 : 0,
+		pState && pState->Translating ? 1 : 0,
+		static_cast<unsigned>(pThis->PrimaryFacing.Current().Raw),
+		static_cast<unsigned>(pThis->PrimaryFacing.Desired().Raw),
+		static_cast<void*>(pThis->Destination));
+
+	Debug::CarrierArtLog("[CarrierDiag]   lastMap=(%d,%d) curMap=(%d,%d) pathDir=%d,%d,%d wp=(%d,%d) wpDelta=(%d,%d)\n",
+		pThis->LastMapCoords.X, pThis->LastMapCoords.Y,
+		pThis->CurrentMapCoords.X, pThis->CurrentMapCoords.Y,
+		pThis->PathDirections[0], pThis->PathDirections[1], pThis->PathDirections[2],
+		pThis->WaypointCell.X, pThis->WaypointCell.Y,
+		pThis->WaypointNearbyAccessibleCellDelta.X,
+		pThis->WaypointNearbyAccessibleCellDelta.Y);
+
+	if (pLoco)
+	{
+		Debug::CarrierArtLog("[CarrierDiag]   loco moving=%d turning=%d path=%d/%d moveCell=(%d,%d) head=(%d,%d,%d) target=(%d,%d,%d)\n",
+			pLoco->Moving ? 1 : 0, pLoco->Turning ? 1 : 0,
+			pLoco->PathIndex, pLoco->PathLength,
+			pLoco->MoveTargetCell.X, pLoco->MoveTargetCell.Y,
+			pLoco->HeadToCoord.X, pLoco->HeadToCoord.Y, pLoco->HeadToCoord.Z,
+			pLoco->TargetCoord.X, pLoco->TargetCoord.Y, pLoco->TargetCoord.Z);
+	}
+
+	if (pState && pState->Initialized && !pState->Translating
+		&& (!pLoco || !pLoco->Turning))
+	{
+		const CoordStruct anchorCoord = CellClass::Cell2Coord(pState->Anchor, loc.Z);
+		const int dx = std::abs(loc.X - anchorCoord.X);
+		const int dy = std::abs(loc.Y - anchorCoord.Y);
+		const int dz = std::abs(loc.Z - anchorCoord.Z);
+
+		if (std::max({ dx, dy, dz }) > 32)
+		{
+			Debug::CarrierArtLog("[CarrierDiag][ANCHOR] %s f=%d unit=%s loc=(%d,%d,%d) anchorCoord=(%d,%d,%d) delta=(%d,%d,%d)\n",
+				tag ? tag : "?", Unsorted::CurrentFrame,
+				pThis->GetTechnoType() ? pThis->GetTechnoType()->ID : "?",
+				loc.X, loc.Y, loc.Z,
+				anchorCoord.X, anchorCoord.Y, anchorCoord.Z,
+				loc.X - anchorCoord.X, loc.Y - anchorCoord.Y, loc.Z - anchorCoord.Z);
+		}
+	}
+}
+
+void Footprint::UpdateCarrierArtDiag()
+{
+	if (!Debug::CarrierArtDiag)
+		return;
+
+	for (auto const pUnit : UnitClass::Array)
+	{
+		if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo || !IsMultiCell(pUnit))
+			continue;
+
+		auto& diag = s_carrierArtDiag[pUnit];
+		const CoordStruct loc = pUnit->Location;
+		const int speed = pUnit->GetTechnoType()
+			? std::max(1, pUnit->GetTechnoType()->Speed)
+			: 1;
+		const int jumpThreshold = std::max(32, speed * 2);
+
+		if (diag.HasLast)
+		{
+			const int dx = std::abs(loc.X - diag.LastLocation.X);
+			const int dy = std::abs(loc.Y - diag.LastLocation.Y);
+			const int dz = std::abs(loc.Z - diag.LastLocation.Z);
+
+			if (std::max({ dx, dy, dz }) > jumpThreshold)
+			{
+				Debug::CarrierArtLog("[CarrierDiag][JUMP] f=%d unit=%s delta=(%d,%d,%d) from=(%d,%d,%d) to=(%d,%d,%d)\n",
+					Unsorted::CurrentFrame,
+					pUnit->GetTechnoType() ? pUnit->GetTechnoType()->ID : "?",
+					loc.X - diag.LastLocation.X,
+					loc.Y - diag.LastLocation.Y,
+					loc.Z - diag.LastLocation.Z,
+					diag.LastLocation.X, diag.LastLocation.Y, diag.LastLocation.Z,
+					loc.X, loc.Y, loc.Z);
+
+				// Capture the events immediately around the jump as well.
+				diag.FramesRemaining = std::max(diag.FramesRemaining, 60);
+				LogCarrierArtDiag(pUnit, "Jump");
+			}
+		}
+
+		diag.LastLocation = loc;
+		diag.HasLast = true;
+
+		if (diag.FramesRemaining > 0)
+			--diag.FramesRemaining;
+	}
+}
+
 void Footprint::DumpCarrierState()
 {
 	Debug::Log("[CarrierDump] begin: units=%d payloadMap=%d\n",
@@ -8994,14 +13312,27 @@ void Footprint::OnPointerInvalidated(void* ptr)
 
 	s_returnSuppressUntil.erase(static_cast<TechnoClass*>(ptr));
 	s_carrierReturnSpeed.erase(static_cast<AircraftClass*>(ptr));
+	s_landingCruiseSpeed.erase(static_cast<AircraftClass*>(ptr));
 	s_returnProgressRef.erase(static_cast<AircraftClass*>(ptr));
 	s_returnStuckChecks.erase(static_cast<AircraftClass*>(ptr));
 	s_pendingKills.erase(static_cast<AircraftClass*>(ptr));
+	s_pendingCarrierRemovals.erase(static_cast<AircraftClass*>(ptr));
+	s_manualReturnRequest.erase(static_cast<AircraftClass*>(ptr));
+	s_rejectedMove.erase(static_cast<AircraftClass*>(ptr));
+
+	for (auto it = s_forcedParkedTargets.begin(); it != s_forcedParkedTargets.end(); )
+	{
+		if (it->first == ptr || it->second == ptr)
+			it = s_forcedParkedTargets.erase(it);
+		else
+			++it;
+	}
 	s_landingRunwayIndex.erase(static_cast<AircraftClass*>(ptr));
 	s_landingWatch.erase(static_cast<AircraftClass*>(ptr));
 	s_taxiWatch.erase(static_cast<AircraftClass*>(ptr));
 	s_pendingCarrierLanding.erase(static_cast<AircraftClass*>(ptr));
 	s_landingRunwayExplicit.erase(static_cast<AircraftClass*>(ptr));
+	s_landingQueueOrder.erase(static_cast<AircraftClass*>(ptr));
 	s_carrierLandingIntentAircraft.erase(static_cast<AircraftClass*>(ptr));
 	s_carrierTakeoffIntentAircraft.erase(static_cast<AircraftClass*>(ptr));
 
@@ -9029,6 +13360,7 @@ void Footprint::OnPointerInvalidated(void* ptr)
 	s_carrierMoveRef.erase(static_cast<UnitClass*>(ptr));
 	s_carrierLastMoveFrame.erase(static_cast<UnitClass*>(ptr));
 	s_carrierLastFacing.erase(static_cast<UnitClass*>(ptr));
+	s_carrierDeckMotion.erase(static_cast<UnitClass*>(ptr));
 	s_carrierSinkStartFrame.erase(static_cast<UnitClass*>(ptr));
 	s_carrierSinkAccum.erase(static_cast<UnitClass*>(ptr));
 	s_runwayLoggedCarriers.erase(static_cast<UnitClass*>(ptr));
@@ -9199,9 +13531,11 @@ void Footprint::OnUnitDestroyed(UnitClass* pThis)
 	if (!pThis)
 		return;
 
+	s_carrierArtDiag.erase(pThis);
 	s_carrierMoveRef.erase(pThis);
 	s_carrierLastMoveFrame.erase(pThis);
 	s_carrierLastFacing.erase(pThis);
+	s_carrierDeckMotion.erase(pThis);
 
 	auto const pState = GetState(pThis);
 

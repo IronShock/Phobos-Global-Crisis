@@ -18,6 +18,7 @@
 #include <Utilities/Macro.h>
 #include <Utilities/EnumFunctions.h>
 #include <Utilities/GeneralUtils.h>
+#include <Utilities/Debug.h>
 
 #include <algorithm>
 #include <cmath>
@@ -574,16 +575,16 @@ namespace
 		return hash;
 	}
 
-	BuildRangeData BuildBuildRangeData(BuildingClass* pBuilding, BuildRangeStatic& staticOut)
+	BuildRangeData BuildBuildRangeData(
+		BuildingTypeClass* pType,
+		HouseClass* pOwner,
+		BuildRangeStatic& staticOut)
 	{
 		BuildRangeData result;
 		staticOut = BuildRangeStatic {};
 
-		if (!pBuilding || !pBuilding->Type || !DisplayClass::Instance.CurrentFoundation_Data)
+		if (!pType || !DisplayClass::Instance.CurrentFoundation_Data)
 			return result;
-
-		auto const pType = pBuilding->Type;
-		auto const pOwner = pBuilding->Owner;
 
 		if (!pOwner || pType->Adjacent < 0)
 			return result;
@@ -616,38 +617,70 @@ namespace
 		int maxX = std::numeric_limits<int>::min();
 		int maxY = std::numeric_limits<int>::min();
 
-		for (auto const pAnchor : BuildingClass::Array)
+		auto accumulateAnchorBounds = [&](bool strict)
 		{
-			if (!pAnchor || !pAnchor->IsAlive || pAnchor->InLimbo
-				|| !pAnchor->Type || !pAnchor->Owner || !pAnchor->Type->BaseNormal
-				|| !pOwner->IsAlliedWith(pAnchor->Owner))
+			for (auto const pAnchor : BuildingClass::Array)
 			{
-				continue;
+				if (!pAnchor || !pAnchor->Type)
+					continue;
+
+				if (strict)
+				{
+					if (!pAnchor->IsAlive || pAnchor->InLimbo || !pAnchor->Owner
+						|| !pAnchor->Type->BaseNormal
+						|| !pOwner->IsAlliedWith(pAnchor->Owner))
+					{
+						continue;
+					}
+				}
+				else if (!pAnchor->Owner
+					|| (pAnchor->Owner != pOwner && !pOwner->IsAlliedWith(pAnchor->Owner)))
+				{
+					continue;
+				}
+
+				const CellStruct anchor = pAnchor->GetMapCoords();
+				const int anchorWidth = std::max(1, static_cast<int>(pAnchor->Type->GetFoundationWidth()));
+				const int anchorHeight = std::max(1, static_cast<int>(pAnchor->Type->GetFoundationHeight(false)));
+				const int margin = adjacent + foundationWidth + foundationHeight
+					+ anchorWidth + anchorHeight + 2;
+
+				minX = std::min(minX, static_cast<int>(anchor.X) - margin);
+				minY = std::min(minY, static_cast<int>(anchor.Y) - margin);
+				maxX = std::max(maxX, static_cast<int>(anchor.X) + anchorWidth + margin);
+				maxY = std::max(maxY, static_cast<int>(anchor.Y) + anchorHeight + margin);
 			}
+		};
 
-			const CellStruct anchor = pAnchor->GetMapCoords();
-			const int anchorWidth = std::max(1, static_cast<int>(pAnchor->Type->GetFoundationWidth()));
-			const int anchorHeight = std::max(1, static_cast<int>(pAnchor->Type->GetFoundationHeight(false)));
-			const int margin = adjacent + foundationWidth + foundationHeight
-				+ anchorWidth + anchorHeight + 2;
+		accumulateAnchorBounds(true);
 
-			minX = std::min(minX, static_cast<int>(anchor.X) - margin);
-			minY = std::min(minY, static_cast<int>(anchor.Y) - margin);
-			maxX = std::max(maxX, static_cast<int>(anchor.X) + anchorWidth + margin);
-			maxY = std::max(maxY, static_cast<int>(anchor.Y) + anchorHeight + margin);
-		}
+		// The proximity check below is the authority on which cells belong to
+		// the range. If no strict base structure was found (for example because
+		// a mod flags its conyard as BaseNormal=no), widen the scan so the
+		// overlay can still be drawn; cells outside the real range stay empty.
+		if (minX > maxX || minY > maxY)
+			accumulateAnchorBounds(false);
 
 		if (minX > maxX || minY > maxY)
 			return result;
 
+		// MapRect is not always the plain map rectangle in large-map setups
+		// (MapSizeExt et al). Only clamp when it actually overlaps the range
+		// computed from the base; otherwise a bogus/offset rect collapses the
+		// whole grid to a single column.
 		const auto& mapRect = MapClass::Instance.MapRect;
 		const int mapMaxX = mapRect.X + mapRect.Width - 1;
 		const int mapMaxY = mapRect.Y + mapRect.Height - 1;
 
-		minX = std::clamp(minX, static_cast<int>(mapRect.X), mapMaxX);
-		minY = std::clamp(minY, static_cast<int>(mapRect.Y), mapMaxY);
-		maxX = std::clamp(maxX, static_cast<int>(mapRect.X), mapMaxX);
-		maxY = std::clamp(maxY, static_cast<int>(mapRect.Y), mapMaxY);
+		if (mapRect.Width > 0 && mapRect.Height > 0
+			&& mapRect.X <= maxX && mapMaxX >= minX
+			&& mapRect.Y <= maxY && mapMaxY >= minY)
+		{
+			minX = std::clamp(minX, static_cast<int>(mapRect.X), mapMaxX);
+			minY = std::clamp(minY, static_cast<int>(mapRect.Y), mapMaxY);
+			maxX = std::clamp(maxX, static_cast<int>(mapRect.X), mapMaxX);
+			maxY = std::clamp(maxY, static_cast<int>(mapRect.Y), mapMaxY);
+		}
 
 		result.MinX = minX;
 		result.MinY = minY;
@@ -1243,18 +1276,17 @@ namespace
 	}
 
 	bool RefreshBuildRangeData(
-		BuildingClass* pBuilding,
+		BuildingTypeClass* pType,
+		HouseClass* pOwner,
 		BuildRangeStatic& rangeStatic,
 		BuildRangeData& rangeData)
 	{
-		if (!pBuilding || !pBuilding->Type || !pBuilding->Owner
+		if (!pType || !pOwner
 			|| rangeStatic.Width <= 0 || rangeStatic.Height <= 0)
 		{
 			return false;
 		}
 
-		auto const pType = pBuilding->Type;
-		auto const pOwner = pBuilding->Owner;
 		const size_t cellCount = static_cast<size_t>(rangeStatic.Width)
 			* static_cast<size_t>(rangeStatic.Height);
 
@@ -1459,72 +1491,6 @@ namespace
 		return true;
 	}
 
-	struct BuildRangeMapClip
-	{
-		int MinX;
-		int MinY;
-		int MaxX;
-		int MaxY;
-	};
-
-	static BuildRangeMapClip GetBuildRangeMapClip()
-	{
-		const auto& map = MapClass::Instance.MapRect;
-		return {
-			static_cast<int>(map.X),
-			static_cast<int>(map.Y),
-			static_cast<int>(map.X) + static_cast<int>(map.Width),
-			static_cast<int>(map.Y) + static_cast<int>(map.Height)
-		};
-	}
-
-	static bool ClipBuildRangeEdgeToMap(BuildRangeEdge& edge)
-	{
-		const auto clip = GetBuildRangeMapClip();
-
-		if (edge.A.Y == edge.B.Y)
-		{
-			if (edge.A.Y < clip.MinY || edge.A.Y > clip.MaxY)
-				return false;
-
-			const int x0 = std::clamp(
-				std::min(static_cast<int>(edge.A.X), static_cast<int>(edge.B.X)),
-				clip.MinX, clip.MaxX);
-			const int x1 = std::clamp(
-				std::max(static_cast<int>(edge.A.X), static_cast<int>(edge.B.X)),
-				clip.MinX, clip.MaxX);
-
-			if (x0 == x1)
-				return false;
-
-			edge.A.X = static_cast<short>(x0);
-			edge.B.X = static_cast<short>(x1);
-			return true;
-		}
-
-		if (edge.A.X == edge.B.X)
-		{
-			if (edge.A.X < clip.MinX || edge.A.X > clip.MaxX)
-				return false;
-
-			const int y0 = std::clamp(
-				std::min(static_cast<int>(edge.A.Y), static_cast<int>(edge.B.Y)),
-				clip.MinY, clip.MaxY);
-			const int y1 = std::clamp(
-				std::max(static_cast<int>(edge.A.Y), static_cast<int>(edge.B.Y)),
-				clip.MinY, clip.MaxY);
-
-			if (y0 == y1)
-				return false;
-
-			edge.A.Y = static_cast<short>(y0);
-			edge.B.Y = static_cast<short>(y1);
-			return true;
-		}
-
-		return false;
-	}
-
 	CoordStruct CellCornerToWorld(const CellStruct& corner, int z)
 	{
 		return CoordStruct {
@@ -1626,20 +1592,14 @@ namespace
 
 	static bool ProjectBuildRangeCell(int x, int y, Point2D (&points)[4])
 	{
-		const auto clip = GetBuildRangeMapClip();
-		const int x0 = std::max(x, clip.MinX);
-		const int x1 = std::min(x + 1, clip.MaxX);
-		const int y0 = std::max(y, clip.MinY);
-		const int y1 = std::min(y + 1, clip.MaxY);
-
-		if (x0 >= x1 || y0 >= y1)
-			return false;
-
+		// The cells come from the range grid and are already validated against
+		// the map, so no MapRect-based clipping here (MapRect can be remapped
+		// by large-map extensions and would otherwise discard every cell).
 		const CellStruct corners[4] = {
-			{ static_cast<short>(x0), static_cast<short>(y0) },
-			{ static_cast<short>(x1), static_cast<short>(y0) },
-			{ static_cast<short>(x1), static_cast<short>(y1) },
-			{ static_cast<short>(x0), static_cast<short>(y1) }
+			{ static_cast<short>(x), static_cast<short>(y) },
+			{ static_cast<short>(x + 1), static_cast<short>(y) },
+			{ static_cast<short>(x + 1), static_cast<short>(y + 1) },
+			{ static_cast<short>(x), static_cast<short>(y + 1) }
 		};
 
 		for (int i = 0; i < 4; ++i)
@@ -1663,6 +1623,18 @@ namespace
 		default:
 			return ColorStruct { 0, 0, 0 };
 		}
+	}
+
+	static bool ShouldLogBuildRangeDiag()
+	{
+		static unsigned int lastFrame = 0;
+		const unsigned int frame = Unsorted::CurrentFrame;
+
+		if (frame - lastFrame < 120)
+			return false;
+
+		lastFrame = frame;
+		return true;
 	}
 
 	void DrawBuildRangeFill(const BuildRangeData& data)
@@ -1905,7 +1877,16 @@ namespace
 		CachedBuildRangeFill.Revision = CachedBuildRangeRevision;
 
 		if (CachedBuildRangeFill.Rects.empty())
+		{
+			if (ShouldLogBuildRangeDiag())
+			{
+				Debug::Log("[BuildRange] fill skipped: no rects (surface=%p clip=%dx%d mask=%dx%d)\n",
+					pSurface, clip.Width, clip.Height,
+					CachedBuildRangeFill.MaskWidth, CachedBuildRangeFill.MaskHeight);
+			}
+
 			return;
+		}
 
 		const ColorStruct colors[4] = {
 			ColorStruct { 0, 0, 0 },
@@ -1915,18 +1896,31 @@ namespace
 		};
 
 		if (!pSurface->CanLock())
+		{
+			if (ShouldLogBuildRangeDiag())
+				Debug::Log("[BuildRange] fill skipped: surface %p cannot be locked\n", pSurface);
+
 			return;
+		}
 
 		BYTE* const base = static_cast<BYTE*>(pSurface->Lock(0, 0));
 
 		if (!base)
+		{
+			if (ShouldLogBuildRangeDiag())
+				Debug::Log("[BuildRange] fill skipped: Lock(%p) returned null\n", pSurface);
+
 			return;
+		}
 
 		const int pitch = pSurface->GetPitch();
 		const int bpp = pSurface->GetBytesPerPixel();
 
 		if (bpp != 2 && bpp != 4)
 		{
+			if (ShouldLogBuildRangeDiag())
+				Debug::Log("[BuildRange] fill skipped: unsupported bpp=%d\n", bpp);
+
 			pSurface->Unlock();
 			return;
 		}
@@ -1943,19 +1937,33 @@ namespace
 			for (int type = 1; type < 4; ++type)
 			{
 				const auto& color = colors[type];
+				const int srcR = (static_cast<int>(color.R) * 31 + 127) / 255;
+				const int srcG = (static_cast<int>(color.G) * 63 + 127) / 255;
+				const int srcB = (static_cast<int>(color.B) * 31 + 127) / 255;
+
+				// Blend in the destination's own 5/6/5 channel space. Rounding
+				// (instead of truncating after an 8-bit round trip) keeps the
+				// rendered colour faithful, and nudging by one step when the
+				// rounded result equals the source keeps low opacities visible
+				// instead of silently doing nothing.
+				auto blend = [opacity, inverseOpacity](int src, int dst)
+				{
+					const int out = (src * opacity + dst * inverseOpacity + 50) / 100;
+
+					if (opacity > 0 && src != dst && out == dst)
+						return dst + (src > dst ? 1 : -1);
+
+					return out;
+				};
 
 				for (int value = 0; value < 65536; ++value)
 				{
-					const int dr = ((value >> 11) & 0x1F) * 255 / 31;
-					const int dg = ((value >> 5) & 0x3F) * 255 / 63;
-					const int db = (value & 0x1F) * 255 / 31;
-
-					const int r = (static_cast<int>(color.R) * opacity + dr * inverseOpacity) / 100;
-					const int g = (static_cast<int>(color.G) * opacity + dg * inverseOpacity) / 100;
-					const int b = (static_cast<int>(color.B) * opacity + db * inverseOpacity) / 100;
+					const int r = blend(srcR, (value >> 11) & 0x1F);
+					const int g = blend(srcG, (value >> 5) & 0x3F);
+					const int b = blend(srcB, value & 0x1F);
 
 					CachedBuildRangeLut.Lut[type][value] = static_cast<WORD>(
-						((r * 31 / 255) << 11) | ((g * 63 / 255) << 5) | (b * 31 / 255));
+						(r << 11) | (g << 5) | b);
 				}
 
 				CachedBuildRangeLut.Colors[type] = color;
@@ -2033,10 +2041,9 @@ namespace
 
 			for (auto const& edge : data.Edges)
 			{
+				// Edges are generated from the green cells in the range grid and
+				// are already inside the map; no MapRect-based clip here.
 				BuildRangeEdge clipped = edge;
-
-				if (!ClipBuildRangeEdgeToMap(clipped))
-					continue;
 
 				const CoordStruct worldA = CellCornerToWorld(clipped.A, clipped.Z);
 				const CoordStruct worldB = CellCornerToWorld(clipped.B, clipped.Z);
@@ -2074,18 +2081,37 @@ namespace
 
 	void DrawBuildRange()
 	{
-		auto const pBuilding = specific_cast<BuildingClass*>(DisplayClass::Instance.CurrentBuilding);
+		auto const pDisplay = &DisplayClass::Instance;
+		auto const pBuilding = specific_cast<BuildingClass*>(pDisplay->CurrentBuilding);
 
-		if (!pBuilding || !pBuilding->Type || !pBuilding->Owner
-			|| !DisplayClass::Instance.CurrentFoundation_Data)
-		{
+		// The engine draws its placement grid from CurrentBuildingType and
+		// CurrentBuildingOwnerArrayIndex alone. The preview BuildingClass is
+		// optional in some mods, so mirror the engine's state instead of
+		// requiring the preview object here.
+		auto const pType = pBuilding && pBuilding->Type
+			? pBuilding->Type
+			: specific_cast<BuildingTypeClass*>(pDisplay->CurrentBuildingType);
+
+		if (!pType || !pDisplay->CurrentFoundation_Data)
 			return;
+
+		HouseClass* pOwner = pBuilding ? pBuilding->Owner : nullptr;
+
+		if (!pOwner)
+		{
+			const int ownerIndex = pDisplay->CurrentBuildingOwnerArrayIndex;
+
+			if (ownerIndex >= 0 && ownerIndex < HouseClass::Array.Count)
+				pOwner = HouseClass::Array.GetItem(ownerIndex);
 		}
 
-		auto const pType = pBuilding->Type;
-		auto const pOwner = pBuilding->Owner;
+		if (!pOwner)
+			return;
+
 		const unsigned int frame = Unsorted::CurrentFrame;
 		const auto pRules = RulesExt::Global();
+		const int fillOpacity = std::clamp(static_cast<int>(pRules->BuildRange_FillOpacity), 0, 100);
+		const ColorStruct legalColor = pRules->BuildRange_LegalColor;
 		const unsigned int refreshFrames = static_cast<unsigned int>(
 			std::clamp(static_cast<int>(pRules->BuildRange_RefreshFrames), 1, 60));
 		const std::uint64_t foundationHash = HashBuildRangeFoundation(
@@ -2115,7 +2141,7 @@ namespace
 
 			if (!rebuildStatic
 				&& RefreshBuildRangeData(
-					pBuilding, CachedBuildRangeStatic, CachedBuildRangeData))
+					pType, pOwner, CachedBuildRangeStatic, CachedBuildRangeData))
 			{
 				++CachedBuildRangeRevision;
 			}
@@ -2126,7 +2152,7 @@ namespace
 		if (rebuildStatic)
 		{
 			BuildRangeData newData = BuildBuildRangeData(
-				pBuilding, CachedBuildRangeStatic);
+				pType, pOwner, CachedBuildRangeStatic);
 			CachedBuildRangeData = std::move(newData);
 			CachedBuildRangeType = pType;
 			CachedBuildRangeOwner = pOwner;
@@ -2139,6 +2165,47 @@ namespace
 			CachedBuildRangeOutline.Valid = false;
 			++CachedBuildRangeRevision;
 			++CachedBuildRangeEdgeRevision;
+
+			// Diagnostic: emitted when the range is (re)built, throttled so an
+			// empty result cannot flood the log. If the overlay still does not
+			// show, this line tells whether the preview object was missing or
+			// whether the generated range contained no cells.
+			static unsigned int lastDiagFrame = 0;
+
+			if (frame - lastDiagFrame >= 120)
+			{
+				lastDiagFrame = frame;
+
+				int legal = 0;
+				int blocked = 0;
+				int occupied = 0;
+
+				for (auto const cell : CachedBuildRangeData.Cells)
+				{
+					switch (cell)
+					{
+					case BuildRangeCellType::Legal: ++legal; break;
+					case BuildRangeCellType::Blocked: ++blocked; break;
+					case BuildRangeCellType::Occupied: ++occupied; break;
+					default: break;
+					}
+				}
+
+				Debug::Log("[BuildRange] type=%s preview=%p owner=%p idx=%d temp=%p view=%d,%d,%dx%d maprect=%d,%d,%dx%d range=%dx%d cells=%d legal=%d blocked=%d occupied=%d edges=%d fill=%d opacity=%d color=%d,%d,%d\n",
+					pType->ID,
+					pBuilding, CachedBuildRangeOwner, pDisplay->CurrentBuildingOwnerArrayIndex,
+					static_cast<void*>(DSurface::Temp),
+					DSurface::ViewBounds.X, DSurface::ViewBounds.Y,
+					DSurface::ViewBounds.Width, DSurface::ViewBounds.Height,
+					MapClass::Instance.MapRect.X, MapClass::Instance.MapRect.Y,
+					MapClass::Instance.MapRect.Width, MapClass::Instance.MapRect.Height,
+					CachedBuildRangeData.Width, CachedBuildRangeData.Height,
+					static_cast<int>(CachedBuildRangeData.Cells.size()),
+					legal, blocked, occupied,
+					static_cast<int>(CachedBuildRangeData.Edges.size()),
+					static_cast<int>(pRules->BuildRange_Fill),
+					fillOpacity, legalColor.R, legalColor.G, legalColor.B);
+			}
 		}
 
 		DrawBuildRangeFill(CachedBuildRangeData);

@@ -4,12 +4,127 @@
 #include <Ext/Rules/Body.h>
 #include <Ext/Building/Body.h>
 #include <InputManagerClass.h>
+#include <Ext/Unit/Footprint.h>
 #include <Utilities/Debug.h>
 #include <Utilities/CrashTrace.h>
 #include <Utilities/PointerSanity.h>
 #include <Phobos.h>
 #include <Unsorted.h>
 #include <algorithm>  // std::find
+#include <cstdarg>
+#include <cstdio>
+
+// Temporary file diagnostics for carrier targeting. Game::Log is a no-op stub
+// in this gamemd build, so write the very small set of carrier-target events to
+// a plain file next to the executable.
+static void CarrierTargetDiag(const char* pFormat, ...)
+{
+	FILE* pFile = nullptr;
+
+	if (fopen_s(&pFile, "CarrierDiag.log", "a") != 0 || !pFile)
+		return;
+
+	va_list args;
+	va_start(args, pFormat);
+	vfprintf(pFile, pFormat, args);
+	va_end(args);
+	fclose(pFile);
+}
+
+// A carrier payload parked on the deck is a normal AircraftClass, but it must
+// behave like a ground target for weapons and cursor actions. ObjectClass::
+// IsInAir is already overridden for this case; these helpers cover the
+// weapon/cursor layers that also test the target's abstract type.
+static bool IsParkedCarrierPayloadTarget(ObjectClass* pObj)
+{
+	if (!pObj || pObj->WhatAmI() != AbstractType::Aircraft)
+		return false;
+
+	return Footprint::IsCarrierPayloadParked(static_cast<TechnoClass*>(pObj));
+}
+
+static bool IsHostileParkedCarrierPayloadTarget(TechnoClass* pThis, ObjectClass* pObj)
+{
+	if (!pThis || !pThis->Owner || !IsParkedCarrierPayloadTarget(pObj))
+		return false;
+
+	auto const pTarget = static_cast<TechnoClass*>(pObj);
+	return pTarget->Owner && !pThis->Owner->IsAlliedWith(pTarget->Owner);
+}
+
+static bool CanForceParkedCarrierPayloadTarget(TechnoClass* pThis, ObjectClass* pObj)
+{
+	if (!pThis || !pObj || !IsParkedCarrierPayloadTarget(pObj))
+		return false;
+
+	// Only a player-issued attack order against this exact parked aircraft may
+	// bypass the engine's weapon/target checks. Forcing the error to OK for
+	// every hostile parked payload made AI and auto-acquired units retry a
+	// forbidden shot every frame, which drained the Ammo pool of any unit that
+	// uses one (on both sides).
+	if (!pThis->Owner || !HouseClass::CurrentPlayer
+		|| pThis->Owner != HouseClass::CurrentPlayer)
+	{
+		return false;
+	}
+
+	// Normal click and Ctrl force-attack are recorded at click time. This is the
+	// only path that may bypass the engine checks; AI and auto-acquired targets
+	// are never recorded.
+	return Footprint::IsForcedParkedPayloadTarget(pThis, pObj);
+}
+
+// The engine's target-type check runs before its ammo, range and rate-of-fire
+// gates. Replacing ILLEGAL/CANT with OK therefore bypassed all of them, and
+// keeping ILLEGAL when the shot was not ready made the attack mission drop its
+// target. Translate the result into the real blocking reason instead.
+static FireError ResolveParkedTargetFireError(TechnoClass* pThis, ObjectClass* pObj,
+	int nWeaponIndex, bool ignoreRange, FireError result)
+{
+	if (result != FireError::ILLEGAL && result != FireError::CANT)
+		return result;
+
+	if (!CanForceParkedCarrierPayloadTarget(pThis, pObj))
+		return result;
+
+	// Vanilla NoAmmoWeapon: when the unit Ammo is empty, the configured backup
+	// weapon must still fire. CanFireWeaponSlot uses the unit Ammo for weapons
+	// without a per-weapon pool, so without this exception the secondary of a
+	// unit like the Ranger could never fire after the primary was spent.
+	auto const pExt = TechnoExt::ExtMap.Find(pThis);
+	const bool hasPool = pExt && nWeaponIndex >= 0
+		&& nWeaponIndex < TechnoTypeClass::MaxWeapons
+		&& pExt->WeaponAmmo[nWeaponIndex].HasPool;
+
+	if (!TechnoExt::CanFireWeaponSlot(pThis, nWeaponIndex, true)
+		&& (hasPool || !TechnoExt::CanFireNoAmmoWeapon(pThis, nWeaponIndex)))
+	{
+		return FireError::AMMO;
+	}
+
+	if (!ignoreRange && !pThis->IsCloseEnough(pObj, nWeaponIndex))
+		return FireError::RANGE;
+
+	if (pThis->RearmTimer.InProgress())
+		return FireError::REARM;
+
+	return FireError::OK;
+}
+
+static bool IsAircraftCarrierTarget(ObjectClass* pObj)
+{
+	if (!pObj)
+		return false;
+
+	if (IsParkedCarrierPayloadTarget(pObj))
+		return true;
+
+	if (pObj->WhatAmI() != AbstractType::Unit)
+		return false;
+
+	auto const pUnit = static_cast<UnitClass*>(pObj);
+	return pUnit->GetTechnoType() && TechnoTypeExt::IsAircraftCarrier(pUnit->GetTechnoType());
+}
 
 // Per-weapon ammo: a slot with its own pool cannot fire when the pool is empty,
 // and the vanilla Ammo check must not block it while the unit Ammo field is full
@@ -739,8 +854,16 @@ FireError __fastcall UnitClass__GetFireError_Wrapper(UnitClass* pThis, void* _, 
 		static_cast<uint32_t>(result));
 	AresScheme::Suffix();
 
+	auto effectiveResult = result;
+
+	// Parked carrier aircraft are ground targets, but the engine checks the
+	// target type before ammo/range/ROF. For a player-ordered parked payload
+	// attack, resolve that rejection into the real blocking error so the
+	// attack mission keeps the target instead of dropping it.
+	effectiveResult = ResolveParkedTargetFireError(pThis, pObj, nWeaponIndex, ignoreRange, effectiveResult);
+
 	// === Target Filter System ===
-	if (result == FireError::OK)
+	if (effectiveResult == FireError::OK)
 	{
 		if (auto const pExt = TechnoExt::ExtMap.Find(pThis))
 		{
@@ -759,7 +882,7 @@ FireError __fastcall UnitClass__GetFireError_Wrapper(UnitClass* pThis, void* _, 
 	}
 	// === End Target Filter ===
 
-	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, effectiveResult);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7F6030, UnitClass__GetFireError_Wrapper)
 
@@ -780,8 +903,25 @@ FireError __fastcall InfantryClass__GetFireError_Wrapper(InfantryClass* pThis, v
 		static_cast<uint32_t>(result));
 	AresScheme::Suffix();
 
+	if (IsAircraftCarrierTarget(pObj))
+	{
+		CarrierTargetDiag("[GetFireError] infantry=%s target=%s result=%d parked=%d dist=%.1f\n",
+			pThis->Type ? pThis->Type->ID : "?",
+			pObj && pObj->WhatAmI() == AbstractType::Aircraft
+				? static_cast<TechnoClass*>(pObj)->GetTechnoType()->ID
+				: (pObj && pObj->WhatAmI() == AbstractType::Unit
+					? static_cast<TechnoClass*>(pObj)->GetTechnoType()->ID : "?"),
+			static_cast<int>(result),
+			IsParkedCarrierPayloadTarget(pObj) ? 1 : 0,
+			pObj ? pThis->DistanceFrom(pObj) : -1.0);
+	}
+
+	auto effectiveResult = result;
+
+	effectiveResult = ResolveParkedTargetFireError(pThis, pObj, nWeaponIndex, ignoreRange, effectiveResult);
+
 	// === Target Filter System ===
-	if (result == FireError::OK)
+	if (effectiveResult == FireError::OK)
 	{
 		if (auto const pExt = TechnoExt::ExtMap.Find(pThis))
 		{
@@ -800,7 +940,7 @@ FireError __fastcall InfantryClass__GetFireError_Wrapper(InfantryClass* pThis, v
 	}
 	// === End Target Filter ===
 
-	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, effectiveResult);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7EB418, InfantryClass__GetFireError_Wrapper)
 
@@ -822,6 +962,17 @@ Action __fastcall UnitClass__WhatAction_Wrapper(UnitClass* pThis, void* _, Objec
 	AresScheme::Prefix(pThis, pObj, -1, false);
 	auto result = pThis->UnitClass::MouseOverObject(pObj, ignoreForce);
 	AresScheme::Suffix();
+
+	// Parked carrier aircraft are ground targets; show the Attack cursor for
+	// ground units even though the target's abstract type is Aircraft.
+	if (IsParkedCarrierPayloadTarget(pObj)
+		&& (GetAsyncKeyState(VK_CONTROL) & 0x8000))
+	{
+		return Action::Attack;
+	}
+
+	if (IsHostileParkedCarrierPayloadTarget(pThis, pObj))
+		return Action::Attack;
 
 	// UrbanCombat: a defender-side unit may order an attack on a contested
 	// building, so show the Attack cursor (left-click = attack in this mod).
@@ -869,6 +1020,30 @@ Action __fastcall InfantryClass__WhatAction_Wrapper(InfantryClass* pThis, void* 
 	AresScheme::Prefix(pThis, pObj, -1, pThis->Type->Engineer);
 	auto const result = pThis->InfantryClass::MouseOverObject(pObj, ignoreForce);
 	AresScheme::Suffix();
+
+	if (IsAircraftCarrierTarget(pObj))
+	{
+		CarrierTargetDiag("[WhatAction] infantry=%s target=%s result=%d parked=%d dist=%.1f\n",
+			pThis->Type ? pThis->Type->ID : "?",
+			pObj && pObj->WhatAmI() == AbstractType::Aircraft
+				? static_cast<TechnoClass*>(pObj)->GetTechnoType()->ID
+				: (pObj && pObj->WhatAmI() == AbstractType::Unit
+					? static_cast<TechnoClass*>(pObj)->GetTechnoType()->ID : "?"),
+			static_cast<int>(result),
+			IsParkedCarrierPayloadTarget(pObj) ? 1 : 0,
+			pObj ? pThis->DistanceFrom(pObj) : -1.0);
+	}
+
+	// Parked carrier aircraft are ground targets; show the Attack cursor for
+	// infantry even though the target's abstract type is Aircraft.
+	if (IsParkedCarrierPayloadTarget(pObj)
+		&& (GetAsyncKeyState(VK_CONTROL) & 0x8000))
+	{
+		return Action::Attack;
+	}
+
+	if (IsHostileParkedCarrierPayloadTarget(pThis, pObj))
+		return Action::Attack;
 
 	// UrbanCombat infantry use the vanilla "Capture" cursor/action on garrisoned
 	// enemy buildings; the actual indoor battle is started from Mission_Capture
@@ -944,7 +1119,11 @@ FireError __fastcall BuildingClass__GetFireError_Wrapper(BuildingClass* pThis, v
 	FireErrorSanity::Record(CrashTrace::FireErrorAfterEngine, pThis, pObj, nWeaponIndex,
 		static_cast<uint32_t>(result));
 
-	if (result == FireError::OK)
+	auto effectiveResult = result;
+
+	effectiveResult = ResolveParkedTargetFireError(pThis, pObj, nWeaponIndex, ignoreRange, effectiveResult);
+
+	if (effectiveResult == FireError::OK)
 	{
 		if (auto const pExt = TechnoExt::ExtMap.Find(pThis))
 		{
@@ -962,7 +1141,7 @@ FireError __fastcall BuildingClass__GetFireError_Wrapper(BuildingClass* pThis, v
 		}
 	}
 
-	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, effectiveResult);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7E427C, BuildingClass__GetFireError_Wrapper)
 
@@ -977,6 +1156,16 @@ Action __fastcall BuildingClass__WhatAction_Wrapper(BuildingClass* pThis, void* 
 		return Action::None;
 
 	auto const result = GetOriginalBuildingMouseOverObject()(pThis, nullptr, pObj, ignoreForce);
+
+	// Parked carrier aircraft are ground targets; base defenses may attack them.
+	if (IsParkedCarrierPayloadTarget(pObj)
+		&& (GetAsyncKeyState(VK_CONTROL) & 0x8000))
+	{
+		return Action::Attack;
+	}
+
+	if (IsHostileParkedCarrierPayloadTarget(pThis, pObj))
+		return Action::Attack;
 
 	// UrbanCombat: while an indoor battle is running the occupants must not be
 	// released (D-key deploy/eject) - neither attackers nor defenders. Block the
@@ -1006,7 +1195,15 @@ FireError __fastcall AircraftClass__GetFireError_Wrapper(AircraftClass* pThis, v
 	FireErrorSanity::Record(CrashTrace::FireErrorAfterEngine, pThis, pObj, nWeaponIndex,
 		static_cast<uint32_t>(result));
 
-	if (result == FireError::OK)
+	auto effectiveResult = result;
+
+	// A player force-attack (Ctrl) on a friendly parked payload must work for a
+	// carrier payload just like for a normal unit. The resolver only allows the
+	// explicitly assigned player target and translates the skipped ammo, range
+	// and ROF gates into the correct status.
+	effectiveResult = ResolveParkedTargetFireError(pThis, pObj, nWeaponIndex, ignoreRange, effectiveResult);
+
+	if (effectiveResult == FireError::OK)
 	{
 		if (auto const pExt = TechnoExt::ExtMap.Find(pThis))
 		{
@@ -1024,7 +1221,7 @@ FireError __fastcall AircraftClass__GetFireError_Wrapper(AircraftClass* pThis, v
 		}
 	}
 
-	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, result);
+	return ApplyWeaponAmmoFireError(pThis, nWeaponIndex, effectiveResult);
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7E2664, AircraftClass__GetFireError_Wrapper)
 
@@ -1042,6 +1239,18 @@ Action __fastcall AircraftClass__WhatAction_Wrapper(AircraftClass* pThis, void* 
 	{
 		if (pObj == pCarrier && !Footprint::IsCarrierPayloadParked(pThis))
 			return Action::Enter;
+
+		// The engine's hit test only resolves the carrier object on its anchor
+		// cell. For every other hull cell pObj is null, so the return cursor
+		// disappeared even though the click itself still worked. Test the
+		// footprint cell under the mouse as well.
+		if ((!pObj || !abstract_cast<TechnoClass*>(pObj))
+			&& pThis->IsSelected
+			&& !Footprint::IsCarrierPayloadParked(pThis)
+			&& Footprint::IsMouseOverCarrierHullCell(pCarrier))
+		{
+			return Action::Enter;
+		}
 
 		if (!pObj && result == Action::Move && Footprint::IsCarrierPayloadParked(pThis))
 			pThis->InAir = true;

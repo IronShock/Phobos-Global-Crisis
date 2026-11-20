@@ -12,6 +12,7 @@ License<License.md>
 :hidden:
 :caption: Extension Documentation
 New / Enhanced Logics<New-or-Enhanced-Logics.md>
+Build-Specific Features<Build-Specific-Features.md>
 Fixed / Improved Logics<Fixed-or-Improved-Logics.md>
 AI Scripting and Mapping<AI-Scripting-and-Mapping.md>
 User Interface<User-Interface.md>

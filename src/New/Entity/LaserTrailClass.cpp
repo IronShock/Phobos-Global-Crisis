@@ -29,6 +29,10 @@ bool LaserTrailClass::Update(CoordStruct location)
 					pType->FadeDuration.Get(64));
 
 				pLaser->Thickness = pType->Thickness;
+				// LaserDrawClass only honours Thickness when IsHouseColor is
+				// true. The trail art's dark RGB colours therefore rendered as
+				// a one-pixel line and almost disappeared; keep the original
+				// visible house-colour laser.
 				pLaser->IsHouseColor = true;
 				pLaser->IsSupported = pType->IsIntense;
 			}

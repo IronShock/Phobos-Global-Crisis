@@ -426,14 +426,42 @@ public:
 
 		Valueable<bool> AircraftCarrier;
 		Valueable<int> AircraftCarrier_NumberOfDocks;
+		// Payload aircraft may only return to their carrier (true) or may also
+		// use a normal building airfield (false).
+		Valueable<bool> AircraftCarrier_Attached { true };
+		// When true, only this carrier's own payload aircraft may land on it.
+		// When false, a free slot may be offered to a foreign aircraft.
+		Valueable<bool> AircraftCarrier_DockStricted { true };
+		// Recreate a destroyed payload aircraft after AircraftCarrier.Restore
+		// logic frames (only AircraftCarrier.Payloads types are restored).
+		Valueable<bool> AircraftCarrier_AllowRestore { true };
+		Valueable<int> AircraftCarrier_Restore { 450 };
+		// Maximum horizontal distance (in cells) that a payload may be ordered
+		// to move from its deck parking spot. 0 disables the limit.
+		Valueable<int> AircraftCarrier_DockRadius { 0 };
 		ValueableVector<AircraftTypeClass*> AircraftCarrier_Payloads;
 		ValueableVector<int> AircraftCarrier_PayloadsNum;
 		ValueableVector<CoordStruct> AircraftCarrier_DockingOffsets;
+		// Presence mask for DockingOffsetN. An explicitly configured 0,0,0
+		// must be honored instead of falling back to the built-in layout.
+		std::vector<unsigned char> AircraftCarrier_DockingOffsetsConfigured;
+		// Optional per-facing parking table. DockingOffsetN.M0..M7 gives the
+		// deck-local offset for each 45-degree facing bucket. The calibration
+		// tool writes these into CarrierDeckSlots.ini; each entry is only used
+		// when its mask bit is set, otherwise the fixed DockingOffsetN is used.
+		std::vector<std::array<CoordStruct, 8>> AircraftCarrier_DockingOffsetsByFacing;
+		std::vector<std::array<unsigned char, 8>> AircraftCarrier_DockingOffsetsByFacingMask;
+		bool AircraftCarrier_DockingOffsetsByFacingComplete = false;
+		bool AircraftCarrier_UseFacingDockingOffsets = false;
 		ValueableVector<int> AircraftCarrier_DockingDirs;
 		Valueable<AircraftCarrierTakeOffMode> AircraftCarrier_TakeOffMode { AircraftCarrierTakeOffMode::Vanilla };
 		Valueable<double> AircraftCarrier_RunwayTaxiSpeed { 6.0 };
 		Valueable<int> AircraftCarrier_RunwayTakeoffDelay { 45 };
 		Valueable<int> AircraftCarrier_RunwayApproachDistance { 4096 };
+		// Distance from the runway touchdown point A where the final descent
+		// begins. Separate from RunwayApproachDistance, which is only the
+		// alignment gate.
+		Valueable<int> AircraftCarrier_RunwayDescentDistance { 4096 };
 		Valueable<int> AircraftCarrier_RunwayTurnRate { 512 };
 		Valueable<double> AircraftCarrier_RunwayTakeoffAcceleration { 2.0 };
 		Valueable<int> AircraftCarrier_RunwayTakeoffInitialSpeed { 0 };
@@ -443,6 +471,32 @@ public:
 		std::vector<CoordStruct> AircraftCarrier_TakeoffRunwayZ;
 		std::vector<CoordStruct> AircraftCarrier_LandingRunwayA;
 		std::vector<CoordStruct> AircraftCarrier_LandingRunwayZ;
+		// Optional per-facing runway points (index = 45-degree bucket). Used
+		// when the corresponding mask bit is set; otherwise the global values
+		// above are used. Generated from the southeast art reference.
+		std::vector<std::array<CoordStruct, 8>> AircraftCarrier_TakeoffRunwayAByFacing;
+		std::vector<std::array<CoordStruct, 8>> AircraftCarrier_TakeoffRunwayZByFacing;
+		std::vector<std::array<CoordStruct, 8>> AircraftCarrier_LandingRunwayAByFacing;
+		std::vector<std::array<CoordStruct, 8>> AircraftCarrier_LandingRunwayZByFacing;
+		std::vector<std::array<unsigned char, 8>> AircraftCarrier_TakeoffRunwayByFacingMask;
+		std::vector<std::array<unsigned char, 8>> AircraftCarrier_LandingRunwayByFacingMask;
+		// Superstructure overlay image, read from the art section. The frame
+		// index is not configured: it follows the carrier's own body frame.
+		Nullable<SHPStruct*> AircraftCarrier_IslandImage;
+		bool AircraftCarrier_IslandDisabled = false;
+		// Local deck cells that taxiing aircraft may not enter. Forward is
+		// toward the bow, Lateral toward starboard; both rotate with the hull.
+		std::vector<CellStruct> AircraftCarrier_BlockedCells;
+		std::vector<CarrierBlockedArea> AircraftCarrier_BlockedAreas;
+		// Debug aid: draw the configured blocked cells over the deck.
+		bool AircraftCarrier_ShowBlockedCells = false;
+		// Debug aid: draw the real parking slot positions, their facing and the
+		// runway A/Z points over the deck. Visual only; no gameplay effect.
+		bool AircraftCarrier_ShowDeckSlots = false;
+		// Art keys are parsed at type load time. Savegames restore type ext
+		// data from the stream, so this transient flag triggers one lazy
+		// re-read from the current art INI after a load.
+		bool AircraftCarrier_ArtParsed = false;
 
 		Valueable<Leptons> Spawner_RecycleRange;
 		ValueableVector<AnimTypeClass*> Spawner_RecycleAnim;
@@ -960,6 +1014,10 @@ public:
 
 			, AircraftCarrier { false }
 			, AircraftCarrier_NumberOfDocks { 0 }
+			, AircraftCarrier_Attached { true }
+			, AircraftCarrier_DockStricted { true }
+			, AircraftCarrier_AllowRestore { true }
+			, AircraftCarrier_Restore { 450 }
 			, AircraftCarrier_Payloads { }
 			, AircraftCarrier_PayloadsNum { }
 			, AircraftCarrier_DockingOffsets { }
@@ -1129,6 +1187,9 @@ public:
 
 	// Type-level configuration survives savegame type-extension reloads.
 	static bool IsAircraftCarrier(TechnoTypeClass* pType);
+	// Reads the carrier-only art keys (IslandImage / BlockedCell / BlockedArea).
+	// Safe to call repeatedly; parses once per type / game session.
+	static void EnsureAircraftCarrierArt(TechnoTypeClass* pType);
 
 	static void ApplyTurretOffset(TechnoTypeClass* pType, Matrix3D* mtx, double factor = 1.0);
 	static TechnoTypeClass* GetTechnoType(ObjectTypeClass* pType);

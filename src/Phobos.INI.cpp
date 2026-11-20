@@ -321,6 +321,7 @@ DEFINE_HOOK(0x5FACDF, OptionsClass_LoadSettings_LoadPhobosSettings, 0x5)
 	Phobos::Config::MultiCellDisabled = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCell.Disabled", false);
 	Phobos::Config::MultiCellDisabledInMultiplayer = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "MultiCell.DisabledInMultiplayer", true);
 	Debug::VerboseCarrier = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.AircraftCarrier", false);
+	Debug::CarrierArtDiag = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.CarrierArtDiag", false);
 	Phobos::Config::DebugCarrierSelfTest = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "Debug.CarrierSelfTest", false);
 	PerfProbe::Enabled = Phobos::Config::DebugPerfProbe;
 	Phobos::Config::ToolTipBlur = CCINIClass::INI_RA2MD.ReadBool(phobosSection, "ToolTipBlur", false);

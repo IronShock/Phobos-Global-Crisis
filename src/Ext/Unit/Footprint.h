@@ -27,12 +27,28 @@ enum class FootprintTurnMode : int
 	Radius = 1
 };
 
+// How the Length x Width rectangle is turned into map cells.
+//
+// Solid   - the rectangle is rasterized continuously in cell space, so Length
+//           and Width are real cell dimensions in every facing. Diagonal
+//           facings are filled solidly and are not stretched.
+// Lattice - the legacy integer lattice: one map cell per step along the facing
+//           direction. Diagonal facings become sqrt(2) times longer and only
+//           every other cell is filled (a porous hull). Kept so a single type
+//           can reproduce the original cell set exactly.
+enum class FootprintRasterMode : int
+{
+	Solid = 0,
+	Lattice = 1
+};
+
 struct FootprintConfig
 {
 	bool Enabled = false;
 	int Length = 1;       // cells along the facing direction
 	int Width = 1;        // cells across the facing direction
 	bool Rotates = true;  // false: footprint stays axis-aligned (e.g. 3x3)
+	FootprintRasterMode Raster = FootprintRasterMode::Solid;
 	FootprintTurnMode TurnMode = FootprintTurnMode::Pivot;
 	bool TurnAssist = true;
 	bool Crush = true;
@@ -106,6 +122,21 @@ inline constexpr unsigned int CarrierRunwaySaveVersion = 2;
 // manual landing controller (runway version <= 2) remain readable.
 inline constexpr unsigned int CarrierLandingSaveMagic = 0x4C4E4431; // 'LND1'
 inline constexpr unsigned int CarrierLandingSaveVersion = 1;
+// Appended after the landing block. Stores the per-slot respawn countdown for
+// AircraftCarrier.AllowRestore. Old saves simply end before this block.
+inline constexpr unsigned int CarrierRestoreSaveMagic = 0x52535431; // 'RST1'
+inline constexpr unsigned int CarrierRestoreSaveVersion = 1;
+
+// One rectangle of local carrier deck cells that aircraft may not taxi
+// through. Forward is toward the bow, Lateral is toward starboard; both are
+// relative to the carrier's Foundation centre and rotate with the hull.
+struct CarrierBlockedArea
+{
+	int Forward = 0;
+	int Lateral = 0;
+	int Length = 0;
+	int Width = 0;
+};
 
 // A landing aircraft that has already stopped at Z and is taxiing back to its
 // slot. It no longer occupies the runway, so the next landing may start while
@@ -230,6 +261,23 @@ struct CarrierRunwayState
 	// state so a queued/active aircraft never drifts to another runway when
 	// the carrier turns.
 	int RunwayIndex = 0;
+	// Local accumulated heading for an in-place taxi turn. The engine can
+	// restore the aircraft's facing every frame while a deck-controlled
+	// payload still has a stale destination, so a turn based on
+	// PrimaryFacing.Current() would never converge. This angle is owned by the
+	// controller and is transient (not saved); -1 means "start from Current".
+	int TurnAccumRaw = -1;
+	// Transient: the final alignment at runway point A has reached the runway
+	// heading. Kept separately so a restored/override facing cannot send the
+	// aircraft back into the turn branch every frame.
+	bool AlignDone = false;
+	// Transient takeoff-taxi turn state. Every path segment starts with a
+	// stop-and-rotate, so a 180-degree parking heading can never make the
+	// aircraft translate/roll backwards while the nose still points at the
+	// old parking direction. Not saved: a restored taxi simply starts the
+	// next segment with a fresh turn.
+	int TaxiTurnTimer = 0;
+	int TaxiTurnRaw = -1;
 
 	template <typename T>
 	void SerializeBase(T& Stm)
@@ -331,6 +379,10 @@ struct CarrierLandingProgress
 	size_t TaxiPathIndex = 0;
 	double TaxiSpeed = 0.0;
 	int TaxiTurnTimer = 0;
+	// Same idea as CarrierRunwayState::TurnAccumRaw but for the landing taxi:
+	// the aircraft must stop and rotate in place before each segment, and the
+	// accumulated angle must not depend on the engine's facing value.
+	int TaxiTurnRaw = -1;
 
 	template <typename T>
 	void Serialize(T& Stm)
@@ -404,12 +456,25 @@ struct FootprintState
 	std::vector<AircraftClass*> CarrierPayloads;
 	std::vector<unsigned char> CarrierPayloadDocked;
 	std::vector<CarrierLandingProgress> CarrierPayloadLanding;
+	// Transient: 1 while a legacy (no-runway) payload in state 2 is flying the
+	// engine's native Move leg. 0 while it is orbiting or under manual control.
+	// Not serialized; rebuilt from the state machine after a load.
+	std::vector<unsigned char> CarrierPayloadNativeReturn;
 	std::vector<CoordStruct> CarrierPayloadLastCoords;
 	std::vector<int> CarrierPayloadReloadTimer;
+	// Per-slot countdown for AircraftCarrier.AllowRestore. 0 means no pending
+	// respawn; state 9 in CarrierPayloadDocked marks the slot as waiting.
+	std::vector<int> CarrierPayloadRestoreTimer;
 	// Destination the engine restored on the frame the aircraft landed; it must
 	// not be mistaken for a new player order.
 	std::vector<CellStruct> CarrierPayloadIgnoredDest;
-	// One-shot launch request captured from AircraftClass::AssignDestination.
+	// Launch request captured from AircraftClass::AssignDestination.
+	// 1 = one-shot request that still needs a selected aircraft;
+	// 2 = click-authorized queued move: it keeps waiting for a free runway
+	//     even if the aircraft is deselected, until it launches or is parked;
+	// 3 = click-authorized queued attack (same as 2, but the target must be
+	//     preserved while it waits).
+	// Old saves only contain 0/1 and stay fully compatible.
 	std::vector<unsigned char> CarrierPayloadLaunchRequest;
 	std::vector<int> CarrierPayloadLandingTimer;
 	// Cell the player actually clicked for a parked payload's move order.
@@ -419,6 +484,9 @@ struct FootprintState
 	std::vector<CellStruct> CarrierPayloadReturnCell;
 	CoordStruct CarrierLastCoords {};
 	int CarrierLastBucket = -1;
+	// Transient: SHP body frame the carrier used in its most recent draw.
+	// The island overlay reuses it so its facing always matches the hull.
+	int CarrierIslandFrame = 0;
 	// Scratch states used by the legacy single-runway code paths while a
 	// per-runway state is loaded/updated. The authoritative state lives in the
 	// arrays below; this keeps the state machine functions unchanged while
@@ -540,6 +608,17 @@ struct FootprintState
 				if (landingMagic == CarrierLandingSaveMagic && landingVersion >= 1)
 					Stm.Process(this->CarrierPayloadLanding);
 			}
+
+			// Payload respawn countdowns. Old saves end before this block.
+			if (Stm.Remaining() >= sizeof(std::uint32_t) * 2)
+			{
+				std::uint32_t restoreMagic = 0;
+				std::uint32_t restoreVersion = 0;
+				Stm.Process(restoreMagic).Process(restoreVersion);
+
+				if (restoreMagic == CarrierRestoreSaveMagic && restoreVersion >= 1)
+					Stm.Process(this->CarrierPayloadRestoreTimer);
+			}
 		}
 		else
 		{
@@ -560,6 +639,11 @@ struct FootprintState
 			std::uint32_t landingVersion = CarrierLandingSaveVersion;
 			Stm.Process(landingMagic).Process(landingVersion);
 			Stm.Process(this->CarrierPayloadLanding);
+
+			std::uint32_t restoreMagic = CarrierRestoreSaveMagic;
+			std::uint32_t restoreVersion = CarrierRestoreSaveVersion;
+			Stm.Process(restoreMagic).Process(restoreVersion);
+			Stm.Process(this->CarrierPayloadRestoreTimer);
 		}
 	}
 };
@@ -600,6 +684,13 @@ public:
 	static bool CanOccupy(UnitClass* pThis, const std::vector<CellStruct>& span, bool alt, const CellStruct& anchor, CellStruct* pBlocked = nullptr);
 	static bool IsClimbAllowed(UnitClass* pThis, const CellStruct& from, const CellStruct& to);
 	static void EnsureAircraftCarrierSpawns(UnitClass* pThis);
+	// Per-frame payload respawn tick for AircraftCarrier.AllowRestore.
+	static void UpdateCarrierRestore(UnitClass* pThis);
+	// Queue a dying parked payload for removal. The actual explosion + UnInit
+	// runs from the global logic tick, never from the aircraft's own update.
+	static void HandleDyingCarrierPayload(AircraftClass* pAircraft);
+	// Explodes and removes payloads queued by HandleDyingCarrierPayload.
+	static void ProcessPendingCarrierRemovals();
 	// Per-frame deck update for one payload aircraft: parked/rearm/launch and
 	// the custom return-to-deck landing that replaces native airport docking.
 	static void UpdateCarrierPayload(AircraftClass* pAircraft);
@@ -652,6 +743,10 @@ public:
 	static void ProcessPendingKills();
 	static UnitClass* GetCarrierPayloadOwner(TechnoClass* pPayload);
 	static bool IsCarrierPayloadParked(TechnoClass* pPayload);
+	// Player-issued attack order against a specific parked carrier payload.
+	// Only these pairs may bypass the engine's weapon/target checks.
+	static void RecordParkedPayloadAttackClick(TechnoClass* pTarget);
+	static bool IsForcedParkedPayloadTarget(TechnoClass* pAttacker, ObjectClass* pTarget);
 	// True for every payload state whose movement is owned by the deck
 	// controller (parked, returning, landing, takeoff/runway). State 0
 	// (normal airborne flight) is the only one the engine may drive.
@@ -663,6 +758,10 @@ public:
 	// update must be skipped for these states even though state 2 is not
 	// "on the runway" and does not block player orders.
 	static bool IsCarrierPayloadLandingSequence(TechnoClass* pPayload);
+	// state 2 and still flying the engine-driven long return leg to the
+	// runway approach point. FootClass::AI must run for this sub-phase so the
+	// native Move mission can actually move the aircraft.
+	static bool IsCarrierPayloadEngineReturning(TechnoClass* pPayload);
 	// state 6/7/8: runway takeoff or the final landing runway phase. The engine
 	// aircraft update is skipped and every engine command is blocked.
 	static bool IsCarrierPayloadRunwayControlled(TechnoClass* pPayload);
@@ -701,13 +800,55 @@ public:
 	static void OnPointerInvalidated(void* ptr);
 
 	static int GetYSort(TechnoClass* pThis);
+	// Draw sort key for a carrier payload. Deck-bound payloads stay one step
+	// above the hull so the island overlay can be repainted over them; airborne
+	// payloads are far above the superstructure and must always be drawn after
+	// every deck payload and island repaint.
+	static int GetCarrierPayloadYSort(TechnoClass* pPayload);
+	// Carrier superstructure overlay. The frame is captured from the carrier's
+	// own SHP draw and the overlay is painted immediately after the hull and
+	// again after every deck aircraft, so ordinary units in front stay visible.
+	static void CaptureCarrierIslandFrame(UnitClass* pThis, int frame);
+	static void DrawCarrierIslandOverlay(UnitClass* pCarrier);
+	static void DrawCarrierIslandAfterAircraft(AircraftClass* pAircraft);
+	// Debug aid: paints every configured BlockedCell / BlockedArea on top of
+	// the tactical view when the carrier's art has ShowBlockedCells=yes.
+	static void DrawCarrierBlockedCellsOverlay();
+	// Debug aid: paints the real parking slot positions, their facing and the
+	// takeoff/landing runway A/Z points when the art has ShowDeckSlots=yes.
+	static void DrawCarrierDeckSlotsOverlay();
+	// In-game visual parking-slot calibration. Select a carrier, press
+	// Ctrl+Alt+K, then click the painted parking boxes: each left click places
+	// the current slot and advances to the next, right click skips one. Values
+	// are written to CarrierDeckSlots.ini (per 45-degree facing bucket) and
+	// applied immediately.
+	static void UpdateDeckCalibration();
+	static bool HandleDeckCalibrationClick();
+	static bool IsDeckCalibrationActive();
 	static bool IsOwnCell(TechnoClass* pThis, const CellClass* pCell, bool alt);
 	// Own-cell test that also covers the footprint span directly. Some hull
 	// cells are not present in the owner grid on the frame the cursor is
 	// queried; the span is always current.
 	static bool IsCarrierHullCell(TechnoClass* pThis, const CellStruct& cell);
+	// Resolve a live multi-cell unit from any of its hull cells. Used by the
+	// single-click selection fallback and by the carrier return cursor.
+	static UnitClass* FindMultiCellOwnerAt(const CellStruct& cell);
+	// True when the current mouse position is over one of the carrier's own
+	// hull cells (not just the object's anchor cell).
+	static bool IsMouseOverCarrierHullCell(TechnoClass* pCarrier);
+	// True for a few frames after a real player command click. Used to stop
+	// engine idle/return bookkeeping from being mistaken for a player order.
+	static bool IsCommandClickRecent();
+	static void MarkCommandClick();
 	static bool HasObstacleNear(TechnoClass* pThis, int radius);
 	// Writes a full deck/footprint snapshot of every live carrier to debug.log.
 	// Bound to the "Dump Carrier State" debug command.
 	static void DumpCarrierState();
+
+	// Read-only diagnostic for the carrier hull jumping at the turn/move
+	// boundary (Debug.CarrierArtDiag). It never changes unit state; it only
+	// records engine map-coordinate fields and single-frame Location jumps.
+	static void BeginCarrierArtDiag(UnitClass* pThis, const char* reason);
+	static void LogCarrierArtDiag(UnitClass* pThis, const char* tag);
+	static void UpdateCarrierArtDiag();
 };

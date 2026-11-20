@@ -2343,6 +2343,57 @@ DEFINE_HOOK(0x4896BF, DamageArea_DamageItemsFix1, 0x6)
 	GET(const CellClass* const, pCell, EBX);
 
 	DamageAreaTemp::CheckingCell = pCell;
+
+	auto const pSource = *reinterpret_cast<TechnoClass**>(R->EBP() + 0x8);
+	auto const pSourceTarget = pSource ? pSource->Target : nullptr;
+
+	// A carrier payload parked on a deck is a real object at the deck Z, but
+	// ground weapons detonate at the cell's terrain level. Only redirect the
+	// damage when the attacker's current target is actually that payload;
+	// attacks aimed at the carrier must keep hitting the carrier.
+	if (pSourceTarget)
+	{
+		for (int pass = 0; pass < 2; ++pass)
+		{
+			ObjectClass* pCandidate = pass == 0 ? pCell->FirstObject : pCell->AltObject;
+
+			for (; pCandidate; pCandidate = pCandidate->NextObject)
+			{
+				auto const pAircraft = abstract_cast<AircraftClass*>(pCandidate);
+
+				if (!pAircraft || pAircraft != pSourceTarget
+					|| !Footprint::IsCarrierPayloadParked(pAircraft))
+				{
+					continue;
+				}
+
+				DamageAreaTemp::CheckingCellAlt = pass != 0;
+				R->ESI(pAircraft);
+				return CheckThisObject;
+			}
+		}
+
+		// The deck pin uses SetLocation, so the cell object list is not always
+		// updated. Find the intended payload by its Location cell too.
+		for (int i = 0; i < AircraftClass::Array.Count; ++i)
+		{
+			auto const pAircraft = AircraftClass::Array.GetItem(i);
+
+			if (!pAircraft || pAircraft != pSourceTarget || !pAircraft->IsAlive
+				|| !Footprint::IsCarrierPayloadParked(pAircraft))
+			{
+				continue;
+			}
+
+			if (CellClass::Coord2Cell(pAircraft->Location) != pCell->MapCoords)
+				continue;
+
+			DamageAreaTemp::CheckingCellAlt = false;
+			R->ESI(pAircraft);
+			return CheckThisObject;
+		}
+	}
+
 	auto pObject = pCell->FirstObject;
 
 	auto const tryFullFootprint = [&](ObjectClass* pCandidate) -> bool
@@ -2435,6 +2486,15 @@ DEFINE_HOOK(0x48992A, DamageArea_FootprintCellDistance, 0x6)
 {
 	auto const pObject = reinterpret_cast<TechnoClass*>(R->ESI());
 	auto const pCell = DamageAreaTemp::CheckingCell;
+
+	if (pObject && pObject->WhatAmI() == AbstractType::Aircraft
+		&& Footprint::IsCarrierPayloadParked(pObject))
+	{
+		// The payload is at the deck Z while the damage point is the cell
+		// floor; force full damage instead of a vertical-distance falloff.
+		*reinterpret_cast<int*>(R->EBX() + 4) = 0;
+		return 0;
+	}
 
 	if (pObject && pCell && Footprint::IsMultiCell(pObject)
 		&& Footprint::OwnerAt(pCell, DamageAreaTemp::CheckingCellAlt) == pObject)

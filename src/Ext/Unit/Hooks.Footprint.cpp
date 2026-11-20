@@ -6,6 +6,7 @@
 #include <ObjectClass.h>
 #include <UnitClass.h>
 #include <UnitTypeClass.h>
+#include <AircraftClass.h>
 #include <Unsorted.h>
 #include <HouseClass.h>
 #include <MapClass.h>
@@ -15,6 +16,7 @@
 #include <Locomotion/FootprintLocomotionClass.h>
 
 #include <Helpers/Macro.h>
+#include <Utilities/Debug.h>
 
 #include <Ext/Techno/Body.h>
 #include <Ext/TechnoType/Body.h>
@@ -54,7 +56,7 @@ static bool IsTacticalCommandClick()
 	static bool s_wasDown = false;
 	static bool s_dragged = false;
 	static Point2D s_press { 0, 0 };
-	static int s_window = 0;
+	static int s_cleanReleaseFrame = -1000000;
 
 	const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 
@@ -69,7 +71,7 @@ static bool IsTacticalCommandClick()
 		// (selection box / map scroll). The command is captured on release.
 		s_press = current;
 		s_dragged = false;
-		s_window = 0;
+		s_cleanReleaseFrame = -1000000;
 	}
 	else if (down)
 	{
@@ -79,23 +81,25 @@ static bool IsTacticalCommandClick()
 		if (dx > 4 || dy > 4)
 		{
 			s_dragged = true;
-			s_window = 0;
+			s_cleanReleaseFrame = -1000000;
 		}
 	}
 	else if (s_wasDown)
 	{
-		// Release of a clean click: keep the window for the few calls the
-		// engine uses to execute the command after button-up.
-		s_window = s_dragged ? 0 : 3;
-	}
-	else if (s_window > 0)
-	{
-		--s_window;
+		// Release of a clean click. Keep a frame-based window instead of a
+		// call-count window: ProcessClickCoords is not called exactly the
+		// same number of times every frame and a low frame rate could expire
+		// the old 3-call window before the engine executed the command.
+		s_cleanReleaseFrame = s_dragged ? -1000000 : Unsorted::CurrentFrame;
+
+		if (!s_dragged)
+			Footprint::MarkCommandClick();
 	}
 
 	s_wasDown = down;
 
-	return s_window > 0;
+	return s_cleanReleaseFrame >= 0
+		&& Unsorted::CurrentFrame <= s_cleanReleaseFrame + 3;
 }
 
 // DisplayClass::ProcessClickCoords applies selectability filters after the
@@ -110,7 +114,151 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 	const bool commandClick = IsTacticalCommandClick();
 
 	auto const ppTarget = reinterpret_cast<ObjectClass**>(R->EDI());
-	auto const pTarget = *ppTarget;
+	auto pTarget = *ppTarget;
+
+	// TacticalClass::SelectAt only knows the object's single selectable point
+	// (the anchor/SHP centre). A click on any other hull cell returns null and
+	// the multi-cell unit cannot be selected by a single click. Resolve the
+	// footprint owner from the click coordinate and feed it to the normal
+	// selection filter below.
+	if (!pTarget && TacticalClass::Instance)
+	{
+		Point2D clickPoint { 0, 0 };
+		bool hasClickPoint = false;
+
+		if (auto const pClick = reinterpret_cast<Point2D*>(R->EBP()))
+		{
+			clickPoint = *pClick;
+			hasClickPoint = true;
+		}
+		else if (WWMouseClass::Instance)
+		{
+			WWMouseClass::Instance->GetCoords(&clickPoint);
+			hasClickPoint = true;
+		}
+
+		if (hasClickPoint)
+		{
+			const auto world = TacticalClass::Instance->ClientToCoords(clickPoint);
+			const auto cell = CellClass::Coord2Cell(world);
+
+			if (auto const pFootprint = Footprint::FindMultiCellOwnerAt(cell))
+			{
+				*ppTarget = pFootprint;
+				R->EAX(pFootprint);
+				pTarget = pFootprint;
+
+				Debug::CarrierLog("[DiagClick] hull-cell fallback f=%d cell=(%d,%d) owner=%s\n",
+					Unsorted::CurrentFrame, cell.X, cell.Y,
+					pFootprint->GetTechnoType() ? pFootprint->GetTechnoType()->ID : "?");
+			}
+		}
+	}
+
+	// The engine may resolve a click on a carrier hull cell to the carrier
+	// itself, hiding an enemy aircraft parked on that cell. Prefer the parked
+	// payload as the target so ground units can attack it directly.
+	if (TacticalClass::Instance)
+	{
+		Point2D clickPoint { 0, 0 };
+		bool hasClickPoint = false;
+
+		if (auto const pClick = reinterpret_cast<Point2D*>(R->EBP()))
+		{
+			clickPoint = *pClick;
+			hasClickPoint = true;
+		}
+		else if (WWMouseClass::Instance)
+		{
+			WWMouseClass::Instance->GetCoords(&clickPoint);
+			hasClickPoint = true;
+		}
+
+		if (hasClickPoint)
+		{
+			bool preferPresent = !pTarget;
+
+			if (pTarget && pTarget->WhatAmI() == AbstractType::Unit)
+				preferPresent = Footprint::IsMultiCell(static_cast<UnitClass*>(pTarget));
+
+			if (preferPresent
+				&& (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0)
+			{
+				// Only override the engine's carrier target while the player is
+				// force-attacking; a normal attack must still hit the carrier.
+				const auto world = TacticalClass::Instance->ClientToCoords(clickPoint);
+				const auto cell = CellClass::Coord2Cell(world);
+
+				if (auto const pCell = MapClass::Instance.TryGetCellAt(cell))
+				{
+					bool found = false;
+
+					for (int pass = 0; pass < 2 && !found; ++pass)
+					{
+						ObjectClass* pObject = pass == 0 ? pCell->FirstObject : pCell->AltObject;
+
+						for (; pObject; pObject = pObject->NextObject)
+						{
+							auto const pAircraft = abstract_cast<AircraftClass*>(pObject);
+
+							if (!pAircraft || !Footprint::IsCarrierPayloadParked(pAircraft))
+								continue;
+
+							auto const pOwner = pAircraft->Owner;
+
+							if (!pOwner || !HouseClass::CurrentPlayer)
+								continue;
+
+							*ppTarget = pAircraft;
+							R->EAX(pAircraft);
+							pTarget = pAircraft;
+							found = true;
+
+							Debug::CarrierLog("[DiagClick] prefer parked payload %s at cell=(%d,%d)\n",
+								pAircraft->Type ? pAircraft->Type->ID : "?", cell.X, cell.Y);
+
+							break;
+						}
+					}
+
+					// The deck pin moves payloads with SetLocation, so the cell
+					// object list can be stale. Find the same parked aircraft by
+					// its current Location cell.
+					if (!found)
+					{
+						for (int i = 0; i < AircraftClass::Array.Count; ++i)
+						{
+							auto const pAircraft = AircraftClass::Array.GetItem(i);
+
+							if (!pAircraft || !pAircraft->IsAlive
+								|| !Footprint::IsCarrierPayloadParked(pAircraft))
+							{
+								continue;
+							}
+
+							if (CellClass::Coord2Cell(pAircraft->Location) != cell)
+								continue;
+
+							auto const pOwner = pAircraft->Owner;
+
+							if (!pOwner || !HouseClass::CurrentPlayer)
+								continue;
+
+							*ppTarget = pAircraft;
+							R->EAX(pAircraft);
+							pTarget = pAircraft;
+							found = true;
+
+							Debug::CarrierLog("[DiagClick] prefer parked payload %s by location at cell=(%d,%d)\n",
+								pAircraft->Type ? pAircraft->Type->ID : "?", cell.X, cell.Y);
+
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
 
 	if (commandClick && pTarget && abstract_cast<TechnoClass*>(pTarget)
 		&& !abstract_cast<AircraftClass*>(pTarget))
@@ -123,6 +271,18 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 		// null the target: the engine's normal Enter/Return mission is caught
 		// by AircraftClass_QueueMission and converted to the same intent.
 		Footprint::CaptureCarrierReturnClick(pTechnoTarget);
+	}
+
+	// A command click on a parked carrier payload is an explicit attack order.
+	// Record the player's attacker -> target pairs so only these (and not
+	// AI/auto-acquired shots) may bypass the engine's weapon checks.
+	if (commandClick && pTarget)
+	{
+		if (auto const pTechnoTarget = abstract_cast<TechnoClass*>(pTarget);
+			pTechnoTarget && Footprint::IsCarrierPayloadParked(pTechnoTarget))
+		{
+			Footprint::RecordParkedPayloadAttackClick(pTechnoTarget);
+		}
 	}
 
 	if (commandClick && !pTarget && WWMouseClass::Instance && TacticalClass::Instance)
@@ -244,6 +404,50 @@ DEFINE_HOOK(0x692522, DisplayClass_ProcessClickCoords_AcceptFootprintUnit, 0x5)
 		}
 
 		return Continue;
+	}
+
+	// UnitClass::DrawAsSHP has just finished computing the body frame in EBX.
+	// Remember it so the island overlay reuses exactly the same facing frame.
+	// ECX still holds the type pointer for the instruction we return to.
+	DEFINE_HOOK(0x73C725, UnitClass_DrawAsSHP_CaptureCarrierIslandFrame, 0x6)
+	{
+		GET(UnitClass*, pThis, EBP);
+		GET(int, frame, EBX);
+
+		Footprint::CaptureCarrierIslandFrame(pThis, frame);
+		R->ECX(pThis->GetTechnoType());
+
+		return 0;
+	}
+
+	static void __fastcall DrawCarrierIslandForUnit(UnitClass* pThis)
+	{
+		Footprint::DrawCarrierIslandOverlay(pThis);
+	}
+
+	// Shared epilogue of UnitClass::Draw_It. The original bytes restore the
+	// callee-saved registers; replicate them after painting the island so the
+	// overlay sits immediately behind the hull in the world draw order.
+	static void __declspec(naked) UnitClass_Draw_It_IslandEpilogue()
+	{
+		__asm
+		{
+			pushad
+			mov ecx, esi
+			call DrawCarrierIslandForUnit
+			popad
+			pop edi
+			pop esi
+			pop ebp
+			pop ebx
+			add esp, 0x40
+			ret 8
+		}
+	}
+
+	DEFINE_HOOK(0x73D43F, UnitClass_Draw_It_CarrierIsland, 0xA)
+	{
+		return reinterpret_cast<uintptr_t>(&UnitClass_Draw_It_IslandEpilogue);
 	}
 
 

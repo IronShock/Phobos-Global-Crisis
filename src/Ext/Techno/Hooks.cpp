@@ -87,8 +87,11 @@ DEFINE_HOOK(0x4DA54E, FootClass_AI, 0x6)
 	// locomotor's per-tick position/facing after the deck pin, which is the
 	// source of the parked/landing convulsions. Skip straight to the
 	// function epilogue; AircraftClass::Update still runs the controller.
-	if (Footprint::IsCarrierPayloadDeckControlled(pThis))
+	if (Footprint::IsCarrierPayloadDeckControlled(pThis)
+		&& !Footprint::IsCarrierPayloadEngineReturning(pThis))
+	{
 		return 0x4DAF00;
+	}
 
 	return 0;
 }
@@ -99,6 +102,7 @@ DEFINE_HOOK(0x736480, UnitClass_AI, 0x6)
 	GET(UnitClass*, pThis, ESI);
 
 	Footprint::EnsureAircraftCarrierSpawns(pThis);
+	Footprint::UpdateCarrierRestore(pThis);
 	CarrierSelfTest::Tick();
 
 	auto const pExt = TechnoExt::ExtMap.Find(pThis);

@@ -10,6 +10,7 @@ char Debug::FinalStringBuffer[0x1000];
 char Debug::DeferredStringBuffer[0x1000];
 int Debug::CurrentBufferSize = 0;
 bool Debug::VerboseCarrier = false;
+bool Debug::CarrierArtDiag = false;
 
 void Debug::Log(const char* pFormat, ...)
 {
@@ -28,6 +29,18 @@ void Debug::LogGame(const char* pFormat, ...)
 void Debug::CarrierLog(const char* pFormat, ...)
 {
 	if (!VerboseCarrier)
+		return;
+
+	va_list args;
+	va_start(args, pFormat);
+	vsprintf_s(FinalStringBuffer, pFormat, args);
+	LogGame("%s %s", "[Phobos]", FinalStringBuffer);
+	va_end(args);
+}
+
+void Debug::CarrierArtLog(const char* pFormat, ...)
+{
+	if (!CarrierArtDiag)
 		return;
 
 	va_list args;

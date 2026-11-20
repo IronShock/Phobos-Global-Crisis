@@ -58,9 +58,19 @@ public:
 	virtual ~FootprintLocomotionClass() override = default;
 
 private:
+	// The read-only carrier diagnostic lives in Footprint.cpp and needs the
+	// private path/turn fields to correlate an engine position jump with the
+	// exact locomotion state. It never mutates them.
+	friend class Footprint;
+
 	bool BeginTurn(int targetBucket, const CellStruct& anchor);
 	void FinishTurn(const CellStruct& anchor);
 	bool BeginMove(const FootprintPathStep& step, const CellStruct& anchor);
+	// Keep the engine's map-coordinate bookkeeping in sync with the custom
+	// mover when a turn ends / the next cell step starts. A stale
+	// LastMapCoords / PathDirections pair made FootClass::UpdatePosition apply
+	// its lateral correction on the first move after a turn.
+	void ResetEngineMapState(const CellStruct& anchor);
 	bool TranslateOneFrame();
 	void ClearPath();
 	void RecordFailure(const CellStruct& goal);
@@ -86,6 +96,8 @@ private:
 	bool Turning = false;
 	bool Powered = true;
 	bool UnLocked = true;
+	// Diagnostic-only: ensures one TranslateStart log per cell-to-cell step.
+	bool DiagTranslateLogged = false;
 
 	int TurnFromBucket = 0;
 	int TurnTargetBucket = 0;

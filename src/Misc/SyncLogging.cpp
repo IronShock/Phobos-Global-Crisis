@@ -572,23 +572,85 @@ DEFINE_HOOK(0x41AA80, AircraftClass_AssignDestination_SyncLog, 0x7)
 
 	Footprint::LogPayloadCommand("AssignDestination", pThis, pDest);
 
+	// Diagnostic: identify which engine routine keeps assigning a destination
+	// to an already landed carrier payload (it is what used to fight the
+	// manual taxi turn). Rate-limited to one line per payload per 30 frames.
+	if (Footprint::GetCarrierPayloadOwner(pThis)
+		&& Footprint::IsCarrierPayloadDeckControlled(pThis))
+	{
+		static TechnoClass* s_lastAircraft = nullptr;
+		static int s_lastAircraftFrame = -1;
+
+		if ((s_lastAircraft != pThis || s_lastAircraftFrame != Unsorted::CurrentFrame)
+			&& Unsorted::CurrentFrame % 30 == 0)
+		{
+			s_lastAircraft = pThis;
+			s_lastAircraftFrame = Unsorted::CurrentFrame;
+
+			const auto coords = pDest ? pDest->GetCoords() : CoordStruct::Empty;
+			Debug::CarrierLog("[DiagCaller] AssignDestination plane=%p dest=%p coords=(%d,%d) caller=0x%08X frame=%d\n",
+				static_cast<void*>(pThis), static_cast<void*>(pDest),
+				coords.X, coords.Y, callerAddress, Unsorted::CurrentFrame);
+		}
+	}
+
 	// Remember a move issued while the aircraft is still in the takeoff
 	// sequence; the command must not reach the engine yet.
 	Footprint::RememberRunwayCommandDestination(pThis, pDest);
 
-	// Runway-controlled aircraft (takeoff/landing) must not receive a live
-	// Destination: FootClass::AI can act on it before the next deck pin and
-	// the aircraft visibly slides out of the runway. Only state 2 (manual
-	// return) is allowed to take ordinary move orders so the player can
-	// cancel a return. The repeat breaker above bounds the recursion that
-	// this argument rewrite used to cause.
-	if (Footprint::IsCarrierPayloadRunwayControlled(pThis) && pDest)
-		R->Stack(0x4, 0);
+	// Do NOT rewrite the destination argument here. Zeroing it defeats the
+	// engine's own "same destination" guard and turns SetLocation ->
+	// SetDestination -> AssignDestination into an ~8500-deep mutual recursion
+	// (0xC00000FD stack overflow) whenever a runway-controlled aircraft still
+	// carries a destination after a landing.
+	//
+	// The deck controller already keeps the aircraft in place:
+	//   - LockParkedCarrierPayload clears Destination/Mega* before FootClass::AI
+	//   - the state 6 waiting branch clears it every frame
+	//   - every manual SetLocation is followed by a Destination clear and by
+	//     re-asserting the taxi/runway facing, so the engine's own-cell
+	//     destination cannot rotate the nose back to the parking direction.
+	// Only state 2 (manual return) is allowed to take ordinary move orders so
+	// the player can cancel a return.
 
 	if (!Phobos::Optimizations::DisableSyncLogging)
 		SyncLogger::AddDestinationChangeSyncLogEvent(pThis, pDest, callerAddress);
 
 	Footprint::NotifyDestinationAssigned(pThis, pDest);
+
+	return 0;
+}
+
+// Hard block for runway-controlled carrier payloads (takeoff taxi/roll, legacy
+// landing). This is placed *after* AircraftClass::AssignDestination's
+// prologue (push ebx/esi/edi; mov edi, arg; test; mov esi, this; je), so the
+// stack frame is valid and jumping to the epilogue is safe.
+//
+// Why not zero the argument at the entry hook? That defeats the engine's own
+// destination guard and produced an ~8500-deep SetDestination/AssignDestination
+// recursion (0xC00000FD). Why not skip from the entry hook? Its prologue has
+// not run yet, so the epilogue would pop the wrong registers.
+//
+// With the whole assignment skipped, the aircraft never receives a Destination
+// while the deck controller wants it still:
+//   - no engine own-cell destination -> nose cannot snap back to parking
+//   - no locomotor target -> no per-frame vertical climb/hover (altitude flicker)
+//   - no AssignDestination recursion
+// State 2 (engine return leg) is deliberately not runway-controlled and keeps
+// receiving ordinary Move orders so the player can cancel a return.
+DEFINE_HOOK(0x41AA91, AircraftClass_AssignDestination_CarrierBlock, 0x7)
+{
+	GET(AircraftClass*, pThis, ECX);
+
+	if (Footprint::GetCarrierPayloadOwner(pThis)
+		&& Footprint::IsCarrierPayloadRunwayControlled(pThis))
+	{
+		// AssignDestination's return value is not used as a success flag by
+		// the engine callers; the normal path returns whatever the forwarded
+		// call left in EAX. Null keeps Destination/pointers untouched.
+		R->EAX(0);
+		return 0x41ADB9; // pop edi; pop esi; pop ebx; ret 8
+	}
 
 	return 0;
 }

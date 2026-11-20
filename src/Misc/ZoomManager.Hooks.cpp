@@ -15,67 +15,10 @@
 #include <cstring>
 
 #include <Commands/TacticalPause.h>
+#include <Ext/Unit/Footprint.h>
 #include <Misc/TacticalMap.h>
 
 static Point2D radarCenterPixel = { 0, 0 };
-
-namespace
-{
-	// The carrier art is one SHP. The island is extracted into a separate
-	// transparent frame so it can be drawn after the deck aircraft.
-	SHPStruct* GetCarrierIslandSHP()
-	{
-		static SHPStruct* pImage = nullptr;
-		static bool tried = false;
-
-		if (!tried)
-		{
-			tried = true;
-			pImage = FileSystem::LoadSHPFile("AIRCARR_ISLAND.SHP");
-
-			if (!pImage)
-				Debug::Log("[AircraftCarrier] AIRCARR_ISLAND.SHP not found; island overlay disabled\n");
-		}
-
-		return pImage;
-	}
-
-	void DrawCarrierIslandOverlay()
-	{
-		auto const pImage = GetCarrierIslandSHP();
-
-		if (!pImage || pImage->Frames <= 12)
-			return;
-
-		for (auto const pUnit : UnitClass::Array)
-		{
-			if (!pUnit || !pUnit->IsAlive || pUnit->InLimbo
-				|| !pUnit->Type || !pUnit->Type->ID
-				|| std::strcmp(pUnit->Type->ID, "AIRCARR") != 0)
-			{
-				continue;
-			}
-
-			// AIRCARR.shp frames 0..63 currently contain the same southeast
-			// body image (frames 64..127 are its shadow). Drawing the island
-			// layer for every body frame is therefore the single-orientation
-			// test requested here. When real multi-direction body art is added,
-			// gate this on the actual frame index/facing.
-			auto const pDrawer = pUnit->GetDrawer();
-
-			if (!pDrawer)
-				continue;
-
-			const Point2D screenPoint = TacticalClass::CoordsToScreen(pUnit->GetRenderCoords());
-			Point2D drawPoint = screenPoint - TacticalClass::Instance->TacticalPos;
-			const int zAdjust = pUnit->GetZAdjustment() - 2;
-
-			DSurface::Temp->DrawSHP(pDrawer, pImage, 12, &drawPoint, &DSurface::ViewBounds,
-				BlitterFlags::Flat | BlitterFlags::Alpha | BlitterFlags::Centered,
-				0, zAdjust, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
-		}
-	}
-}
 
 // DisplayClass::ProcessClickCoords is the tactical screen's map input handler
 // (selection / orders / clicking). While TacticalPause blocks actions, skip the
@@ -309,9 +252,10 @@ DEFINE_HOOK(0x6D4B50, ZoomOut_TimerDraw_Suppress, 0x6)
 // Blit zoomed tactical map before on-screen timers (superweapon countdowns, mission timer) are rendered
 DEFINE_HOOK(0x6D4941, TacticalClass_Render_Pass2_WorldEnd, 0x6)
 {
-	// Draw the island foreground after the world objects, so deck aircraft can
-	// no longer cover the superstructure.
-	DrawCarrierIslandOverlay();
+	// Debug aid for carrier deck configuration. Draw after the world so the
+	// markers stay visible above the hull, aircraft and ordinary units.
+	Footprint::DrawCarrierBlockedCellsOverlay();
+	Footprint::DrawCarrierDeckSlotsOverlay();
 
 	// Magnify only. For zoom-out the map is presented at the end of the frame: switching the
 	// viewport / render surfaces from inside the pass corrupted engine state (crashed).

@@ -270,6 +270,11 @@ void FootprintLocomotionClass::Move_To(CoordStruct to)
 	if (this->Moving && this->TargetCoord == to)
 		return;
 
+	// Read-only diagnostic: start a short snapshot window for the art/position
+	// jump investigation. This does not alter the movement state.
+	if (this->TargetCoord != to)
+		Footprint::BeginCarrierArtDiag(pUnit, "Move_To");
+
 	const bool newTarget = this->TargetCoord != to;
 
 	if (newTarget)
@@ -418,6 +423,7 @@ void FootprintLocomotionClass::Stop_Moving()
 			pState->ReconcileTarget = -1;
 		}
 
+		Footprint::LogCarrierArtDiag(pUnit, "Stop");
 		Footprint::ReleaseReservation(pUnit);
 		Footprint::Mark(pUnit, pLinked->Location);
 	}
@@ -444,7 +450,7 @@ void FootprintLocomotionClass::Unlimbo()
 
 int FootprintLocomotionClass::Apparent_Speed()
 {
-	return this->LinkedTo ? this->LinkedTo->GetTechnoType()->Speed : 0;
+	return this->LinkedTo ? this->LinkedTo->GetCurrentSpeed() : 0;
 }
 
 void FootprintLocomotionClass::Mark_All_Occupation_Bits(MarkType mark)
@@ -496,6 +502,8 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 
 	if (!pUnit || !pState)
 		return false;
+
+	Footprint::LogCarrierArtDiag(pUnit, "TurnBegin");
 
 	if (pState->ReconcileActive)
 	{
@@ -555,6 +563,28 @@ bool FootprintLocomotionClass::BeginTurn(int targetBucket, const CellStruct& anc
 	return false;
 }
 
+// The custom mover owns the hull's position, but the engine still updates its
+// own cell bookkeeping between frames. After a move step TranslateOneFrame
+// aligns LastMapCoords/CurrentMapCoords and clears the vanilla path fields
+// before UpdatePosition(End). A turn is an extra in-place action with no such
+// cleanup, so the first move after the turn could make FootClass::UpdatePosition
+// consume the previous step's stale values and apply a one-cell lateral
+// correction. Resetting the fields at the turn boundary keeps the engine's
+// idea of the hull's cell equal to the cell the hull is actually sitting on.
+void FootprintLocomotionClass::ResetEngineMapState(const CellStruct& anchor)
+{
+	auto const pLinked = this->LinkedTo;
+
+	if (!pLinked)
+		return;
+
+	pLinked->LastMapCoords = anchor;
+	pLinked->CurrentMapCoords = anchor;
+	pLinked->PathDirections[0] = -1;
+	pLinked->WaypointCell = CellStruct { -1, -1 };
+	pLinked->WaypointNearbyAccessibleCellDelta = CellStruct { -1, -1 };
+}
+
 void FootprintLocomotionClass::FinishTurn(const CellStruct& anchor)
 {
 	auto const pLinked = this->LinkedTo;
@@ -568,6 +598,8 @@ void FootprintLocomotionClass::FinishTurn(const CellStruct& anchor)
 	auto const pUnit = abstract_cast<UnitClass*>(pLinked);
 	auto const pState = Footprint::GetState(pUnit);
 
+	Footprint::LogCarrierArtDiag(pUnit, "TurnEndBeforeCommit");
+
 	if (pUnit && pState)
 	{
 		const auto span = Footprint::GetSpan(pUnit, anchor, this->TurnTargetBucket);
@@ -575,6 +607,14 @@ void FootprintLocomotionClass::FinishTurn(const CellStruct& anchor)
 		Footprint::ReleaseReservation(pUnit);
 		pState->Locked = false;
 	}
+
+	Footprint::LogCarrierArtDiag(pUnit, "TurnEnd");
+
+	// The hull is still exactly on the turn cell centre here. Align the
+	// engine's map bookkeeping to that cell before the next BeginMove so the
+	// first step cannot inherit the previous step's stale lateral correction.
+	this->ResetEngineMapState(anchor);
+	Footprint::LogCarrierArtDiag(pUnit, "TurnEndClean");
 
 	this->Turning = false;
 	++this->PathIndex;
@@ -596,6 +636,8 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 
 	if (!pUnit || !pState)
 		return false;
+
+	Footprint::LogCarrierArtDiag(pUnit, "MoveBeginBeforeCommit");
 
 	const int bucket = pState->Initialized ? pState->Bucket : Footprint::BucketFromFacing(pLinked->PrimaryFacing.Current());
 	const CellStruct next = step.Cell;
@@ -657,9 +699,18 @@ bool FootprintLocomotionClass::BeginMove(const FootprintPathStep& step, const Ce
 		? (pState->Alt ? pNextCell->GetCoordsWithBridge().Z : pNextCell->GetCoords().Z)
 		: pLinked->Location.Z;
 
+	// Safety net for the turn-end path: the hull is still at the anchor cell
+	// centre when the first cell step starts. Keep the engine's map fields at
+	// that cell until TranslateOneFrame commits the destination at the end of
+	// the step.
+	this->ResetEngineMapState(anchor);
+
 	this->MoveTargetCell = next;
 	this->HeadToCoord = CellClass::Cell2Coord(next, nextZ);
+	this->DiagTranslateLogged = false;
 	pLinked->SetSpeedPercentage(1.0);
+
+	Footprint::LogCarrierArtDiag(pUnit, "MoveBegin");
 
 	return true;
 }
@@ -677,10 +728,16 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 	if (!pUnit || !pState)
 		return false;
 
+	if (!this->DiagTranslateLogged)
+	{
+		Footprint::LogCarrierArtDiag(pUnit, "TranslateStart");
+		this->DiagTranslateLogged = true;
+	}
+
 	const CellStruct oldAnchor = pState->Anchor;
 	pState->Translating = true;
 
-	const int speed = std::max(1, pLinked->GetTechnoType()->Speed);
+	const int speed = std::max(1, pLinked->GetCurrentSpeed());
 	const CoordStruct current = pLinked->Location;
 	CoordStruct delta
 	{
@@ -753,6 +810,8 @@ bool FootprintLocomotionClass::TranslateOneFrame()
 		this->HeadToCoord = CoordStruct::Empty;
 		this->PathIndex++;
 		pState->Translating = false;
+
+		Footprint::LogCarrierArtDiag(pUnit, "TranslateEnd");
 	}
 
 	return true;

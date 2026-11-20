@@ -155,6 +155,54 @@ FormationSpacingInfants=-1   ; leptons, default FormationSpacing / 2 (min 64)
 
 ---
 
+### Multi-cell unit footprint
+
+VehicleTypes can occupy more than one map cell. `Foundation=LengthxWidth`
+(enables, up to 15 per side) or `Foundation.Length` / `Foundation.Width`
+(separate override, up to 64 per side and 4096 cells) define the hull. The
+occupied cells rotate with the body facing and use the engine's own cell
+occupation, so passability, pathfinding, building placement and collisions keep
+working. Hull cells are tracked per cell, which is what makes `PerCellDamage`
+and hull-wide crushing possible.
+
+`Foundation.Raster=solid|lattice` (default `solid`) selects the cell
+rasterization:
+
+- `solid` treats `Length`/`Width` as real cell dimensions in every facing,
+  fills diagonal hulls solidly and matches the area reserved while turning.
+- `lattice` is the legacy integer lattice: diagonal facings become `sqrt(2)`
+  (~41%) longer and only every other cell is filled (a porous hull). Kept so a
+  single type can reproduce the original cells.
+
+Other keys: `Foundation.Rotates` (default yes), `Foundation.Pivot=center`
+(default, optional), `Foundation.PivotForward/PivotLateral`,
+`Foundation.MaxClimb` (default 1), `Foundation.PerCellDamage`,
+`Foundation.HitAllCells`, `Foundation.Crush`. `Foundation.TurnMode` is fixed to
+`pivot`, and `Foundation.FireArc` / `Foundation.TurnAssist` are accepted but
+currently have no effect. Footprint settings are configuration only and are not
+stored in savegames; every hull is rebuilt from the current rules on load.
+
+Debug aid: `RA2MD.ini [Phobos] Debug.FootprintOverlay=true` outlines the
+occupied hull/barrier/reservation cells of selected multi-cell units on the
+tactical map. It is independent of the MOEE master switch and is off unless
+explicitly enabled (default `false`).
+
+Pivot turn speed is the unit's `ROT` (raw facing units per frame); lower `ROT`
+in the rules section to slow a hull that pivots too fast. `Foundation.TurnMode`
+is forced to `pivot`, and `Foundation.TurnAssist` / `Foundation.FireArc` have
+no effect. Movement uses `GetCurrentSpeed()`, so `SpeedPercentage`, terrain and
+speed-type modifiers apply as for any normal unit. A carrier payload parked on
+a deck is treated as a ground target and can be attacked by ground weapons.
+
+```ini
+[SOMESHIP]
+Foundation=36x9            ; Length x Width, cells
+Foundation.Rotates=yes
+Foundation.Raster=solid    ; solid (default) or lattice
+Foundation.PerCellDamage=yes
+Foundation.HitAllCells=yes
+```
+
 ## 2. Attachment System
 
 ### Mount points
@@ -315,6 +363,18 @@ Mainstream-RTS mouse scheme (left selects, right commands).
 RightClickCommands=false
 RightClickCommands.Debug=false
 ```
+
+### Recall Carrier Aircraft / Stop hotkey
+`Recall Carrier Aircraft` sends the selected carrier payload, or every
+airborne payload of the selected carrier, back to its deck. The build also
+wraps the vanilla **Stop** command: with an airborne carrier payload selected,
+Stop queues the carriage return (`Mission::Enter`); for all other selected
+objects the original Stop behaviour is forwarded unchanged.
+
+- The command has no INI key; bind it in Options -> Keyboard.
+- The Stop wrapper is always active, so the existing Stop key works without
+  extra configuration.
+- A parked payload is already home and ignores the order.
 
 ### Cinema mode
 Hotkey that hides the message list, superweapon timers and custom sidebar widgets.
@@ -653,6 +713,24 @@ Passengers.UnloadStaggerFrames=2         ; frames between exiting passengers; 0 
 ### Per-weapon ammo pools
 Every weapon slot can have its own ammo pool instead of draining the unit's `Ammo`. `Ammo=0` is unlimited, an unset weapon `Ammo` falls back to the unit `Ammo`, and per-slot overrides (`Weapon0.Ammo.*`, `Weapon1.Ammo.*`, ...) take priority. Elite weapons share their slot pool. Pools reload independently, and `Ammo.Cost` / `Ammo.PerBurst` control how a charge is paid for. Aircraft follow the same per-shot/per-burst rules, return when every slot is dry, and rearm at airfields.
 
+- `[General] AresWeaponAmmo` (default `yes`) is the master switch for
+  per-weapon pools and ExtraFire ammo. With `no`, every `Ammo.*` pool is
+  ignored and weapons fall back to the vanilla unit `Ammo`; ExtraFire entries
+  are treated as unlimited. The RotE rules use `AresWeaponAmmo=no`.
+- Vanilla `NoAmmoWeapon` still applies when the unit Ammo is spent: the
+  configured backup weapon may fire even at unit `Ammo=0` (for example the
+  Ranger fires its tracer primary first and then its damaging secondary).
+  Per-weapon pools above are independent of `NoAmmoWeapon`.
+- Player-ordered attacks against a parked carrier payload still respect range,
+  rate of fire and ammo, including the `NoAmmoWeapon` switch. The forced-attack
+  exception does not let a unit fire out of range, bypass reload, or skip the
+  unit Ammo/secondary weapon rules.
+
+```ini
+[General]
+AresWeaponAmmo=no                    ; boolean - master switch for per-weapon pools
+```
+
 ```ini
 [SOMEWEAPON]                         ; WeaponType
 Ammo=6
@@ -671,7 +749,7 @@ Weapon0.Ammo.Reload.Empty=180
 Weapon0.Ammo.Reload.Amount=1
 Weapon0.Ammo.Cost=1
 Weapon0.Ammo.PerBurst=no
-Weapon0.```
+```
 
 ### Secondary pip scale
 Second pip row; `PipScale` accepts a comma list (primary,secondary).
@@ -683,6 +761,31 @@ PipScale2=            ; None | Ammo | Tiberium | Passengers | Power | MindContro
 PassengersPipSize=
 PassengersPipOffset=10,0
 ```
+
+### GiftBox (dummy-unit spawn)
+
+A dummy unit can spawn one or more real units after a delay, then remove or destroy itself. Works on infantry, vehicles and aircraft; buildings are deliberately ignored. Config is on the **dummy** TechnoType.
+
+```ini
+[SOMEDUMMY]
+GiftBox.Types=REALUNIT,REALUNIT2 ; list of TechnoType sections
+GiftBox.Nums=1,2                 ; count per entry (single value applies to all)
+GiftBox.RandomWeights=100,50     ; optional weights when RandomType=yes
+GiftBox.Chances=1.0,0.5          ; 0.0-1.0 chance per entry
+GiftBox.RandomType=no            ; yes = pick RandomWeights instead of spawning all
+GiftBox.UseChancesAndWeight=no   ; apply weight as a percent in the fixed list
+GiftBox.Remove=yes               ; remove the dummy when it opens
+GiftBox.Destroy=no               ; destroy the dummy through the death path (alias: GiftBox.Explodes)
+GiftBox.Delay=0                  ; frames before opening
+GiftBox.RandomDelay=0            ; extra random 0..N frames
+GiftBox.RandomRange=0            ; spawn scatter radius in cells (alias: GiftBox.CellRandomRange)
+GiftBox.EmptyCell=no             ; only spawn on cells without another object (alias: GiftBox.RandomToEmptyCell)
+GiftBox.InheritAmmo=no           ; copy the dummy's Ammo to spawned units
+```
+
+- The dummy is removed before the gifts are unlimbo'd, which is required for infantry boxes.
+- `GiftBox.Destroy=yes` uses the normal death path; `Remove=yes` with `Destroy=no` limboes the dummy.
+- `GiftBox.EmptyCell=yes` retries nearby cells until it finds an unoccupied one; buildings are never placed on the dummy's own cell.
 
 ### Empty image **(already documented)**
 Alternate image for empty spawners / out-of-ammo units.
@@ -760,6 +863,15 @@ BattlePointsSidebar.Label=
 BattlePointsSidebar.Label.InvertPosition=no
 ```
 
+Battle Points sidebar text position and colour are set per side:
+
+```ini
+[GDI]                 ; Side section
+Sidebar.BattlePoints.Offset=0,0   ; X,Y pixels, default 0,0
+Sidebar.BattlePoints.Color=       ; R,G,B, default unset
+Sidebar.BattlePoints.Align=left   ; left | center | right, default left
+```
+
 ### BattlePoints production **(already documented)**
 Buildings produce Battle Points over time.
 
@@ -793,6 +905,134 @@ cell.
 ```ini
 [General]
 MissileSpawnAttackCell=no
+```
+
+### Aircraft carrier deck (AIRCARR)
+
+- `IslandImage=` selects the carrier superstructure overlay SHP. The frame
+  follows the carrier's current body frame; there is no separate frame key.
+  `IslandImage=none` disables the overlay. Omitted = `AIRCARR_ISLAND.SHP`.
+- `BlockedCellN=Forward,Lateral` marks one local deck cell that taxiing
+  aircraft may not enter. `BlockedAreaN=Forward,Lateral,Length,Width` marks a
+  rectangle. Keys are 0-based and read until the first missing index.
+- Coordinates are local cells relative to the carrier's `Foundation` centre,
+  **not** world cells or pixels. `Forward` is toward the bow, `Lateral` toward
+  starboard, and the code rotates them with the hull. Only the taxi path is
+  affected; runways and vertical landing slots are untouched.
+- `ShowBlockedCells=yes` draws the configured cells over the deck for
+  in-game tuning: red = individual `BlockedCell`, yellow = `BlockedArea`.
+  It is visual only and does not change pathfinding.
+- `ShowDeckSlots=yes` draws the actual deck parking slots for calibration:
+  green cross + index = `DockingOffsetN`, dark green line = parking facing,
+  cyan = takeoff runway A/Z, magenta = landing runway A/Z, white = hull
+  anchor. Visual only and does not change any gameplay logic.
+- `AircraftCarrier.Attached=yes` (default) restricts the carrier's own
+  `AircraftCarrier.Payloads` aircraft to returning to the carrier; they cannot
+  dock at a normal building airfield. With `no`, they may use an airfield and
+  only fall back to the carrier when none is available.
+- `AircraftCarrier.DockStricted=yes` (default) allows only the carrier's own
+  payload aircraft to land on it. With `no`, a selected foreign aircraft may
+  be adopted into a genuinely free deck slot when the player orders it to the
+  carrier; slots waiting for `AircraftCarrier.AllowRestore` are never taken.
+- `AircraftCarrier.AllowRestore=yes` (default) recreates a destroyed payload
+  aircraft after `AircraftCarrier.Restore` logic frames (default `450`,
+  about 30 seconds at the standard 15 logic frames/second). Only types listed
+  in `AircraftCarrier.Payloads` are restored; a pending respawn reserves its
+  slot.
+- `AircraftCarrier.DockRadius=0` (default, disabled) limits player-issued
+  move orders for the carrier's payload aircraft to a horizontal radius around
+  their deck parking spot, measured in cells. An out-of-range click is ignored
+  without changing the aircraft's current mission or destination, so a
+  circling aircraft keeps circling instead of hovering. Parking, return and
+  attack orders are not restricted.
+- Carrier payload combat: a direct player attack click or Ctrl force attack on
+  a parked payload is registered as an explicit order and may use ground
+  weapons against it. AI units and auto-acquired targets are never forced, so
+  they cannot drain ammo on the deck every frame. Forced attacks still obey
+  range, rate of fire and ammo, including the vanilla `NoAmmoWeapon` switch.
+  Waypoint/queued attacks are not part of the click registration; use a direct
+  attack or Ctrl attack when the forced-attack exception is required.
+- Stop hotkey: for an airborne carrier payload the vanilla Stop command is
+  wrapped and issues the normal `Mission::Enter` recall (state 2 -> 3 -> 4
+  deck landing). For every other selected object the original Stop behaviour
+  is forwarded unchanged. The command is exposed as "Recall Carrier Aircraft"
+  in the hotkey list.
+- Payload/air-wing keys: `NumberOfDocks` (0 = derive from payloads),
+  `AircraftCarrier.Payloads` (list of `AircraftType` sections),
+  `AircraftCarrier.PayloadsNum` (count per entry; one value applies to all),
+  and `AircraftCarrier.TakeOff=vanilla|runway`. `Spawns`/`SpawnsNumber` are
+  cleared for carrier types and do not create engine spawns.
+- Deck geometry: `DockingOffsetN=Forward,Lateral,Z` (slot `N`),
+  `AircraftDockingDirN` / `AircraftDockingDir` (slot facing),
+  `DockingOffsetN.M0..M7` plus `UseFacingDockingOffsets=yes` (per-45-degree
+  offset table), `IslandImage` (superstructure overlay), `BlockedCellN`,
+  `BlockedAreaN`, `ShowBlockedCells`, `ShowDeckSlots`. The in-game calibration
+  tool writes `CarrierDeckSlots.ini`.
+- Runway controller keys and defaults: `AircraftCarrier.RunwayTaxiSpeed=6.0`,
+  `RunwayTakeoffDelay=45`, `RunwayApproachDistance=4096`,
+  `RunwayDescentDistance=4096`, `RunwayTurnRate=512`,
+  `AircraftCarrier.TakeoffAcceleration=2.0`, `TakeoffInitialSpeed=0`,
+  `AircraftCarrier.LandingDeceleration=2.0`,
+  `AircraftCarrier.LandingMaxOverrun=512`.
+- Deck aircraft are ordinary `AircraftClass` objects owned by the carrier's
+  house, with their own ammo/veterancy/weapons. While parked on the deck they
+  are reported as grounded, so normal ground weapons and ground auto-targeting
+  can attack them.
+- In-game slot calibration: select the carrier, press `Ctrl+Alt+K`,
+  `Ctrl+Shift+K` or the middle mouse button. Left-click the painted parking
+  boxes to place the current target (it stays selected so it can be refined);
+  right-click advances to the next target. `F2`/`Insert`/`Enter` starts
+  numeric input `F,L` for the current target and applies with `F2`/`Insert`/
+  `Enter` (`Esc` cancels). Each slot is stored per 45-degree facing sector in
+  `CarrierDeckSlots.ini`; runway A/Z points are stored globally. Uncalibrated
+  sectors keep using the fixed `DockingOffsetN`; delete that file to reset.
+- `DockingOffsetN.M0..M7` (optional, with `UseFacingDockingOffsets=yes`)
+  gives one deck-local parking offset per 45-degree facing bucket. The code
+  interpolates between adjacent buckets. This is for art whose pre-rendered
+  frames do not rotate exactly with the world facing; an incomplete table is
+  ignored and the fixed `DockingOffsetN` values are used instead.
+- Default `Foundation.Length=36`, `Foundation.Width=9` ranges:
+  `Forward -17..+18`, `Lateral -4..+4`. A cell outside the current hull span
+  simply has no effect. `Foundation.Pivot=center` is the default and can be
+  omitted; an even side always leaves one extra half cell toward the
+  bow/starboard side.
+
+```
+                         bow / +Forward
+                              ↑
+    port / -Lateral  ←────────+────────→  starboard / +Lateral
+                              ↓
+                        stern / -Forward
+```
+
+Rotation table (directions; the cells are rotated with the carrier's real
+facing, not snapped to an 8-direction bucket):
+
+```
+facing   +Forward on map   +Lateral on map
+N        (0,-1)            (1,0)
+NE       (1,-1)            (1,1)
+E        (1,0)             (0,1)
+SE       (1,1)             (-1,1)
+S        (0,1)             (-1,0)
+SW       (-1,1)            (-1,-1)
+W        (-1,0)            (0,-1)
+NW       (-1,-1)           (1,-1)
+
+a = hull heading (radians, clockwise from north)
+world.x = anchor.x + Forward * sin(a) + Lateral * cos(a)
+world.y = anchor.y - Forward * cos(a) + Lateral * sin(a)
+```
+
+Cardinal facings are exact integers; diagonal facings round to the containing
+map cell and `BlockedArea` is filled as a solid rotated rectangle.
+
+```ini
+[AIRCARR]
+IslandImage=AIRCARR_ISLAND
+
+BlockedCell0=-6,0
+BlockedArea0=-8,-2,3,4      ; cells (-8..-6, -2..+1) for a cardinal facing
 ```
 
 ---
@@ -832,6 +1072,65 @@ CanBeBuiltOn.Remove=
 CustomPalette=
 IgnoreObject=no
 ```
+
+### AbilityTypes
+
+Named abilities that a TechnoType can receive through `Abilities=` or the
+independent `Ability1`..`Ability12` slots. Active abilities are fired from the
+ability UI; passive abilities trigger automatically.
+
+```ini
+[AbilityTypes]
+0=SOMEABILITY
+
+[SOMEABILITY]
+UIName=NAME:SOMEABILITY
+Description=NAME:SOMEABILITY_DESC
+Icon=ABILITYICON.PCX
+Activation=active|passive          ; default active
+Target=self|ally|enemy|cell        ; default self
+Range=0                            ; cells
+AffectHouses=all|owner|allies|enemies|team|notallies|notowner
+Cooldown=0                         ; frames
+Charges=-1                         ; -1 = infinite
+Recharge=0                         ; frames per charge restored
+
+Passive.Trigger=always|interval|ondamaged  ; default always
+Interval=0                         ; frames between passive triggers
+Duration=0                         ; AttachEffect duration override (0 = AE default, -1 = permanent)
+
+Weapon=                            ; optional WeaponType
+Weapon.Instant=no
+Weapon.ReleaseAtSelf=no
+Weapon.FLH=x,y,z
+Weapon.UseFirepowerMultiplier=yes
+Weapon.UseUnitAmmo=no
+Weapon.PlayFiringEffects=yes
+AttachEffects=                     ; optional AttachEffectType list
+Heal.Amount=0
+Heal.Percent=0.0
+Repair.Amount=0
+Repair.Percent=0.0
+Animation=
+Sound=-1
+```
+
+```ini
+[SOMETECHNO]
+Abilities=SOMEABILITY,OTHER       ; list form
+; or independent slots:
+Ability1=SOMEABILITY
+Ability2=
+Ability3=OTHER
+```
+
+- `Ability1..Ability12` are independent slots: a missing key leaves an empty
+  slot and later keys are still read. `Abilities=` is the list form and takes
+  precedence when present.
+- `Target=cell` requires `Weapon`; otherwise the ability logs a warning and
+  does not activate.
+- Active abilities check cooldown, charges and recharge; passive triggers are
+  `Always`, `Interval` and `OnDamaged`.
 
 ---
 
@@ -980,6 +1279,36 @@ SpawnPoints=
 SpawnPoints.Delay=
 ```
 
+### Superweapon availability and sidebar keys
+
+```ini
+[SuperWeaponType]
+SW.UseAITargeting=no     ; allow the AI to pick targets for this superweapon
+SW.AutoFire=no           ; fire automatically when charged
+SW.ManualFire=yes        ; allow the player to fire manually
+SW.ShowCameo=yes         ; show the sidebar cameo at all
+SW.Unstoppable=no        ; cannot be interrupted while a charge-drain SW is draining
+SW.MaxCount=-1           ; max simultaneous instances (-1 = unlimited)
+SidebarPCX=              ; custom sidebar cameo image
+
+Message.CannotFire=      ; CSF/message text overrides
+Message.InsufficientFunds=
+Message.Color=-1         ; color scheme index
+Message.FirerColor=no    ; use the firer's house color for the message
+
+EVA.Impatient=-1         ; voice index overrides
+EVA.InsufficientFunds=-1
+EVA.SelectTarget=-1
+```
+
+- `SW.AutoFire=yes` with `SW.ShowCameo=no` creates a hidden automatic
+  superweapon; `SW.ManualFire=no` removes the manual fire button while
+  keeping automatic behaviour.
+- `SW.UseAITargeting=yes` lets the AI choose a valid target instead of the
+  player-selected one.
+- `SW.Unstoppable=yes` only matters for charge-drain superweapons: the drain
+  cannot be cancelled once it starts.
+
 ---
 
 ## 8. AI & Scripting
@@ -1015,6 +1344,19 @@ a `[Globals]` dump of set variables on victory.
 ### INI list corruption diagnostics and repair
 Validates engine INI node lists and repairs/skips corrupt map UU data to avoid
 crashes. Debug-log only.
+
+### Carrier and fire-error diagnostics
+```ini
+[Phobos]                         ; RA2MD.INI
+Debug.AircraftCarrier=false      ; verbose carrier deck messages
+Debug.CarrierArtDiag=false       ; carrier art/deck calibration diagnostics
+Debug.CarrierSelfTest=false      ; in-game carrier self-test
+GetFireError.Guard=true          ; sanity guard around GetFireError
+GetFireError.Trace=true          ; write crash/context traces for GetFireError
+```
+
+`Debug.FootprintOverlay` (default `false`) is a separate visual aid for
+multi-cell hulls and is independent of the MOEE master switch.
 
 ---
 
@@ -1440,12 +1782,13 @@ framework. They are not presented as official Phobos or Phobos-Recya features.
 
 ### `rulesmd.ini` → `[General]`
 `AIDirectionalArmor`, `AIDirectionalArmor.Chance`, `AIDirectionalArmor.Delay`,
-`AttachmentTopLayerMinHeight`, `AttachmentUndergroundLayerMaxHeight`,
+`AresWeaponAmmo`, `AttachmentTopLayerMinHeight`,
+`AttachmentUndergroundLayerMaxHeight`,
 `BattlePoints`, `BattlePoints.DefaultValue`, `BattlePoints.DefaultFriendlyValue`,
 `CanBeBuiltOnOverlay.Remove`,
 `DisableLoadGame.Difficulty`, `DisableSaveGame.Difficulty`,
 `ExtendedAircraftMissions`, `LockGameSpeed.Difficulty`,
-`MissileSpawnAttackCell`, `MovePositionIndicator.ShowEnemy`,
+`MissileSpawnAttackCell`, `MOEE.Disabled`, `MovePositionIndicator.ShowEnemy`,
 `RemoveShroudGlobally`, `ReverseMove`,
 `Rock.CanBeBuiltOn`, `SmudgeCapacity`,
 `SmoothMove`, `TA.VirtualUnit`, `TacticalGear`, `TacticalPause`,
@@ -1467,29 +1810,52 @@ framework. They are not presented as official Phobos or Phobos-Recya features.
 `MovePositionIndicator`, `MovePositionIndicatorColor`
 
 ### `rulesmd.ini` → TechnoType sections
+`Abilities`, `Ability1..Ability12`, `AircraftCarrier*`, `NumberOfDocks`,
+`AircraftDockingDir*`, `DockingOffset*`,
 `Weapon<n>.Ammo*`, `Attachment<n>.*`, `AdvancedDrive*`, `AIDirectionalArmor*`,
-`Armor.*Multiplier`, `AttackMove*`, `BattlePoints`, `Image.Empty`,
+`Armor.*Multiplier`, `AttackMove*`, `BattlePoints`,
+`GiftBox.Types`, `GiftBox.Nums`, `GiftBox.RandomWeights`, `GiftBox.Chances`,
+`GiftBox.RandomType`, `GiftBox.UseChancesAndWeight`, `GiftBox.Remove`,
+`GiftBox.Destroy` / `GiftBox.Explodes`, `GiftBox.Delay`,
+`GiftBox.RandomDelay`, `GiftBox.RandomRange` / `GiftBox.CellRandomRange`,
+`GiftBox.EmptyCell` / `GiftBox.RandomToEmptyCell`, `GiftBox.InheritAmmo`,
+`Image.Empty`,
 `PassengersPipOffset`, `PassengersPipSize`, `PenetratesTransport*`, `PipScale`,
 `PipScale2`, `RadarSignal*`, `ShowMovePositionIndicator`, `SmoothMove`, `UrbanCombat`,
 `WaterImage.Empty`, `FogProducer`, `FogProducer.Global`, `FogProducer.Grow`,
 `FogProducer.Range`, `FogProducer.Speed`, `FogProducer.Step`
 
 ### `rulesmd.ini` → other sections
+`[AbilityTypes]` (all ability keys: `UIName`, `Description`, `Icon`,
+`Activation`, `Target`, `Range`, `AffectHouses`, `Cooldown`, `Charges`,
+`Recharge`, `Passive.Trigger`, `Interval`, `Duration`, `Weapon`,
+`Weapon.Instant`, `Weapon.ReleaseAtSelf`, `Weapon.FLH`,
+`Weapon.UseFirepowerMultiplier`, `Weapon.UseUnitAmmo`,
+`Weapon.PlayFiringEffects`, `AttachEffects`, `Heal.*`, `Repair.*`,
+`Animation`, `Sound`),
 `[LoadBar]` (`Enable`, `MaxPerFrame`, `*.Default`),
 `[LoadBarTypes]` (`Source`, `SourceIndex`, `Fill`, anchors, colours
 including `Color.Gradient*`, text, visibility), `[LoadBarAssignments]`,
 `[LoadBarAttachEffects]`, `Passengers.EnterDirections` (VehicleType),
 `[AttachmentTypes]`, `[ArtilleryTypes]`, `[BomberTypes]`,
 `[HouseType] BattlePoints` / `BattlePoints.CanUseStandardPoints`,
+`[Side] Sidebar.BattlePoints.Offset` / `.Color` / `.Align`,
 `[SuperWeaponType] BattlePoints.Amount` / `Charge*` / `LimboDelivery.Delay` /
 `SpyPlane.Type` / `ParaDrop.Aircraft` / `SpawnPoints*`,
+`SW.UseAITargeting` / `SW.AutoFire` / `SW.ManualFire` / `SW.ShowCameo` /
+`SW.Unstoppable` / `SW.MaxCount`, `SidebarPCX`, `Message.CannotFire` /
+`Message.InsufficientFunds` / `Message.Color` / `Message.FirerColor`,
+`EVA.Impatient` / `EVA.InsufficientFunds` / `EVA.SelectTarget`,
 `[OverlayType] CanBeBuiltOn` / `CanBeBuiltOn.Remove` / `CustomPalette` /
 `IgnoreObject`, `[SmudgeType] Unclearable` / `CustomPalette` / `DrawObject`,
-`[AnimType] CreateOverlay*` / `CreateSmudge*`, `[WeaponType] Next` / `ExtraFire*`,
+`[AnimType] CreateOverlay*` / `CreateSmudge*`,
+`[WeaponType] Next` / `ExtraFire*` / `Ammo*`,
 `[FogAnim] Anims` / numeric animation-name keys
 
 ### `RA2MD.INI` → `[Phobos]`
-`ContinueGameOnExit`, `Formation*`, `MessageApplyHoverState`,
+`ContinueGameOnExit`, `Debug.AircraftCarrier`, `Debug.CarrierArtDiag`,
+`Debug.CarrierSelfTest`, `Formation*`, `GetFireError.Guard`,
+`GetFireError.Trace`, `MessageApplyHoverState`,
 `MessageDisplayInCenter*`, `MOEE.*` (ported from MO_ExperienceEnhancements),
 `RightClickCommands*`, `ShowGameTime*`, `TacticalZoom*`, `TextScale*`
 

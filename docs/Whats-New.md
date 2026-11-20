@@ -2,6 +2,14 @@
 
 This page lists the history of changes across stable Phobos releases and also all the stuff that requires modders to change something in their mods to accommodate.
 
+## GC build additions
+
+This build adds the carrier deck system, per-weapon ammo integration, the MOEE
+port, GiftBox, AbilityTypes, superweapon extensions, sidebar BattlePoints keys
+and several commands and diagnostics. See
+[Build-Specific Features](Build-Specific-Features.md) for the reference and the
+root `GC-New-Features.md` for the full change list.
+
 ## Migrating
 
 ```{hint}

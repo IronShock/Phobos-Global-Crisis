@@ -264,21 +264,25 @@ DEFINE_HOOK(0x48028B, Fog_Producer_FogFrameNormal, 0x5)
 		return 0;
 	}
 
-	if (pCell->Foggedness == -1)
-		return 0;
-
-	R->EAX(0);
-
+	// Keep the engine's own frame. At the edge of the explored region
+	// Foggedness is 0..48, which draws the native fog gradient into the black
+	// shroud; interior cells are -1 and draw nothing. Producer cells were
+	// handled above.
 	return 0;
 }
 
-// --- AutoSpread=no: stop the engine fog logic, not just the drawing ---
+// --- AutoSpread=no: keep explored cells live, but preserve the native edge ---
 //
 // 0x6D8700 (GetOcclusion) recomputes Visibility/Foggedness every frame from the
-// neighbours' reveal flags and writes them back into the cell. Overriding only
-// the draw frame leaves that logic running, so cells keep fading to 34/48/-2 and
-// FogCell() freezes buildings and hides objects. These two exit hooks return -1
-// for explored cells on the fog layer, which keeps the cell fully live.
+// neighbours' reveal flags and writes them back into the cell. Overriding the
+// result with -1 for explored cells kept them fully live, but it also erased the
+// native 0..48 transition frames at the border between explored cells and the
+// black shroud, which left a hard, broken-looking edge.
+//
+// Interior explored cells already resolve to -1 (all neighbours are mapped), so
+// they stay fully visible. Only the explored/unexplored frontier keeps its
+// non-negative frame and fades into the shroud exactly like the native fog. The
+// early exit below still clamps fully shrouded cells to -1.
 //
 // AutoSpread=yes and an active Global producer both fall through to the engine's
 // native result: the global path must not keep a second visibility model.
@@ -305,7 +309,14 @@ DEFINE_HOOK(0x6D8AC6, Fog_GetOcclusion_ClearExplored, 0x7)
 	if (!Fog::IsExploredCoords(*pCoords))
 		return 0;
 
-	R->EAX(-1);
+	// Re-run the engine's neighbour-mask lookup with the mask already in EBP.
+	// Non-negative frames are the native fog transition at the edge of the
+	// explored region and must be kept; only clamp invalid negative results so
+	// an explored cell can never return to the black shroud.
+	const int frame = static_cast<int>(
+		*reinterpret_cast<const signed char*>(0x7F4194u + R->EBP()));
+
+	R->EAX(frame < 0 ? -1 : frame);
 
 	return ContinueAfterLookup;
 }

@@ -22,10 +22,20 @@ public:
 	// default. Enable with Debug.AircraftCarrier=yes in RA2MD.ini [Phobos].
 	static bool VerboseCarrier;
 
+	// [GC] Read-only diagnostic for the carrier hull position jumps at the
+	// turn/move boundary. This is deliberately separate from VerboseCarrier:
+	// the verbose flag produces a full per-frame log, while this one only
+	// records event snapshots and large single-frame position jumps.
+	// Enable with Debug.CarrierArtDiag=yes in RA2MD.ini [Phobos].
+	static bool CarrierArtDiag;
+
 	static void Log(const char* pFormat, ...);
 	// Same as Log(), but only when Debug.VerboseCarrier is enabled. Use it for
 	// multi-cell/carrier diagnostics that sit on per-frame or per-hover paths.
 	static void CarrierLog(const char* pFormat, ...);
+	// Same as Log(), but only when Debug.CarrierArtDiag is enabled. Used by the
+	// read-only carrier hull position diagnostic.
+	static void CarrierArtLog(const char* pFormat, ...);
 	static void LogGame(const char* pFormat, ...);
 	static void LogDeferred(const char* pFormat, ...);
 	static void LogDeferredFinalize();

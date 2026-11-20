@@ -837,6 +837,12 @@ TextScale.Smooth=true ; boolean
 - Selects and centers the camera on the next TechnoType that is counted via the [harvester counter](#harvester-counter) and is currently idle.
 - For localization add `TXT_NEXT_IDLE_HARVESTER` and `TXT_NEXT_IDLE_HARVESTER_DESC` into your `.csf` file.
 
+### `[ ]` Recall Carrier Aircraft
+
+- Sends the selected carrier payload, or every airborne payload of the selected carrier, back to its deck. Has no INI key; bind it in Options -> Keyboard.
+- The vanilla Stop command is also wrapped: with an airborne carrier payload selected it issues the same recall, while all other selected objects keep the normal Stop behaviour. A parked payload ignores the order because it is already home.
+- For localization add `TXT_RECALL_CARRIER_AIRCRAFT` and `TXT_RECALL_CARRIER_AIRCRAFT_DESC` into your `.csf` file.
+
 ### `[ ]` Quicksave
 
 - Saves the current game.
@@ -1246,6 +1252,14 @@ ToolTipBlur=false  ; boolean, whether the blur effect of tooltips will be enable
 ```{note}
 The features in this section are additions made by the GC build on top of Phobos build 48.
 ```
+
+### MOEE command suite
+
+The `MO_ExperienceEnhancements` port adds Attack Move, Fuzzy Attack, Patrol
+Circle, Repair All, Smart Area, Smart Order, Tree Chop, Weapon Range and Deploy
+Preview hotkeys, plus the `MOEE.*` configuration keys. See
+[Build-Specific Features](Build-Specific-Features.md) for the full key list and
+`GC-New-Features.md` for the detailed behaviour.
 
 ### Tactical time stop
 

@@ -603,6 +603,11 @@ DEFINE_HOOK(0x4CF31C, FlyLocomotionClass_FlightUpdate_LandingDir, 0x9)
 	const auto pFoot = *pFootPtr;
 	dir = 0;
 
+	// Manual carrier runway states set their own facing; do not let the
+	// landing-direction update restore PoseDir over it.
+	if (Footprint::IsCarrierPayloadRunwayControlled(pFoot))
+		return SkipGameCode;
+
 	if (!iFly)
 		return SetSecondaryFacing;
 
@@ -771,6 +776,34 @@ DEFINE_HOOK(0x419EF6, AircraftClass_Mission_Enter_FixNotCarryall, 0x7)
 	return pThis->Type->Carryall ? 0 : SkipGameCode;
 }
 
+// AircraftClass::Mission_Enter asks FootClass::FindDock (0x70D8F0) twice
+// whether a building airfield is available. A carrier payload with
+// AircraftCarrier.Attached=yes must never pick one: returning false here makes
+// the engine treat the aircraft as having no airfield, and the deck controller
+// in Footprint::UpdateCarrierPayload then sends it back to its carrier.
+static bool __fastcall AircraftClass_MissionEnter_FindDock_Attached(FootClass* pThis, void*)
+{
+	if (pThis && pThis->WhatAmI() == AbstractType::Aircraft)
+	{
+		auto const pAircraft = static_cast<AircraftClass*>(pThis);
+
+		if (auto const pCarrier = Footprint::GetCarrierPayloadOwner(pAircraft))
+		{
+			if (auto const pTypeExt = TechnoTypeExt::ExtMap.Find(pCarrier->GetTechnoType());
+				pTypeExt && pTypeExt->AircraftCarrier_Attached)
+			{
+				return false;
+			}
+		}
+	}
+
+	using FindDockFunc = bool(__fastcall*)(FootClass*, void*);
+	return reinterpret_cast<FindDockFunc>(0x70D8F0)(pThis, nullptr);
+}
+
+DEFINE_FUNCTION_JUMP(CALL, 0x419D86, AircraftClass_MissionEnter_FindDock_Attached);
+DEFINE_FUNCTION_JUMP(CALL, 0x419E1B, AircraftClass_MissionEnter_FindDock_Attached);
+
 // Skip set chaotic ArchiveTarget
 void __fastcall AircraftClass_SetArchiveTarget_Wrapper(AircraftClass* pThis, void* _, AbstractClass* pTarget)
 {
@@ -789,6 +822,16 @@ DEFINE_HOOK(0x4CF190, FlyLocomotionClass_FlightUpdate_SetPrimaryFacing, 0x6) // 
 	enum { SkipGameCode = 0x4CF29A };
 
 	GET(IFlyControl* const, iFly, EAX);
+
+	// Carrier taxi/roll/descent are flown manually. The vanilla flight update
+	// keeps turning the nose toward its stale destination (or toward PoseDir
+	// when the destination is its own cell), which fights the manual facing and
+	// makes a landed aircraft shiver and slide sideways during takeoff taxi.
+	if (auto const ppFoot = reinterpret_cast<FootClass**>(R->ESI()))
+	{
+		if (Footprint::IsCarrierPayloadRunwayControlled(*ppFoot))
+			return SkipGameCode;
+	}
 
 	if (!iFly || !iFly->Is_Locked())
 	{
@@ -949,7 +992,20 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 	// of the picture entirely.
 	if (Footprint::GetCarrierPayloadOwner(pThis))
 	{
-		Footprint::UpdateCarrierPayload(pThis);
+		const bool dying = !pThis->IsAlive || pThis->Health <= 0;
+
+		if (!dying)
+		{
+			Footprint::UpdateCarrierPayload(pThis);
+		}
+		else
+		{
+			// Never let the engine run the crash/landing update for a dying
+			// payload: that is the visible deck spin. Queue an immediate
+			// explosion + removal for the next global logic tick instead.
+			Footprint::HandleDyingCarrierPayload(pThis);
+			return 0x4151B0;
+		}
 
 		// A parked payload must not run the rest of AircraftClass::Update: its
 		// airport/landing logic keeps moving the aircraft and fights the deck
@@ -1149,6 +1205,14 @@ DEFINE_HOOK(0x7001B0, TechnoClass_MouseOverObject_EnableGuardObject, 0x7)
 // Sleep: return to airbase if in incorrect sleep status
 int __fastcall AircraftClass_Mission_Sleep(AircraftClass* pThis)
 {
+	// Carrier payloads under deck control must never enter AircraftClass's
+	// idle/return bookkeeping. A carrier has no native airport, so
+	// EnterIdleMode re-assigns a destination every frame and the engine then
+	// resets the aircraft's Z/facing while the runway controller is trying to
+	// taxi or line up. The deck controller owns those states.
+	if (Footprint::IsCarrierPayloadDeckControlled(pThis))
+		return 450;
+
 	if (!pThis->Destination || pThis->Destination == pThis->DockNowHeadingTo)
 		return 450; // Vanilla MissionClass_Mission_Sleep value
 
@@ -1156,6 +1220,22 @@ int __fastcall AircraftClass_Mission_Sleep(AircraftClass* pThis)
 	return 1;
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7E24A8, AircraftClass_Mission_Sleep)
+
+// AircraftClass::EnterIdleMode (0x4176F0) can also be reached from other
+// engine paths (auto-acquire, unlandable damage, scripted idle). Block it for
+// carrier payloads whose movement is owned by the deck controller, otherwise
+// it keeps re-arming a return destination behind the controller's back.
+bool __fastcall AircraftClass_EnterIdleMode_Wrapper(
+	AircraftClass* pThis, void* _, bool initial, bool unused)
+{
+	if (Footprint::IsCarrierPayloadDeckControlled(pThis))
+		return false;
+
+	using EnterIdleModeFn = bool(__thiscall*)(AircraftClass*, bool, bool);
+	return reinterpret_cast<EnterIdleModeFn>(0x4176F0)(pThis, initial, unused);
+}
+DEFINE_FUNCTION_JUMP(VTABLE, 0x7E2728, AircraftClass_EnterIdleMode_Wrapper)
+
 
 // AttackMove: return when no ammo or arrived destination
 bool __fastcall AircraftTypeClass_CanAttackMove(AircraftTypeClass* pThis)
@@ -1281,7 +1361,17 @@ DEFINE_HOOK(0x4179F7, AircraftClass_EnterIdleMode_NoCrash, 0x6)
 
 	GET(AircraftClass* const, pThis, ESI);
 
+	if (Footprint::IsCarrierPayloadDeckControlled(pThis))
+		return SkipGameCode;
+
 	if (pThis->Airstrike || pThis->Spawned)
+		return 0;
+
+	// The fallback below is only for the no-airport/no-destination crash case.
+	// When the aircraft is already returning to a native airport, replacing
+	// that destination with an Area Guard order prevents the vanilla vertical
+	// landing sequence and leaves the aircraft hanging in the air.
+	if (pThis->Destination || pThis->DockNowHeadingTo)
 		return 0;
 
 	if (!pThis->Team && (pThis->CurrentMission != Mission::Area_Guard || !pThis->ArchiveTarget))
@@ -1430,4 +1520,32 @@ DEFINE_HOOK(0x4157EB, AircraftClass_Mission_SpyPlaneOverfly_MaxCount, 0x6)
 		return Skip;
 
 	return 0;
+}
+
+// Shared epilogue of AircraftClass::Draw. EBP still holds the aircraft, so a
+// deck aircraft can repaint its carrier's island overlay after its own body
+// and shadow, keeping the superstructure in front of aircraft on the deck.
+static void __fastcall DrawCarrierIslandAfterAircraft(AircraftClass* pThis)
+{
+	Footprint::DrawCarrierIslandAfterAircraft(pThis);
+}
+
+static void __declspec(naked) AircraftClass_Draw_CarrierIslandEpilogue()
+{
+	__asm
+	{
+		pushad
+		mov ecx, ebp
+		call DrawCarrierIslandAfterAircraft
+		popad
+		pop esi
+		pop ebp
+		add esp, 0xC4
+		ret 8
+	}
+}
+
+DEFINE_HOOK(0x4149F6, AircraftClass_Draw_CarrierIsland, 0x8)
+{
+	return reinterpret_cast<uintptr_t>(&AircraftClass_Draw_CarrierIslandEpilogue);
 }

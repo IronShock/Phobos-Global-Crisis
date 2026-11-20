@@ -364,88 +364,43 @@ void TechnoExt::DrawAircraftSHP(AircraftClass* pThis, AircraftTypeClass* pType)
 	// silently drops anything outside the screen bounds.
 	TacticalClass::Instance->AddSelectable(pThis, drawPoint.X, drawPoint.Y);
 
-	// Shadow: the engine's own shadow offset when the locomotor supplies one, otherwise the
-	// screen drop caused by the object's altitude. FlyLocomotionClass does not override
-	// Shadow_Point (only Jumpjet does, via a vtable patch), so a flying aircraft gets {0,0} and
-	// its shadow would sit exactly under the body and be covered - i.e. invisible. Projecting
-	// the position onto Z=0 gives the fallback drop.
-	Point2D shadowOffset { 0, 0 };
+	// Use the SHP's own pre-rendered shadow frames exactly as the native SHP
+	// drawing does: the second half of the frame sequence contains the shadow
+	// frames (32 body + 32 shadow for the usual 64-frame art). The frame is
+	// drawn at the ground projection of the aircraft so the shadow follows
+	// the aircraft's altitude instead of travelling with the body.
+	const int shadowFrame = facing + static_cast<int>(pImage->Frames) / 2;
 
-	// A payload parked on a carrier deck must cast its shadow on the deck, not
-	// on the water below the ship. A payload that is still descending must
-	// project its shadow onto the deck plane as well; the engine's ground
-	// projection would put it on the water under the hull.
-	const bool parkedDeckShadow = Footprint::IsCarrierPayloadParked(pThis);
-	const bool landingDeckShadow = Footprint::IsCarrierPayloadLanding(pThis);
-	const bool runwayDeckShadow = Footprint::IsCarrierPayloadRunwayControlled(pThis);
-	const bool deckShadow = parkedDeckShadow || landingDeckShadow || runwayDeckShadow;
-
-	if (!parkedDeckShadow)
+	if (Game::bDrawShadow
+		&& !pType->NoShadow
+		&& pImage->Frames >= 64
+		&& shadowFrame < pImage->Frames)
 	{
-		bool projectedOnDeck = false;
+		int groundZ = MapClass::Instance.GetCellFloorHeight(renderCoords);
 
-		if (landingDeckShadow || runwayDeckShadow)
+		// A carrier payload above the deck must cast its shadow on the deck,
+		// not on the water below the hull. Only project onto the deck while
+		// the aircraft is actually over a hull cell; otherwise an aircraft
+		// far away from the ship would paint its shadow onto the carrier.
+		if (auto const pCarrier = Footprint::GetCarrierPayloadOwner(pThis))
 		{
-			const int deckZ = Footprint::GetCarrierPayloadDeckZ(pThis);
-
-			if (deckZ >= 0)
+			if (Footprint::IsCarrierHullCell(pCarrier, CellClass::Coord2Cell(renderCoords)))
 			{
-				const Point2D deckPoint = TacticalClass::CoordsToScreen(
-					CoordStruct { renderCoords.X, renderCoords.Y, deckZ });
+				const int deckZ = Footprint::GetCarrierPayloadDeckZ(pThis);
 
-				shadowOffset = deckPoint - screenPoint;
-				projectedOnDeck = true;
+				if (deckZ >= 0)
+					groundZ = deckZ;
 			}
 		}
 
-		if (!projectedOnDeck)
-		{
-			if (auto const pFoot = abstract_cast<FootClass*>(pThis))
-			{
-				if (auto const pLoco = pFoot->Locomotor)
-					shadowOffset = pLoco->Shadow_Point();
-			}
+		const Point2D groundScreen = TacticalClass::CoordsToScreen(
+			CoordStruct { renderCoords.X, renderCoords.Y, groundZ });
+		const Point2D shadowOffset = groundScreen - screenPoint;
+		Point2D shadowPos = drawPoint + shadowOffset;
 
-			if (shadowOffset.X == 0 && shadowOffset.Y == 0)
-			{
-				const Point2D groundPoint = TacticalClass::CoordsToScreen(CoordStruct { renderCoords.X, renderCoords.Y, 0 });
-				shadowOffset = groundPoint - screenPoint;
-			}
-		}
-	}
-
-	if (deckShadow || shadowOffset.X != 0 || shadowOffset.Y != 0)
-	{
-		// SHP aircraft art carries the pre-rendered ground shadow in the second half of the
-		// frame sequence (32 body + 32 shadow frames for the usual 64-frame art), the same
-		// layout native SHP shadows use. Draw those frames instead of reusing the body frame,
-		// which has cockpit/wing gaps and needs to be faked with a translucent blit.
-		const int shadowFrame = facing + static_cast<int>(pImage->Frames) / 2;
-
-		if (!pType->NoShadow && pImage->Frames >= 64 && shadowFrame < pImage->Frames)
-		{
-			Point2D shadowPos = drawPoint + shadowOffset;
-
-			// The pre-rendered shadow frame is authored for an aircraft in
-			// flight, with the ground shadow baked in below the body anchor.
-			// For a deck-parked aircraft that baked offset puts the shadow
-			// below the hull / on the water. Cancel the frame-bound offset so
-			// the shadow sits under the parked body on the deck.
-			if (parkedDeckShadow)
-			{
-				const auto bodyBounds = pImage->GetFrameBounds(facing);
-				const auto shadowBounds = pImage->GetFrameBounds(shadowFrame);
-
-				shadowPos.X -= (shadowBounds.X + shadowBounds.Width / 2)
-					- (bodyBounds.X + bodyBounds.Width / 2);
-				shadowPos.Y -= (shadowBounds.Y + shadowBounds.Height / 2)
-					- (bodyBounds.Y + bodyBounds.Height / 2);
-			}
-
-			DSurface::Temp->DrawSHP(pDrawer, pImage, shadowFrame, &shadowPos, &DSurface::ViewBounds,
-				BlitterFlags::bf_400 | BlitterFlags::Darken | BlitterFlags::Centered,
-				0, zAdjust - 1, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
-		}
+		DSurface::Temp->DrawSHP(pDrawer, pImage, shadowFrame, &shadowPos, &DSurface::ViewBounds,
+			BlitterFlags::bf_400 | BlitterFlags::Darken | BlitterFlags::Centered,
+			0, zAdjust - 1, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
 	}
 
 	Point2D bodyPos = drawPoint;
