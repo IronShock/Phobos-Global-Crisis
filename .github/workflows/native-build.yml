@@ -1,0 +1,62 @@
+name: GC Build
+
+on:
+  pull_request:
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - .github/ISSUE_TEMPLATE/**
+      - .github/DISCUSSION_TEMPLATE/**
+  push:
+    branches: [master, main, develop]
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - .github/ISSUE_TEMPLATE/**
+      - .github/DISCUSSION_TEMPLATE/**
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: GC build configuration
+        type: choice
+        options: [DevBuild, Debug, Release]
+        default: DevBuild
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gc-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: GC DLL
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      BUILD_CONFIGURATION: ${{ inputs.configuration || 'DevBuild' }}
+    steps:
+      # The current GC project uses the inherited root source, lib and YRpp.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      - name: Build GC with the shared Visual Studio launcher
+        shell: cmd
+        run: scripts\run_msbuild.bat /maxCpuCount /consoleloggerparameters:NoSummary /property:Configuration=%BUILD_CONFIGURATION% /property:GitCommit=%GITHUB_SHA% /property:GitBranch=CI
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: gc
+        with:
+          name: compiled-dll-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ env.BUILD_CONFIGURATION }}/Phobos.dll
+            ${{ env.BUILD_CONFIGURATION }}/Phobos.pdb
+      - name: Build receipt
+        shell: pwsh
+        env:
+          ARTIFACT_URL: ${{ steps.gc.outputs.artifact-url }}
+        run: |
+          "GC $env:BUILD_CONFIGURATION DLL and symbols: [download]($env:ARTIFACT_URL)" >> $env:GITHUB_STEP_SUMMARY
+          "Built commit $env:GITHUB_SHA. Game/runtime validation remains a separate gate." >> $env:GITHUB_STEP_SUMMARY

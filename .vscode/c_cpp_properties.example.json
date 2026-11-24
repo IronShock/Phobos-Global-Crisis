@@ -1,27 +1,73 @@
+// On Windows, launch Code from a VS 2022 Developer Command Prompt (code .).
+// Or set compilerPath to the installed x86 cl.exe. Select the source configuration you build.
 {
-  // This is a Phobos project-specific config file for VSCode official C++ extension.
-  // https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools
-
-  // On Windows, launch Code from a VS 2022 Developer Command Prompt (code .).
-  // Or replace compilerPath with your installed x86 cl.exe path.
   "configurations": [
     {
-      "name": "Win32",
+      "name": "GC working checkout Win32",
       "includePath": [
         "${workspaceFolder}/src",
         "${workspaceFolder}/src/**",
         "${workspaceFolder}/YRpp",
         "${workspaceFolder}/YRpp/**",
         "${workspaceFolder}/lib",
-        "${workspaceFolder}/lib/**",
-    ],
+        "${workspaceFolder}/lib/**"
+      ],
       "defines": [
         "SYR_VER=2",
         "HAS_EXCEPTIONS=0",
         "NOMINMAX",
         "_CRT_SECURE_NO_WARNINGS",
         "_WINDLL"
-    ],
+      ],
+      "compilerPath": "cl.exe",
+      "cStandard": "c17",
+      "cppStandard": "c++20",
+      "intelliSenseMode": "windows-msvc-x86",
+      "browse": {
+        "limitSymbolsToIncludedHeaders": false
+      }
+    },
+    {
+      "name": "Upstream Phobos Win32",
+      "includePath": [
+        "${workspaceFolder}/deps/Phobos/src",
+        "${workspaceFolder}/deps/Phobos/src/**",
+        "${workspaceFolder}/deps/Phobos/YRpp",
+        "${workspaceFolder}/deps/Phobos/YRpp/**",
+        "${workspaceFolder}/deps/Phobos/Debug/IntDir/Generated"
+      ],
+      "defines": [
+        "SYR_VER=2",
+        "HAS_EXCEPTIONS=0",
+        "NOMINMAX",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_WINDLL"
+      ],
+      "compilerPath": "cl.exe",
+      "cStandard": "c17",
+      "cppStandard": "c++20",
+      "intelliSenseMode": "windows-msvc-x86",
+      "browse": {
+        "limitSymbolsToIncludedHeaders": false
+      }
+    },
+    {
+      "name": "Pinned GC reference Win32",
+      "includePath": [
+        "${workspaceFolder}/build/reference/src",
+        "${workspaceFolder}/build/reference/src/**",
+        "${workspaceFolder}/build/reference/YRpp",
+        "${workspaceFolder}/build/reference/YRpp/**",
+        "${workspaceFolder}/build/reference/lib",
+        "${workspaceFolder}/build/reference/lib/**"
+      ],
+      "defines": [
+        "SYR_VER=2",
+        "HAS_EXCEPTIONS=0",
+        "NOMINMAX",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_WINDLL"
+      ],
       "compilerPath": "cl.exe",
       "cStandard": "c17",
       "cppStandard": "c++20",

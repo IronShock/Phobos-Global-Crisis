@@ -46,15 +46,6 @@ indent_style = space
 indent_size = 2
 insert_final_newline = false
 
-# Ignore scripts/vswhere.exe
-[vswhere.exe]
-charset = unset
-end_of_line = unset
-insert_final_newline = unset
-trim_trailing_whitespace = unset
-indent_style = unset
-indent_size = unset
-
 [.vsconfig]
 generated_code = true
 
@@ -130,7 +121,7 @@ cpp_space_around_ternary_operator = insert
 cpp_wrap_preserve_blocks = all_one_line_scopes
 
 # Windows projects, resources, command scripts and authored game text
-[*.{sln,vcproj,vcxproj,props,targets,rc,bat,cmd,ps1,ini,map,mpr}]
+[*.{sln,vcproj,vcxproj,vcxproj.filters,props,targets,rc,bat,cmd,ini,map,mpr}]
 end_of_line = crlf
 
 # Imported legacy-encoded files: retain encoding rather than transcoding.

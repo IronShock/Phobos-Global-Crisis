@@ -1,0 +1,14 @@
+{
+  "revision": "be5ec924a3f7aff88145bb0754ecffaaceae477e",
+  "run_id": 37741434312,
+  "artifact_id": 11534176972,
+  "url": "https://nightly.link/Phobos-developers/Phobos/actions/artifacts/11534176972.zip",
+  "sha256": "cb41876bf20e5e86fb83055a4c67c33366eaa00daa94a20684f309ad6ebfd3d6",
+  "members": [
+    "gamemd.edb",
+    "Phobos.pdb",
+    "Syringe.exe",
+    "Phobos.dll",
+    "Syringe.LICENSE.txt"
+  ]
+}
